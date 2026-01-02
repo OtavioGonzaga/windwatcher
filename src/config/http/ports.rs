@@ -1,6 +1,6 @@
 use crate::config::ConfigError;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct HttpConfig {
     pub host: String,
     pub port: u16,

@@ -1,3 +1,5 @@
+use std::net::IpAddr;
+
 use crate::config::{
     ConfigError,
     http::ports::{HttpConfig, HttpConfigProvider},
@@ -7,12 +9,24 @@ pub struct EnvHttpConfig;
 
 impl HttpConfigProvider for EnvHttpConfig {
     fn load() -> Result<HttpConfig, ConfigError> {
-        Ok(HttpConfig {
-            host: std::env::var("HTTP_HOST").unwrap_or_else(|_| "127.0.0.1".into()),
-            port: std::env::var("HTTP_PORT")
-                .ok()
-                .and_then(|p| p.parse().ok())
-                .unwrap_or(8080),
-        })
+        dotenvy::dotenv().unwrap();
+
+        let host: String =
+            std::env::var("HTTP_HOST").map_err(|_| ConfigError::Missing("HTTP_HOST"))?;
+        let port: String =
+            std::env::var("HTTP_PORT").map_err(|_| ConfigError::Missing("HTTP_PORT"))?;
+        let port: u16 = port
+            .parse()
+            .map_err(|_| ConfigError::Invalid("HTTP_PORT"))?;
+
+        if !is_valid_host(&host) {
+            return Err(ConfigError::Invalid("HTTP_HOST"));
+        }
+
+        Ok(HttpConfig { host, port })
     }
+}
+
+fn is_valid_host(host: &str) -> bool {
+    host.parse::<IpAddr>().is_ok()
 }

@@ -4,9 +4,9 @@ pub mod logging;
 use std::error::Error;
 use std::fmt::Display;
 
-use http::adapters::env::EnvHttpConfig;
+use http::adapters::{cli::CliHttpConfig, env::EnvHttpConfig};
 use http::ports::{HttpConfig, HttpConfigProvider};
-use logging::adapters::env::EnvLoggingConfig;
+use logging::adapters::{cli::CliLoggingConfig, env::EnvLoggingConfig};
 use logging::ports::{LoggingConfig, LoggingConfigProvider};
 
 #[derive(Clone)]
@@ -17,11 +17,45 @@ pub struct Config {
 
 impl Config {
     pub fn load() -> Result<Self, ConfigError> {
-        let http: HttpConfig = EnvHttpConfig::load()?;
-        let logging: LoggingConfig = EnvLoggingConfig::load()?;
+        let http_configs: Vec<Result<HttpConfig, ConfigError>> =
+            vec![CliHttpConfig::load(), EnvHttpConfig::load()];
+        let logging_configs: Vec<Result<LoggingConfig, ConfigError>> =
+            vec![CliLoggingConfig::load(), EnvLoggingConfig::load()];
+
+        let http: HttpConfig = merge_http(http_configs).expect("Failed to load HTTP configuration");
+        let logging: LoggingConfig =
+            merge_logging(logging_configs).expect("Failed to load logging configuration");
 
         Ok(Self { http, logging })
     }
+}
+
+fn merge_http(configs: Vec<Result<HttpConfig, ConfigError>>) -> Result<HttpConfig, ConfigError> {
+    let port: u16;
+    let host: String;
+
+    if let Some(Ok(cfg)) = configs.iter().find(|r| r.is_ok()) {
+        port = cfg.port;
+        host = cfg.host.clone();
+    } else {
+        return Err(ConfigError::Missing("HTTP configuration"));
+    }
+
+    Ok(HttpConfig { host, port })
+}
+
+fn merge_logging(
+    configs: Vec<Result<LoggingConfig, ConfigError>>,
+) -> Result<LoggingConfig, ConfigError> {
+    let level: String;
+
+    if let Some(Ok(cfg)) = configs.iter().find(|r| r.is_ok()) {
+        level = cfg.level.clone();
+    } else {
+        return Err(ConfigError::Missing("Logging configuration"));
+    }
+
+    Ok(LoggingConfig { level })
 }
 
 #[derive(Debug)]
