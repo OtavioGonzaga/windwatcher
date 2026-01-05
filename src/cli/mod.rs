@@ -1,5 +1,6 @@
 use clap::Parser;
 
+pub mod database;
 pub mod http;
 pub mod logging;
 
@@ -16,4 +17,7 @@ pub struct Cli {
 
     #[command(flatten)]
     pub logging: logging::LoggingCli,
+
+    #[command(flatten)]
+    pub database: database::DatabaseCli,
 }

@@ -1,9 +1,12 @@
+pub mod database;
 pub mod http;
 pub mod logging;
 
 use std::error::Error;
 use std::fmt::Display;
 
+use database::adapters::{cli::CliDatabaseConfig, env::EnvDatabaseConfig};
+use database::ports::{DatabaseConfig, DatabaseConfigProvider};
 use http::adapters::{cli::CliHttpConfig, env::EnvHttpConfig};
 use http::ports::{HttpConfig, HttpConfigProvider};
 use logging::adapters::{cli::CliLoggingConfig, env::EnvLoggingConfig};
@@ -13,6 +16,7 @@ use logging::ports::{LoggingConfig, LoggingConfigProvider};
 pub struct Config {
     pub http: HttpConfig,
     pub logging: LoggingConfig,
+    pub database: DatabaseConfig,
 }
 
 impl Config {
@@ -21,13 +25,35 @@ impl Config {
             vec![CliHttpConfig::load(), EnvHttpConfig::load()];
         let logging_configs: Vec<Result<LoggingConfig, ConfigError>> =
             vec![CliLoggingConfig::load(), EnvLoggingConfig::load()];
+        let database_configs: Vec<Result<DatabaseConfig, ConfigError>> =
+            vec![CliDatabaseConfig::load(), EnvDatabaseConfig::load()];
+        let database: DatabaseConfig =
+            merge_database(database_configs).expect("Failed to load database configuration");
 
         let http: HttpConfig = merge_http(http_configs).expect("Failed to load HTTP configuration");
         let logging: LoggingConfig =
             merge_logging(logging_configs).expect("Failed to load logging configuration");
 
-        Ok(Self { http, logging })
+        Ok(Self {
+            http,
+            logging,
+            database,
+        })
     }
+}
+
+fn merge_database(
+    configs: Vec<Result<DatabaseConfig, ConfigError>>,
+) -> Result<DatabaseConfig, ConfigError> {
+    let database_url: String;
+
+    if let Some(Ok(cfg)) = configs.iter().find(|r| r.is_ok()) {
+        database_url = cfg.database_url.clone();
+    } else {
+        return Err(ConfigError::Missing("Database configuration"));
+    }
+
+    Ok(DatabaseConfig { database_url })
 }
 
 fn merge_http(configs: Vec<Result<HttpConfig, ConfigError>>) -> Result<HttpConfig, ConfigError> {

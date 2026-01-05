@@ -1,20 +1,33 @@
+mod adapters;
 mod cli;
 mod config;
 mod domain;
 
-use crate::config::Config;
+use crate::{
+    adapters::{http::actix::server::build_app, persistence::postgres::connection::connect_to_db},
+    config::Config,
+};
 use actix_web::{Error, main};
 use log::info;
+use sea_orm::DatabaseConnection;
 
 #[main]
 async fn main() -> Result<(), Error> {
-    let Config { http, logging } = Config::load().expect("Failed to load configuration");
+    let Config {
+        http: http_config,
+        logging: logging_config,
+        database: database_config,
+    } = Config::load().expect("Failed to load configuration");
 
-    env_logger::Builder::from_env(env_logger::Env::default().filter_or("RUST_LOG", logging.level))
-        .format_timestamp_secs()
-        .init();
+    env_logger::Builder::from_env(
+        env_logger::Env::default().filter_or("RUST_LOG", logging_config.level),
+    )
+    .format_timestamp_secs()
+    .init();
+
+    let db: DatabaseConnection = connect_to_db(&database_config).await;
 
     info!("Starting application");
 
-    Ok(())
+    build_app(http_config).await
 }

@@ -17,13 +17,19 @@ impl MigrationTrait for Migration {
                             .primary_key()
                             .default(Expr::cust("uuidv7()")),
                     )
+                    .col(ColumnDef::new(Users::Name).string_len(255).not_null())
                     .col(
                         ColumnDef::new(Users::Username)
                             .string_len(32)
                             .not_null()
                             .unique_key(),
                     )
-                    .col(ColumnDef::new(Users::Name).string_len(128).not_null())
+                    .col(
+                        ColumnDef::new(Users::PasswordHash)
+                            .string_len(128)
+                            .not_null()
+                            .unique_key(),
+                    )
                     .col(
                         ColumnDef::new(Users::CreatedAt)
                             .timestamp_with_time_zone()
@@ -58,8 +64,9 @@ impl MigrationTrait for Migration {
 enum Users {
     Table,
     Id,
-    Username,
     Name,
+    Username,
+    PasswordHash,
     CreatedAt,
     UpdatedAt,
 }
