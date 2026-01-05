@@ -1,4 +1,7 @@
 pub enum UserError {
     NotFound,
-	AlreadyExists,
+    AlreadyExists,
+    InvalidUsername(String),
+    InvalidPassword(String),
+    PersistenceError,
 }
