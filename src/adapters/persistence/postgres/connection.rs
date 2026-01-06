@@ -1,9 +1,12 @@
 use sea_orm::{ConnectOptions, Database, DatabaseConnection};
-use std::time::Duration;
+use std::{str::FromStr, time::Duration};
 
-use crate::config::database::ports::DatabaseConfig;
+use crate::config::{database::ports::DatabaseConfig, logging::ports::LoggingConfig};
 
-pub async fn connect_to_db(database_config: &DatabaseConfig) -> DatabaseConnection {
+pub async fn connect_to_db(
+    database_config: &DatabaseConfig,
+    log_config: &LoggingConfig,
+) -> DatabaseConnection {
     let database_url: &String = &database_config.database_url;
 
     let mut opt = ConnectOptions::new(database_url);
@@ -14,7 +17,7 @@ pub async fn connect_to_db(database_config: &DatabaseConfig) -> DatabaseConnecti
         .idle_timeout(Duration::from_secs(8))
         .max_lifetime(Duration::from_secs(8))
         .sqlx_logging(false) // disable SQLx logging
-        .sqlx_logging_level(log::LevelFilter::Info)
+        .sqlx_logging_level(log::LevelFilter::from_str(&log_config.level).unwrap())
         .set_schema_search_path("public"); // set default Postgres schema
 
     let db: DatabaseConnection = Database::connect(opt).await.unwrap();

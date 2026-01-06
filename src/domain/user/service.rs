@@ -5,6 +5,7 @@ use super::value_objects::username::Username;
 use super::{entity::User, repository::UserRepository};
 use uuid::Uuid;
 
+#[derive(Clone)]
 pub struct UserService<R, H>
 where
     R: UserRepository,
@@ -21,6 +22,13 @@ where
 {
     pub fn new(repo: R, hasher: H) -> Self {
         Self { repo, hasher }
+    }
+
+    pub async fn find_by_id(&self, id: Uuid) -> Result<User, UserError> {
+        match self.repo.find_by_id(&id).await? {
+            Some(user) => Ok(user),
+            None => Err(UserError::NotFound),
+        }
     }
 
     pub async fn create_user(

@@ -6,6 +6,7 @@ use crate::domain::user::{
 use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 use uuid::Uuid;
 
+#[derive(Clone)]
 pub struct PostgresUserRepository {
     db: DatabaseConnection,
 }

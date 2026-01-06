@@ -6,6 +6,7 @@ use argon2::{
     password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString, rand_core::OsRng},
 };
 
+#[derive(Clone)]
 pub struct Argon2Hasher;
 
 #[async_trait::async_trait]
