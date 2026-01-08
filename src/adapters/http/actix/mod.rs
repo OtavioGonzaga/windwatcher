@@ -1,19 +1,19 @@
 pub mod server;
 pub mod user;
 
-use crate::adapters::http::actix::user::{dto, handler};
+use crate::adapters::http::actix;
 use utoipa::OpenApi;
 
 #[derive(OpenApi)]
 #[openapi(
     paths(
-        handler::create_user,
-        handler::find_by_id
+        actix::user::handler::create_user,
+        actix::user::handler::find_by_id
     ),
     components(
         schemas(
-            dto::CreateUserHttpDto,
-            dto::CreateUserResponseDto
+            actix::user::dto::CreateUserHttpDto,
+            actix::user::dto::UserResponseDto
         )
     ),
     tags(

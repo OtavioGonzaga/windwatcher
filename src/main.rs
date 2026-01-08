@@ -1,6 +1,7 @@
-mod adapters;
 mod cli;
 mod config;
+mod adapters;
+mod application;
 mod domain;
 
 use crate::{

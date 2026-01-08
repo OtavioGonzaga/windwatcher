@@ -1,12 +1,13 @@
-use crate::adapters::http::actix::ApiDoc;
-use crate::adapters::persistence::postgres::user::repository::PostgresUserRepository;
-use crate::adapters::{
-    hash::argon2::Argon2Hasher, http::actix::user::routes::routes as user_routes,
+use crate::{
+    adapters::{
+        hash::argon2::Argon2Hasher, http::actix::ApiDoc,
+        http::actix::user::routes::routes as user_routes,
+        persistence::postgres::user::repository::PostgresUserRepository,
+    },
+    application::user::{create_user::CreateUserService, find_user::FindUserService},
+    config::http::ports::HttpConfig,
 };
-use crate::config::http::ports::HttpConfig;
-use crate::domain::user::service::UserService;
-use actix_web::{App, HttpServer, get, web};
-use actix_web::{HttpResponse, Responder};
+use actix_web::{App, HttpResponse, HttpServer, Responder, get, web};
 use sea_orm::DatabaseConnection;
 use std::io::Error;
 use utoipa::OpenApi;
@@ -20,12 +21,16 @@ async fn hello() -> impl Responder {
 pub async fn build_app(http_config: HttpConfig, db: DatabaseConnection) -> Result<(), Error> {
     let user_repo: PostgresUserRepository = PostgresUserRepository::new(db);
     let hasher: Argon2Hasher = Argon2Hasher;
-    let user_service: UserService<PostgresUserRepository, Argon2Hasher> =
-        UserService::new(user_repo, hasher);
+
+    let find_user_service: FindUserService<PostgresUserRepository> =
+        FindUserService::new(user_repo.clone());
+    let create_user_service: CreateUserService<PostgresUserRepository, Argon2Hasher> =
+        CreateUserService::new(user_repo, hasher);
 
     HttpServer::new(move || {
         App::new()
-            .app_data(web::Data::new(user_service.clone()))
+            .app_data(web::Data::new(find_user_service.clone()))
+            .app_data(web::Data::new(create_user_service.clone()))
             .configure(user_routes)
             .service(SwaggerUi::new("/docs/{_:.*}").url("/api-doc/openapi.json", ApiDoc::openapi()))
             .service(hello)

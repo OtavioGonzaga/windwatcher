@@ -1,21 +1,27 @@
+use super::entity::{ActiveModel, Model};
+use crate::domain::{
+    errors::repository::RepositoryError,
+    user::{
+        entity::User,
+        value_objects::{password_hash::PasswordHash, username::Username},
+    },
+};
 use sea_orm::ActiveValue::Set;
 
-use crate::domain::user::{
-    entity::User,
-    value_objects::{password_hash::PasswordHash, username::Username},
-};
-
-use super::entity::{ActiveModel, Model};
-
 impl TryFrom<Model> for User {
-    type Error = crate::domain::user::error::UserError;
+    type Error = RepositoryError;
 
-    fn try_from(model: Model) -> Result<Self, Self::Error> {
+    fn try_from(model: Model) -> Result<Self, RepositoryError> {
+        let username: Username = Username::new(model.username).map_err(|_| RepositoryError::InvariantViolation)?;
+
+        let password_hash: PasswordHash =
+            PasswordHash::new(model.password_hash).map_err(|_| RepositoryError::InvariantViolation)?;
+
         Ok(User {
             id: model.id,
-            username: Username::new(model.username)?,
+            username,
             name: model.name,
-            password_hash: PasswordHash::new(model.password_hash)?,
+            password_hash,
         })
     }
 }

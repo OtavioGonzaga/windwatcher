@@ -1,15 +1,12 @@
 use crate::adapters::hash::argon2::Argon2Hasher;
-use crate::adapters::http::actix::user::dto::{CreateUserHttpDto, CreateUserResponseDto};
+use crate::adapters::http::actix::user::dto::{CreateUserHttpDto, UserResponseDto};
 use crate::adapters::persistence::postgres::user::repository::PostgresUserRepository;
-use crate::domain::user::{
-    error::UserError,
-    service::{CreateUserInput, UserService},
-};
+use crate::application::user::create_user::{CreateUserError, CreateUserInput, CreateUserService};
+use crate::application::user::find_user::{FindUserError, FindUserService};
+use crate::domain::user::error::UserError;
 use actix_web::{HttpResponse, web};
 use serde_json::json;
 use uuid::Uuid;
-
-pub type UserAppService = UserService<PostgresUserRepository, Argon2Hasher>;
 
 #[utoipa::path(
     get,
@@ -25,7 +22,7 @@ pub type UserAppService = UserService<PostgresUserRepository, Argon2Hasher>;
     )
 )]
 pub async fn find_by_id(
-    service: web::Data<UserAppService>,
+    service: web::Data<FindUserService<PostgresUserRepository>>,
     params: web::Path<String>,
 ) -> HttpResponse {
     let id: Result<Uuid, uuid::Error> = Uuid::parse_str(&params);
@@ -35,11 +32,15 @@ pub async fn find_by_id(
     }
 
     match service.find_by_id(id.unwrap()).await {
-        Ok(user) => HttpResponse::Ok().json(CreateUserResponseDto::from_domain(user)),
-        Err(UserError::NotFound) => {
+        Ok(user) => HttpResponse::Ok().json(UserResponseDto {
+            id: user.id.to_string(),
+            username: user.username.as_str().into(),
+            name: user.name,
+        }),
+        Err(FindUserError::NotFound) => {
             HttpResponse::NotFound().json(json!({"message": "User not found"}))
         }
-        Err(_) => HttpResponse::InternalServerError().finish(),
+        Err(FindUserError::RepositoryError) => HttpResponse::InternalServerError().finish(),
     }
 }
 
@@ -49,13 +50,13 @@ pub async fn find_by_id(
     request_body = CreateUserHttpDto,
     tag = "Users",
     responses(
-        (status = 201, description = "User created successfully", body = CreateUserResponseDto),
+        (status = 201, description = "User created successfully", body = UserResponseDto),
         (status = 409, description = "Username already exists"),
         (status = 400, description = "Invalid data provided")
     )
 )]
 pub async fn create_user(
-    service: web::Data<UserAppService>,
+    service: web::Data<CreateUserService<PostgresUserRepository, Argon2Hasher>>,
     payload: web::Json<CreateUserHttpDto>,
 ) -> HttpResponse {
     let cmd: CreateUserInput = CreateUserInput {
@@ -64,13 +65,22 @@ pub async fn create_user(
         password: payload.password.clone(),
     };
 
-    match service.create_user(cmd).await {
-        Ok(user) => HttpResponse::Created().json(CreateUserResponseDto::from_domain(user)),
-        Err(UserError::AlreadyExists) => HttpResponse::Conflict()
+    match service.execute(cmd).await {
+        Ok(user) => HttpResponse::Created().json(UserResponseDto {
+            id: user.id.to_string(),
+            username: user.username,
+            name: user.name,
+        }),
+        Err(CreateUserError::AlreadyExists) => HttpResponse::Conflict()
             .json(json!({"message": "Already exists a user with this username"})),
-        Err(UserError::InvalidUsername(message)) | Err(UserError::InvalidPassword(message)) => {
-            HttpResponse::BadRequest().json(json!({"message": message}))
-        }
+        Err(CreateUserError::UserError(user_error)) => match user_error {
+            UserError::InvalidUsername(message) => {
+                HttpResponse::BadRequest().json(json!({"message": message}))
+            }
+            UserError::InvalidPassword(message) => {
+                HttpResponse::BadRequest().json(json!({"message": message}))
+            }
+        },
         Err(_) => HttpResponse::InternalServerError().finish(),
     }
 }

@@ -1,7 +1,5 @@
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
-
-use crate::domain::user::entity::User;
 
 #[derive(Deserialize, ToSchema)]
 pub struct CreateUserHttpDto {
@@ -14,21 +12,11 @@ pub struct CreateUserHttpDto {
 }
 
 #[derive(Serialize, ToSchema)]
-pub struct CreateUserResponseDto {
+pub struct UserResponseDto {
     /// The unique identifier of the user.
     pub id: String,
     /// The username of the user.
     pub username: String,
     /// The name of the user.
     pub name: String,
-}
-
-impl CreateUserResponseDto {
-    pub fn from_domain(user: User) -> Self {
-        CreateUserResponseDto {
-            id: user.id.to_string(),
-            username: user.username.as_str().to_string(),
-            name: user.name,
-        }
-    } 
 }

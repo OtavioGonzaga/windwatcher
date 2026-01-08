@@ -1,5 +1,4 @@
-use super::value_objects::password_hash::PasswordHash;
-use super::value_objects::username::Username;
+use super::value_objects::{password_hash::PasswordHash, username::Username};
 use uuid::Uuid;
 
 pub struct User {
@@ -7,4 +6,15 @@ pub struct User {
     pub name: String,
     pub username: Username,
     pub password_hash: PasswordHash,
+}
+
+impl User {
+    pub fn new(id: Uuid, name: String, username: Username, password_hash: PasswordHash) -> Self {
+        Self {
+            id,
+            name,
+            username,
+            password_hash,
+        }
+    }
 }
