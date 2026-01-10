@@ -40,7 +40,7 @@ pub async fn find_by_id(
         Ok(user) => HttpResponse::Ok().json(UserResponseDto {
             id: user.id.to_string(),
             username: user.username.as_str().into(),
-            name: user.name,
+            name: user.name.as_str().into(),
         }),
         Err(FindUserError::NotFound) => {
             HttpResponse::NotFound().json(json!({"message": "User not found"}))

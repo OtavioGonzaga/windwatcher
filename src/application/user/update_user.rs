@@ -87,8 +87,8 @@ impl From<User> for UpdateUserOutput {
 	fn from(user: User) -> Self {
 		Self {
 			id: user.id,
-			username: user.username.as_str().to_owned(),
-			name: user.name,
+			username: user.username.as_str().into(),
+			name: user.name.as_str().into(),
 		}
 	}
 }

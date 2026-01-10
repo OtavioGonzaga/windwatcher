@@ -7,7 +7,7 @@ use crate::domain::{
         password_hasher::PasswordHasher,
         repository::UserRepository,
         value_objects::{
-            password_hash::PasswordHash, password_plain::PasswordPlain, username::Username,
+            password_hash::PasswordHash, password_plain::PasswordPlain, username::Username, name::Name
         },
     },
 };
@@ -37,6 +37,7 @@ where
     ) -> Result<CreateUserOutput, CreateUserError> {
         let username: Username = Username::new(input.username)?;
         let password: PasswordPlain = PasswordPlain::new(input.password)?;
+        let name: Name = Name::new(input.name)?;
 
         if self.repo.find_by_username(&username).await?.is_some() {
             return Err(CreateUserError::AlreadyExists);
@@ -45,14 +46,15 @@ where
         let password_hash_raw = self.hasher.hash(password.as_str()).await?;
         let password_hash = PasswordHash::new(password_hash_raw)?;
 
-        let user: User = User::new(Uuid::now_v7(), input.name, username, password_hash);
+
+        let user: User = User::new(Uuid::now_v7(), name, username, password_hash);
 
         let user: User = self.repo.create(user).await?;
 
         Ok(CreateUserOutput {
             id: user.id,
             username: user.username.as_str().into(),
-            name: user.name,
+            name: user.name.as_str().into(),
         })
     }
 }
