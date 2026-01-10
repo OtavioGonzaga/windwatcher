@@ -1,23 +1,15 @@
 pub mod server;
 pub mod user;
 
-use crate::adapters::http::actix;
 use utoipa::OpenApi;
 
 #[derive(OpenApi)]
 #[openapi(
-    paths(
-        actix::user::handler::create_user,
-        actix::user::handler::find_by_id
-    ),
-    components(
-        schemas(
-            actix::user::dto::CreateUserHttpDto,
-            actix::user::dto::UserResponseDto
-        )
-    ),
-    tags(
-        (name = "Users", description = "User management endpoints")
+    nest((path = "/users", api = user::UserApiDoc)),
+    info(
+        title = "My API",
+        version = "1.0.0",
+        description = "Hexagonal architecture API"
     )
 )]
 pub struct ApiDoc;

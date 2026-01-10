@@ -3,3 +3,4 @@ pub mod error;
 pub mod password_hasher;
 pub mod repository;
 pub mod value_objects;
+pub mod patch;

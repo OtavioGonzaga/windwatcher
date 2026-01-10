@@ -1,5 +1,4 @@
 use uuid::Uuid;
-
 use crate::domain::{
     errors::repository::RepositoryError,
     user::{
