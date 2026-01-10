@@ -1,8 +1,8 @@
-use uuid::Uuid;
 use crate::domain::{
     errors::repository::RepositoryError,
     user::{entity::User, repository::UserRepository},
 };
+use uuid::Uuid;
 
 #[derive(Clone)]
 pub struct FindUserService<R>

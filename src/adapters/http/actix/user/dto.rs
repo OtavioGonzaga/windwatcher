@@ -20,7 +20,7 @@ pub struct UpdateUserDto {
     #[schema(min_length = 3, max_length = 32)]
     pub username: Option<String>,
     /// The name of the user.
-    #[schema( max_length = 255)]
+    #[schema(max_length = 255)]
     pub name: Option<String>,
     /// The password of the user.
     #[schema(min_length = 8, max_length = 64)]

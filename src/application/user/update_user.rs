@@ -84,13 +84,13 @@ pub struct UpdateUserOutput {
 }
 
 impl From<User> for UpdateUserOutput {
-	fn from(user: User) -> Self {
-		Self {
-			id: user.id,
-			username: user.username.as_str().into(),
-			name: user.name.as_str().into(),
-		}
-	}
+    fn from(user: User) -> Self {
+        Self {
+            id: user.id,
+            username: user.username.as_str().into(),
+            name: user.name.as_str().into(),
+        }
+    }
 }
 
 pub enum UpdateUserError {

@@ -1,4 +1,3 @@
-use uuid::Uuid;
 use crate::domain::{
     errors::repository::RepositoryError,
     user::{
@@ -7,10 +6,12 @@ use crate::domain::{
         password_hasher::PasswordHasher,
         repository::UserRepository,
         value_objects::{
-            password_hash::PasswordHash, password_plain::PasswordPlain, username::Username, name::Name
+            name::Name, password_hash::PasswordHash, password_plain::PasswordPlain,
+            username::Username,
         },
     },
 };
+use uuid::Uuid;
 
 #[derive(Clone)]
 pub struct CreateUserService<R, H>
@@ -45,7 +46,6 @@ where
 
         let password_hash_raw = self.hasher.hash(password.as_str()).await?;
         let password_hash = PasswordHash::new(password_hash_raw)?;
-
 
         let user: User = User::new(Uuid::now_v7(), name, username, password_hash);
 

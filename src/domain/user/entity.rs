@@ -1,4 +1,4 @@
-use super::value_objects::{password_hash::PasswordHash, username::Username, name::Name};
+use super::value_objects::{name::Name, password_hash::PasswordHash, username::Username};
 use uuid::Uuid;
 
 pub struct User {
