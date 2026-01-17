@@ -18,12 +18,18 @@ impl HttpConfigProvider for EnvHttpConfig {
         let port: u16 = port
             .parse()
             .map_err(|_| ConfigError::Invalid("HTTP_PORT"))?;
+        let jwt_secret: String =
+            std::env::var("JWT_SECRET").map_err(|_| ConfigError::Missing("JWT_SECRET"))?;
 
         if !is_valid_host(&host) {
             return Err(ConfigError::Invalid("HTTP_HOST"));
         }
 
-        Ok(HttpConfig { host, port })
+        Ok(HttpConfig {
+            host,
+            port,
+            jwt_secret,
+        })
     }
 }
 

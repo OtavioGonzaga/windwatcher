@@ -2,15 +2,19 @@ pub mod database;
 pub mod http;
 pub mod logging;
 
-use std::error::Error;
-use std::fmt::Display;
-
-use database::adapters::{cli::CliDatabaseConfig, env::EnvDatabaseConfig};
-use database::ports::{DatabaseConfig, DatabaseConfigProvider};
-use http::adapters::{cli::CliHttpConfig, env::EnvHttpConfig};
-use http::ports::{HttpConfig, HttpConfigProvider};
-use logging::adapters::{cli::CliLoggingConfig, env::EnvLoggingConfig};
-use logging::ports::{LoggingConfig, LoggingConfigProvider};
+use database::{
+    adapters::{cli::CliDatabaseConfig, env::EnvDatabaseConfig},
+    ports::{DatabaseConfig, DatabaseConfigProvider},
+};
+use http::{
+    adapters::{cli::CliHttpConfig, env::EnvHttpConfig},
+    ports::{HttpConfig, HttpConfigProvider},
+};
+use logging::{
+    adapters::{cli::CliLoggingConfig, env::EnvLoggingConfig},
+    ports::{LoggingConfig, LoggingConfigProvider},
+};
+use std::{error::Error, fmt::Display};
 
 #[derive(Clone)]
 pub struct Config {
@@ -59,15 +63,21 @@ fn merge_database(
 fn merge_http(configs: Vec<Result<HttpConfig, ConfigError>>) -> Result<HttpConfig, ConfigError> {
     let port: u16;
     let host: String;
+    let jwt_secret: String;
 
     if let Some(Ok(cfg)) = configs.iter().find(|r| r.is_ok()) {
         port = cfg.port;
         host = cfg.host.clone();
+        jwt_secret = cfg.jwt_secret.clone();
     } else {
         return Err(ConfigError::Missing("HTTP configuration"));
     }
 
-    Ok(HttpConfig { host, port })
+    Ok(HttpConfig {
+        host,
+        port,
+        jwt_secret,
+    })
 }
 
 fn merge_logging(

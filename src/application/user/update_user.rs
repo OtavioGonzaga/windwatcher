@@ -56,8 +56,8 @@ where
             None => None,
         };
 
-        let password_hash = if let Some(password) = input.password {
-            let hash = self.hasher.hash(&password).await?;
+        let password_hash: Option<PasswordHash> = if let Some(password) = input.password {
+            let hash: String = self.hasher.hash(&password);
             Some(PasswordHash::new(hash)?)
         } else {
             None

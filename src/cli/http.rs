@@ -10,4 +10,8 @@ pub struct HttpCli {
     /// Port to bind the HTTP server
     #[arg(long)]
     pub http_port: Option<u16>,
+
+    /// JWT secret
+    #[arg(long)]
+    pub jwt_secret: Option<String>,
 }

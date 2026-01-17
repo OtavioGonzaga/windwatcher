@@ -17,6 +17,7 @@ impl HttpConfigProvider for CliHttpConfig {
 
         let host: String = args.http_host.ok_or(ConfigError::Missing("http-host"))?;
         let port: u16 = args.http_port.ok_or(ConfigError::Missing("http-port"))?;
+        let jwt_secret: String = args.jwt_secret.ok_or(ConfigError::Missing("jwt-secret"))?;
 
         if 1024 > port {
             return Err(ConfigError::Invalid("http-port"));
@@ -26,7 +27,11 @@ impl HttpConfigProvider for CliHttpConfig {
             return Err(ConfigError::Invalid("http-host"));
         }
 
-        Ok(HttpConfig { host, port })
+        Ok(HttpConfig {
+            host,
+            port,
+            jwt_secret,
+        })
     }
 }
 

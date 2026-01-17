@@ -8,8 +8,10 @@ use crate::application::user::{
     find_user::{FindUserError, FindUserService},
     update_user::{UpdateUserError, UpdateUserInput, UpdateUserService},
 };
+use crate::domain::auth::authenticated_user::AuthenticatedUser;
 use crate::domain::user::error::UserError;
 use actix_web::{HttpResponse, web};
+use log::info;
 use serde_json::json;
 use uuid::Uuid;
 
@@ -29,7 +31,9 @@ use uuid::Uuid;
 pub async fn find_by_id(
     service: web::Data<FindUserService<PostgresUserRepository>>,
     params: web::Path<String>,
+    user: AuthenticatedUser,
 ) -> HttpResponse {
+    info!("{:#?}", user);
     let id: Result<Uuid, uuid::Error> = Uuid::parse_str(&params);
 
     if id.is_err() {

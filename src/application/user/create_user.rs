@@ -44,8 +44,8 @@ where
             return Err(CreateUserError::AlreadyExists);
         }
 
-        let password_hash_raw = self.hasher.hash(password.as_str()).await?;
-        let password_hash = PasswordHash::new(password_hash_raw)?;
+        let password_hash_raw: String = self.hasher.hash(password.as_str());
+        let password_hash: PasswordHash = PasswordHash::new(password_hash_raw)?;
 
         let user: User = User::new(Uuid::now_v7(), name, username, password_hash);
 

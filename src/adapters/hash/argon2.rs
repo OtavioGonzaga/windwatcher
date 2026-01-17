@@ -1,5 +1,3 @@
-use std::io::Result;
-
 use crate::domain::user::password_hasher::PasswordHasher as DomainPasswordHasher;
 use argon2::{
     Argon2,
@@ -11,22 +9,22 @@ pub struct Argon2Hasher;
 
 #[async_trait::async_trait]
 impl DomainPasswordHasher for Argon2Hasher {
-    async fn hash(&self, plain: &str) -> Result<String> {
+    fn hash(&self, plain: &str) -> String {
         let argon2 = Argon2::default();
 
         let salt: SaltString = SaltString::generate(&mut OsRng);
 
         let password_hash = argon2.hash_password(plain.as_bytes(), &salt).unwrap();
 
-        Ok(password_hash.to_string())
+        password_hash.to_string()
     }
 
-    async fn verify(&self, plain: &str, hash: &str) -> Result<bool> {
+    fn verify(&self, plain: &str, hash: &str) -> bool {
         let password_hash = PasswordHash::new(hash).unwrap();
         let argon2 = Argon2::default();
 
-        Ok(argon2
+        argon2
             .verify_password(plain.as_bytes(), &password_hash)
-            .is_ok())
+            .is_ok()
     }
 }
