@@ -1,6 +1,7 @@
 pub mod auth;
 pub mod server;
 pub mod user;
+mod api_error;
 
 use utoipa::{
     Modify, OpenApi,

@@ -2,20 +2,18 @@ use super::dto::LoginRequest;
 use crate::{
     adapters::{
         auth::jwt::service::JwtTokenService, hash::argon2::Argon2Hasher,
+        http::actix::api_error::ApiError,
         persistence::postgres::user::repository::PostgresUserRepository,
     },
     application::auth::login::Login,
     domain::{
         auth::token::Token,
-        user::{
-            error::UserError,
-            value_objects::{password_plain::PasswordPlain, username::Username},
-        },
+        user::value_objects::{password_plain::PasswordPlain, username::Username},
     },
 };
 use actix_web::{
     HttpResponse,
-    error::{ErrorBadRequest, ErrorUnauthorized},
+    http::StatusCode,
     web,
 };
 use serde_json::json;
@@ -34,10 +32,13 @@ use serde_json::json;
 pub async fn login(
     body: web::Form<LoginRequest>,
     login: web::Data<Login<PostgresUserRepository, Argon2Hasher, JwtTokenService>>,
-) -> Result<HttpResponse, actix_web::Error> {
+) -> Result<HttpResponse, ApiError> {
     if let Some(grant_type) = &body.grant_type {
         if grant_type != "password" {
-            return Err(ErrorBadRequest("Unsupported grant type"));
+            return Err(ApiError::new(
+                StatusCode::BAD_REQUEST,
+                "Unsupported grant type",
+            ));
         }
     }
 
@@ -47,20 +48,11 @@ pub async fn login(
     let token: Token = login
         .execute(username, password)
         .await
-        .map_err(|_| ErrorUnauthorized("Invalid credentials"))?;
+        .map_err(|_| ApiError::new(StatusCode::UNAUTHORIZED, "Invalid credentials"))?;
 
     Ok(HttpResponse::Ok().json(json!({
         "access_token": token.as_str(),
         "token_type": "bearer",
         "expires_in": 1800
     })))
-}
-
-impl From<UserError> for actix_web::Error {
-    fn from(err: UserError) -> Self {
-        match err {
-            UserError::InvalidPassword(e) => ErrorBadRequest(e),
-            UserError::InvalidUsername(e) => ErrorBadRequest(e),
-        }
-    }
 }

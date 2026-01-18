@@ -1,5 +1,6 @@
 use crate::domain::{
-    errors::repository::RepositoryError,
+    auth::authenticated_user::AuthenticatedUser,
+    errors::{domain::DomainError, repository::RepositoryError},
     user::{
         entity::User,
         error::UserError,
@@ -34,7 +35,10 @@ where
         &self,
         id: Uuid,
         input: UpdateUserInput,
+        authenticated_user: &AuthenticatedUser,
     ) -> Result<UpdateUserOutput, UpdateUserError> {
+        authenticated_user.must_be_admin_or_owner(&id)?;
+
         let user: User = self
             .repo
             .find_by_id(&id)
@@ -98,22 +102,31 @@ pub enum UpdateUserError {
     NotFound,
     AlreadyExists,
     InfrastructureError,
+    Forbidden,
 }
 
 impl From<UserError> for UpdateUserError {
     fn from(e: UserError) -> Self {
-        UpdateUserError::UserError(e)
+        Self::UserError(e)
     }
 }
 
 impl From<RepositoryError> for UpdateUserError {
     fn from(_: RepositoryError) -> Self {
-        UpdateUserError::InfrastructureError
+        Self::InfrastructureError
+    }
+}
+
+impl From<DomainError> for UpdateUserError {
+    fn from(value: DomainError) -> Self {
+        match value {
+            DomainError::Forbidden => Self::Forbidden,
+        }
     }
 }
 
 impl From<std::io::Error> for UpdateUserError {
     fn from(_: std::io::Error) -> Self {
-        UpdateUserError::InfrastructureError
+        Self::InfrastructureError
     }
 }

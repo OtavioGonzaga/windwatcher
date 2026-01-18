@@ -1,7 +1,10 @@
-use crate::domain::auth::{
-    authenticated_user::AuthenticatedUser,
-    token::Token,
-    token_service::{AuthError, TokenService},
+use crate::domain::{
+    auth::{
+        authenticated_user::AuthenticatedUser,
+        token::Token,
+        token_service::{AuthError, TokenService},
+    },
+    user::entity::UserRole,
 };
 use jsonwebtoken::{DecodingKey, EncodingKey, Header, TokenData, Validation, decode, encode};
 use serde::{Deserialize, Serialize};
@@ -11,7 +14,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 struct Claims {
     sub: String,
     username: String,
-    roles: Vec<String>,
+    roles: Vec<UserRole>,
     exp: usize,
 }
 

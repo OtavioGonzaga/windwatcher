@@ -1,5 +1,6 @@
 use crate::domain::{
-    errors::repository::RepositoryError,
+    auth::authenticated_user::AuthenticatedUser,
+    errors::{domain::DomainError, repository::RepositoryError},
     user::{entity::User, repository::UserRepository},
 };
 use uuid::Uuid;
@@ -20,10 +21,16 @@ where
         Self { repo }
     }
 
-    pub async fn execute(&self, user_id: Uuid) -> Result<(), DeleteUserError> {
+    pub async fn execute(
+        &self,
+        id: &Uuid,
+        authenticated_user: &AuthenticatedUser,
+    ) -> Result<(), DeleteUserError> {
+        authenticated_user.must_be_admin_or_owner(&id)?;
+
         let user: User = self
             .repo
-            .find_by_id(&user_id)
+            .find_by_id(id)
             .await?
             .ok_or(DeleteUserError::NotFound)?;
 
@@ -36,10 +43,19 @@ where
 pub enum DeleteUserError {
     NotFound,
     InfrastructureError,
+    Forbidden,
 }
 
 impl From<RepositoryError> for DeleteUserError {
     fn from(_: RepositoryError) -> Self {
         DeleteUserError::InfrastructureError
+    }
+}
+
+impl From<DomainError> for DeleteUserError {
+    fn from(value: DomainError) -> Self {
+        match value {
+            DomainError::Forbidden => DeleteUserError::Forbidden,
+        }
     }
 }

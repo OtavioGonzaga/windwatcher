@@ -6,6 +6,7 @@ use crate::domain::{
         value_objects::username::Username,
     },
 };
+use log::error;
 use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, DbErr, EntityTrait, QueryFilter};
 use uuid::Uuid;
 
@@ -103,7 +104,10 @@ impl From<DbErr> for RepositoryError {
     fn from(error: DbErr) -> Self {
         match error {
             DbErr::RecordNotFound(_) => RepositoryError::Unavailable,
-            _ => RepositoryError::Unexpected,
+            others => {
+                error!("{}", others);
+                RepositoryError::Unexpected
+            }
         }
     }
 }

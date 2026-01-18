@@ -1,7 +1,8 @@
 use crate::domain::{
-    errors::repository::RepositoryError,
+    auth::authenticated_user::AuthenticatedUser,
+    errors::{domain::DomainError, repository::RepositoryError},
     user::{
-        entity::User,
+        entity::{User, UserRole},
         error::UserError,
         password_hasher::PasswordHasher,
         repository::UserRepository,
@@ -35,10 +36,14 @@ where
     pub async fn execute(
         &self,
         input: CreateUserInput,
+        authenticated_user: &AuthenticatedUser,
     ) -> Result<CreateUserOutput, CreateUserError> {
+        authenticated_user.must_be_admin()?;
+
         let username: Username = Username::new(input.username)?;
         let password: PasswordPlain = PasswordPlain::new(input.password)?;
         let name: Name = Name::new(input.name)?;
+        let role: Option<UserRole> = None;
 
         if self.repo.find_by_username(&username).await?.is_some() {
             return Err(CreateUserError::AlreadyExists);
@@ -47,7 +52,7 @@ where
         let password_hash_raw: String = self.hasher.hash(password.as_str());
         let password_hash: PasswordHash = PasswordHash::new(password_hash_raw)?;
 
-        let user: User = User::new(Uuid::now_v7(), name, username, password_hash);
+        let user: User = User::new(Uuid::now_v7(), name, username, password_hash, role);
 
         let user: User = self.repo.create(user).await?;
 
@@ -73,6 +78,7 @@ pub struct CreateUserOutput {
 
 pub enum CreateUserError {
     UserError(UserError),
+    Forbidden,
     AlreadyExists,
     InfrastructureError,
 }
@@ -86,6 +92,14 @@ impl From<UserError> for CreateUserError {
 impl From<RepositoryError> for CreateUserError {
     fn from(_: RepositoryError) -> Self {
         CreateUserError::InfrastructureError
+    }
+}
+
+impl From<DomainError> for CreateUserError {
+    fn from(value: DomainError) -> Self {
+        match value {
+            DomainError::Forbidden => CreateUserError::Forbidden,
+        }
     }
 }
 

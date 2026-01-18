@@ -1,18 +1,21 @@
 use super::dto::{CreateUserDto, UpdateUserDto, UserResponseDto};
-use crate::adapters::{
-    hash::argon2::Argon2Hasher, persistence::postgres::user::repository::PostgresUserRepository,
+use crate::{
+    adapters::{
+        hash::argon2::Argon2Hasher, http::actix::api_error::ApiError,
+        persistence::postgres::user::repository::PostgresUserRepository,
+    },
+    application::user::{
+        create_user::{CreateUserError, CreateUserInput, CreateUserOutput, CreateUserService},
+        delete_user::{DeleteUserError, DeleteUserService},
+        find_user::{FindUserError, FindUserService},
+        update_user::{UpdateUserError, UpdateUserInput, UpdateUserOutput, UpdateUserService},
+    },
+    domain::{
+        auth::authenticated_user::AuthenticatedUser,
+        user::{entity::User, error::UserError},
+    },
 };
-use crate::application::user::{
-    create_user::{CreateUserError, CreateUserInput, CreateUserService},
-    delete_user::{DeleteUserError, DeleteUserService},
-    find_user::{FindUserError, FindUserService},
-    update_user::{UpdateUserError, UpdateUserInput, UpdateUserService},
-};
-use crate::domain::auth::authenticated_user::AuthenticatedUser;
-use crate::domain::user::error::UserError;
-use actix_web::{HttpResponse, web};
-use log::info;
-use serde_json::json;
+use actix_web::{HttpResponse, http::StatusCode, web};
 use uuid::Uuid;
 
 #[utoipa::path(
@@ -31,26 +34,18 @@ use uuid::Uuid;
 pub async fn find_by_id(
     service: web::Data<FindUserService<PostgresUserRepository>>,
     params: web::Path<String>,
-    user: AuthenticatedUser,
-) -> HttpResponse {
-    info!("{:#?}", user);
-    let id: Result<Uuid, uuid::Error> = Uuid::parse_str(&params);
+    authenticated_user: AuthenticatedUser,
+) -> Result<HttpResponse, ApiError> {
+    let id: Uuid = Uuid::parse_str(&params)
+        .map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "Invalid UUID format"))?;
 
-    if id.is_err() {
-        return HttpResponse::BadRequest().json(json!({"message": "Invalid UUID format"}));
-    }
+    let user: User = service.find_by_id(&id, &authenticated_user).await?;
 
-    match service.find_by_id(id.unwrap()).await {
-        Ok(user) => HttpResponse::Ok().json(UserResponseDto {
-            id: user.id.to_string(),
-            username: user.username.as_str().into(),
-            name: user.name.as_str().into(),
-        }),
-        Err(FindUserError::NotFound) => {
-            HttpResponse::NotFound().json(json!({"message": "User not found"}))
-        }
-        Err(FindUserError::RepositoryError) => HttpResponse::InternalServerError().finish(),
-    }
+    Ok(HttpResponse::Ok().json(UserResponseDto {
+        id: user.id.to_string(),
+        username: user.username.as_str().into(),
+        name: user.name.as_str().into(),
+    }))
 }
 
 #[utoipa::path(
@@ -60,38 +55,29 @@ pub async fn find_by_id(
     tag = "Users",
     responses(
         (status = 201, description = "User created successfully", body = UserResponseDto),
-        (status = 409, description = "Username already exists"),
-        (status = 400, description = "Invalid data provided")
+        (status = 400, description = "Invalid data provided"),
+        (status = 403, description = "Without access"),
+        (status = 409, description = "Username already exists")
     )
 )]
 pub async fn create_user(
     service: web::Data<CreateUserService<PostgresUserRepository, Argon2Hasher>>,
     payload: web::Json<CreateUserDto>,
-) -> HttpResponse {
+    authenticated_user: AuthenticatedUser,
+) -> Result<HttpResponse, ApiError> {
     let cmd: CreateUserInput = CreateUserInput {
         username: payload.username.clone(),
         name: payload.name.clone(),
         password: payload.password.clone(),
     };
 
-    match service.execute(cmd).await {
-        Ok(user) => HttpResponse::Created().json(UserResponseDto {
-            id: user.id.to_string(),
-            username: user.username,
-            name: user.name,
-        }),
-        Err(CreateUserError::AlreadyExists) => HttpResponse::Conflict()
-            .json(json!({"message": "Already exists a user with this username"})),
-        Err(CreateUserError::UserError(user_error)) => match user_error {
-            UserError::InvalidUsername(message) => {
-                HttpResponse::BadRequest().json(json!({"message": message}))
-            }
-            UserError::InvalidPassword(message) => {
-                HttpResponse::BadRequest().json(json!({"message": message}))
-            }
-        },
-        Err(_) => HttpResponse::InternalServerError().finish(),
-    }
+    let user: CreateUserOutput = service.execute(cmd, &authenticated_user).await?;
+
+    Ok(HttpResponse::Ok().json(UserResponseDto {
+        id: user.id.to_string(),
+        username: user.username,
+        name: user.name,
+    }))
 }
 
 #[utoipa::path(
@@ -111,12 +97,10 @@ pub async fn update_user(
     service: web::Data<UpdateUserService<PostgresUserRepository, Argon2Hasher>>,
     params: web::Path<String>,
     payload: web::Json<UpdateUserDto>,
-) -> HttpResponse {
-    let id: Result<Uuid, uuid::Error> = Uuid::parse_str(&params);
-
-    if id.is_err() {
-        return HttpResponse::BadRequest().json(json!({"message": "Invalid UUID format"}));
-    }
+    authenticated_user: AuthenticatedUser,
+) -> Result<HttpResponse, ApiError> {
+    let id: Uuid = Uuid::parse_str(&params)
+        .map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "Invalid UUID format"))?;
 
     let update_user: UpdateUserInput = UpdateUserInput {
         username: payload.username.clone(),
@@ -124,27 +108,15 @@ pub async fn update_user(
         password: payload.password.clone(),
     };
 
-    match service.execute(id.unwrap(), update_user).await {
-        Ok(updated_user) => HttpResponse::Ok().json(UserResponseDto {
-            id: updated_user.id.to_string(),
-            username: updated_user.username,
-            name: updated_user.name,
-        }),
-        Err(UpdateUserError::UserError(user_error)) => match user_error {
-            UserError::InvalidUsername(message) => {
-                HttpResponse::BadRequest().json(json!({"message": message}))
-            }
-            UserError::InvalidPassword(message) => {
-                HttpResponse::BadRequest().json(json!({"message": message}))
-            }
-        },
-        Err(UpdateUserError::AlreadyExists) => HttpResponse::Conflict()
-            .json(json!({"message": "Already exists a user with this username"})),
-        Err(UpdateUserError::NotFound) => {
-            HttpResponse::NotFound().json(json!({"message": "User not found"}))
-        }
-        Err(UpdateUserError::InfrastructureError) => HttpResponse::InternalServerError().finish(),
-    }
+    let updated_user: UpdateUserOutput = service
+        .execute(id, update_user, &authenticated_user)
+        .await?;
+
+    Ok(HttpResponse::Ok().json(UserResponseDto {
+        id: updated_user.id.to_string(),
+        username: updated_user.username,
+        name: updated_user.name,
+    }))
 }
 
 #[utoipa::path(
@@ -157,24 +129,88 @@ pub async fn update_user(
     responses(
         (status = 204, description = "User deleted successfully"),
         (status = 400, description = "Invalid data provided"),
+        (status = 403, description = "Whitout permission"),
         (status = 404, description = "User not found")
     )
 )]
 pub async fn delete_user(
     service: web::Data<DeleteUserService<PostgresUserRepository>>,
     params: web::Path<String>,
-) -> HttpResponse {
-    let id: Result<Uuid, uuid::Error> = Uuid::parse_str(&params);
+    authenticated_user: AuthenticatedUser,
+) -> Result<HttpResponse, ApiError> {
+    let id: Uuid = Uuid::parse_str(&params)
+        .map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "Invalid UUID format"))?;
 
-    if id.is_err() {
-        return HttpResponse::BadRequest().json(json!({"message": "Invalid UUID format"}));
-    }
+    service.execute(&id, &authenticated_user).await?;
 
-    match service.execute(id.unwrap()).await {
-        Ok(()) => HttpResponse::NoContent().finish(),
-        Err(DeleteUserError::NotFound) => {
-            HttpResponse::NotFound().json(json!({"message": "User not found"}))
+    Ok(HttpResponse::Ok().finish())
+}
+
+impl From<UserError> for ApiError {
+    fn from(err: UserError) -> Self {
+        match err {
+            UserError::InvalidPassword(msg) | UserError::InvalidUsername(msg) => {
+                ApiError::new(StatusCode::BAD_REQUEST, msg)
+            }
         }
-        Err(DeleteUserError::InfrastructureError) => HttpResponse::InternalServerError().finish(),
+    }
+}
+
+impl From<FindUserError> for ApiError {
+    fn from(value: FindUserError) -> Self {
+        match value {
+            FindUserError::Forbidden => ApiError::new(
+                StatusCode::FORBIDDEN,
+                "You don't have access to perform this action",
+            ),
+            FindUserError::NotFound => ApiError::new(StatusCode::NOT_FOUND, "User not found"),
+            FindUserError::RepositoryError => ApiError::internal_server_error(),
+        }
+    }
+}
+
+impl From<CreateUserError> for ApiError {
+    fn from(err: CreateUserError) -> Self {
+        match err {
+            CreateUserError::UserError(user_err) => ApiError::from(user_err),
+            CreateUserError::Forbidden => ApiError::new(
+                StatusCode::FORBIDDEN,
+                "You don't have access to create users",
+            ),
+            CreateUserError::AlreadyExists => {
+                ApiError::new(StatusCode::CONFLICT, "Username already exists")
+            }
+            CreateUserError::InfrastructureError => ApiError::internal_server_error(),
+        }
+    }
+}
+
+impl From<UpdateUserError> for ApiError {
+    fn from(err: UpdateUserError) -> Self {
+        match err {
+            UpdateUserError::UserError(user_err) => ApiError::from(user_err),
+            UpdateUserError::NotFound => ApiError::new(StatusCode::NOT_FOUND, "User not found"),
+            UpdateUserError::Forbidden => ApiError::new(
+                StatusCode::FORBIDDEN,
+                "You don't have access to edit this user",
+            ),
+            UpdateUserError::AlreadyExists => {
+                ApiError::new(StatusCode::CONFLICT, "Username already exists")
+            }
+            UpdateUserError::InfrastructureError => ApiError::internal_server_error(),
+        }
+    }
+}
+
+impl From<DeleteUserError> for ApiError {
+    fn from(err: DeleteUserError) -> Self {
+        match err {
+            DeleteUserError::NotFound => ApiError::new(StatusCode::NOT_FOUND, "User not found"),
+            DeleteUserError::Forbidden => ApiError::new(
+                StatusCode::FORBIDDEN,
+                "You don't have access to delete this user",
+            ),
+            DeleteUserError::InfrastructureError => ApiError::internal_server_error(),
+        }
     }
 }

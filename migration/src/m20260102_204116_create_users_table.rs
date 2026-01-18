@@ -1,4 +1,4 @@
-use sea_orm_migration::prelude::*;
+use sea_orm_migration::prelude::{extension::postgres::Type, *};
 
 #[derive(DeriveMigrationName)]
 pub struct Migration;
@@ -6,6 +6,15 @@ pub struct Migration;
 #[async_trait::async_trait]
 impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        manager
+            .create_type(
+                Type::create()
+                    .as_enum("user_roles")
+                    .values(["administrator", "user"])
+                    .to_owned(),
+            )
+            .await?;
+
         manager
             .create_table(
                 Table::create()
@@ -23,6 +32,12 @@ impl MigrationTrait for Migration {
                             .string_len(32)
                             .not_null()
                             .unique_key(),
+                    )
+                    .col(
+                        ColumnDef::new(Users::Role)
+                            .extra("user_roles")
+                            .default("user")
+                            .not_null(),
                     )
                     .col(
                         ColumnDef::new(Users::PasswordHash)
@@ -56,7 +71,13 @@ impl MigrationTrait for Migration {
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         manager
             .drop_table(Table::drop().table(Users::Table).to_owned())
-            .await
+            .await?;
+
+        manager
+            .drop_type(Type::drop().name("user_roles").to_owned())
+            .await?;
+
+        Ok(())
     }
 }
 
@@ -67,6 +88,7 @@ enum Users {
     Name,
     Username,
     PasswordHash,
+    Role,
     CreatedAt,
     UpdatedAt,
 }

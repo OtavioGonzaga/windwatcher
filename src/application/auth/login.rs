@@ -58,7 +58,7 @@ where
         let auth_user: AuthenticatedUser = AuthenticatedUser {
             id: user.id,
             username: user.username.as_str().into(),
-            roles: vec!["user".into()],
+            roles: vec![user.role],
         };
 
         Ok(self.tokens.generate(&auth_user))
