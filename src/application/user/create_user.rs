@@ -2,7 +2,7 @@ use crate::domain::{
     auth::authenticated_user::AuthenticatedUser,
     errors::{domain::DomainError, repository::RepositoryError},
     user::{
-        entity::{User, UserRole},
+        entity::{User, UserRole, UserStatus},
         error::UserError,
         password_hasher::PasswordHasher,
         repository::UserRepository,
@@ -36,14 +36,15 @@ where
     pub async fn execute(
         &self,
         input: CreateUserInput,
-        authenticated_user: &AuthenticatedUser,
+        actor: &AuthenticatedUser,
     ) -> Result<CreateUserOutput, CreateUserError> {
-        authenticated_user.must_be_admin()?;
+        actor.must_be_admin()?;
 
         let username: Username = Username::new(input.username)?;
         let password: PasswordPlain = PasswordPlain::new(input.password)?;
         let name: Name = Name::new(input.name)?;
         let role: Option<UserRole> = None;
+        let status: Option<UserStatus> = None;
 
         if self.repo.find_by_username(&username).await?.is_some() {
             return Err(CreateUserError::AlreadyExists);
@@ -52,7 +53,7 @@ where
         let password_hash_raw: String = self.hasher.hash(password.as_str());
         let password_hash: PasswordHash = PasswordHash::new(password_hash_raw)?;
 
-        let user: User = User::new(Uuid::now_v7(), name, username, password_hash, role);
+        let user: User = User::new(Uuid::now_v7(), name, username, password_hash, role, status);
 
         let user: User = self.repo.create(user).await?;
 

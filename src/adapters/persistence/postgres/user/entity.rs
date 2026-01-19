@@ -1,4 +1,4 @@
-use crate::adapters::persistence::postgres::user::user_roles::UserRole;
+use super::{user_role::UserRole, user_status::UserStatus};
 use sea_orm::entity::prelude::*;
 
 #[sea_orm::model]
@@ -12,6 +12,8 @@ pub struct Model {
     pub password_hash: String,
     #[sea_orm(default_value = "user")]
     pub role: UserRole,
+    #[sea_orm(default_value = "active")]
+    pub status: UserStatus,
 }
 
 impl ActiveModelBehavior for ActiveModel {}

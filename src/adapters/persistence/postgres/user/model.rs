@@ -2,7 +2,7 @@ use super::entity::{ActiveModel, Model};
 use crate::domain::{
     errors::repository::RepositoryError,
     user::{
-        entity::{User, UserRole},
+        entity::{User, UserRole, UserStatus},
         error::UserError,
         value_objects::{name::Name, password_hash::PasswordHash, username::Username},
     },
@@ -17,8 +17,16 @@ impl TryFrom<Model> for User {
         let name: Name = Name::new(model.name)?;
         let password_hash: PasswordHash = PasswordHash::new(model.password_hash)?;
         let role: Option<UserRole> = Some(model.role.into());
+        let status: Option<UserStatus> = Some(model.status.into());
 
-        Ok(User::new(model.id, name, username, password_hash, role))
+        Ok(User::new(
+            model.id,
+            name,
+            username,
+            password_hash,
+            role,
+            status,
+        ))
     }
 }
 
@@ -30,6 +38,7 @@ impl From<User> for ActiveModel {
             name: Set(user.name.as_str().into()),
             password_hash: Set(user.password_hash.as_str().into()),
             role: Set(user.role.into()),
+            status: Set(user.status.into()),
         }
     }
 }

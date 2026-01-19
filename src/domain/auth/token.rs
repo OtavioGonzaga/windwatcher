@@ -1,6 +1,5 @@
 use std::fmt;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Token(String);
 
 impl Token {

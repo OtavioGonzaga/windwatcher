@@ -5,17 +5,13 @@ use crate::{
         http::actix::api_error::ApiError,
         persistence::postgres::user::repository::PostgresUserRepository,
     },
-    application::auth::login::Login,
+    application::auth::login::{Login, LoginError},
     domain::{
         auth::token::Token,
         user::value_objects::{password_plain::PasswordPlain, username::Username},
     },
 };
-use actix_web::{
-    HttpResponse,
-    http::StatusCode,
-    web,
-};
+use actix_web::{HttpResponse, http::StatusCode, web};
 use serde_json::json;
 
 #[utoipa::path(
@@ -45,14 +41,23 @@ pub async fn login(
     let username: Username = Username::new(body.username.clone())?;
     let password: PasswordPlain = PasswordPlain::new(body.password.clone())?;
 
-    let token: Token = login
-        .execute(username, password)
-        .await
-        .map_err(|_| ApiError::new(StatusCode::UNAUTHORIZED, "Invalid credentials"))?;
+    let token: Token = login.execute(username, password).await?;
 
     Ok(HttpResponse::Ok().json(json!({
         "access_token": token.as_str(),
         "token_type": "bearer",
         "expires_in": 1800
     })))
+}
+
+impl From<LoginError> for ApiError {
+    fn from(value: LoginError) -> Self {
+        match value {
+            LoginError::InvalidCredentials => {
+                ApiError::new(StatusCode::UNAUTHORIZED, "Invalid username or password")
+            }
+            LoginError::UserInactive => ApiError::new(StatusCode::UNAUTHORIZED, "User inactive"),
+            LoginError::RepositoryError => ApiError::internal_server_error(),
+        }
+    }
 }

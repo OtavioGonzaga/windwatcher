@@ -24,7 +24,7 @@ use utoipa_swagger_ui::SwaggerUi;
 
 #[get("/")]
 async fn hello() -> impl Responder {
-    HttpResponse::Ok().body("Hello world!")
+    HttpResponse::Ok().body("Hello, WindWatcher!")
 }
 
 pub async fn build_app(http_config: HttpConfig, db: DatabaseConnection) -> Result<(), Error> {

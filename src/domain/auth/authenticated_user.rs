@@ -1,4 +1,7 @@
-use crate::domain::{errors::domain::DomainError, user::entity::UserRole};
+use crate::domain::{
+    errors::domain::DomainError,
+    user::entity::{User, UserRole},
+};
 use uuid::Uuid;
 
 #[derive(Debug, Clone)]
@@ -9,6 +12,14 @@ pub struct AuthenticatedUser {
 }
 
 impl AuthenticatedUser {
+    pub fn new(id: Uuid, username: String, roles: Vec<UserRole>) -> Self {
+        Self {
+            id,
+            username,
+            roles,
+        }
+    }
+
     pub fn must_be_admin(&self) -> Result<(), DomainError> {
         if self.roles.contains(&UserRole::Administrator) {
             Ok(())
@@ -22,6 +33,16 @@ impl AuthenticatedUser {
             Ok(())
         } else {
             self.must_be_admin()
+        }
+    }
+}
+
+impl From<User> for AuthenticatedUser {
+    fn from(value: User) -> Self {
+        AuthenticatedUser {
+            id: value.id,
+            username: value.username.as_str().into(),
+            roles: vec![value.role],
         }
     }
 }

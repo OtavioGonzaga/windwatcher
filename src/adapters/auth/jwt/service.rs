@@ -68,10 +68,10 @@ impl TokenService for JwtTokenService {
         )
         .map_err(|_| AuthError::InvalidToken)?;
 
-        Ok(AuthenticatedUser {
-            id: data.claims.sub.parse().unwrap(),
-            username: data.claims.username,
-            roles: data.claims.roles,
-        })
+        Ok(AuthenticatedUser::new(
+            data.claims.sub.parse().unwrap(),
+            data.claims.username,
+            data.claims.roles,
+        ))
     }
 }

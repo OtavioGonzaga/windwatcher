@@ -24,9 +24,9 @@ where
     pub async fn execute(
         &self,
         id: &Uuid,
-        authenticated_user: &AuthenticatedUser,
+        actor: &AuthenticatedUser,
     ) -> Result<(), DeleteUserError> {
-        authenticated_user.must_be_admin_or_owner(&id)?;
+        actor.must_be_admin_or_owner(&id)?;
 
         let user: User = self
             .repo

@@ -2,7 +2,7 @@ use crate::domain::user::entity::UserRole as DomainUserRole;
 use sea_orm::{DeriveActiveEnum, EnumIter};
 
 #[derive(EnumIter, DeriveActiveEnum, Clone, Debug, PartialEq, Eq, Default)]
-#[sea_orm(rs_type = "String", db_type = "Enum", enum_name = "user_roles")]
+#[sea_orm(rs_type = "String", db_type = "Enum", enum_name = "user_role")]
 pub enum UserRole {
     #[sea_orm(string_value = "administrator")]
     Administrator,

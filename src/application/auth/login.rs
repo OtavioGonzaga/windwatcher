@@ -16,9 +16,9 @@ where
     H: PasswordHasher,
     T: TokenService,
 {
-    users: U,
+    user_repository: U,
     hasher: H,
-    tokens: T,
+    token_service: T,
 }
 
 impl<U, H, T> Login<U, H, T>
@@ -30,8 +30,8 @@ where
     pub fn new(users: U, hasher: H, tokens: T) -> Self {
         Self {
             hasher,
-            tokens,
-            users,
+            token_service: tokens,
+            user_repository: users,
         }
     }
 
@@ -41,10 +41,14 @@ where
         password: PasswordPlain,
     ) -> Result<Token, LoginError> {
         let user: User = self
-            .users
+            .user_repository
             .find_by_username(&username)
             .await?
             .ok_or(LoginError::InvalidCredentials)?;
+
+        if !user.is_active() {
+            return Err(LoginError::UserInactive);
+        }
 
         let plain: &str = password.as_str();
         let hash: &str = user.password_hash.as_str();
@@ -55,22 +59,20 @@ where
             return Err(LoginError::InvalidCredentials);
         }
 
-        let auth_user: AuthenticatedUser = AuthenticatedUser {
-            id: user.id,
-            username: user.username.as_str().into(),
-            roles: vec![user.role],
-        };
+        let auth_user: AuthenticatedUser = AuthenticatedUser::from(user);
 
-        Ok(self.tokens.generate(&auth_user))
+        Ok(self.token_service.generate(&auth_user))
     }
 }
 
 pub enum LoginError {
     InvalidCredentials,
+    RepositoryError,
+    UserInactive,
 }
 
 impl From<RepositoryError> for LoginError {
     fn from(_: RepositoryError) -> Self {
-        LoginError::InvalidCredentials
+        LoginError::RepositoryError
     }
 }

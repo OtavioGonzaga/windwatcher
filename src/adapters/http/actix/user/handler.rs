@@ -34,12 +34,11 @@ use uuid::Uuid;
 pub async fn find_by_id(
     service: web::Data<FindUserService<PostgresUserRepository>>,
     params: web::Path<String>,
-    authenticated_user: AuthenticatedUser,
 ) -> Result<HttpResponse, ApiError> {
     let id: Uuid = Uuid::parse_str(&params)
         .map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "Invalid UUID format"))?;
 
-    let user: User = service.find_by_id(&id, &authenticated_user).await?;
+    let user: User = service.find_by_id(&id).await?;
 
     Ok(HttpResponse::Ok().json(UserResponseDto {
         id: user.id.to_string(),
@@ -63,7 +62,7 @@ pub async fn find_by_id(
 pub async fn create_user(
     service: web::Data<CreateUserService<PostgresUserRepository, Argon2Hasher>>,
     payload: web::Json<CreateUserDto>,
-    authenticated_user: AuthenticatedUser,
+    actor: AuthenticatedUser,
 ) -> Result<HttpResponse, ApiError> {
     let cmd: CreateUserInput = CreateUserInput {
         username: payload.username.clone(),
@@ -71,7 +70,7 @@ pub async fn create_user(
         password: payload.password.clone(),
     };
 
-    let user: CreateUserOutput = service.execute(cmd, &authenticated_user).await?;
+    let user: CreateUserOutput = service.execute(cmd, &actor).await?;
 
     Ok(HttpResponse::Ok().json(UserResponseDto {
         id: user.id.to_string(),
@@ -86,6 +85,7 @@ pub async fn create_user(
     params(
         ("id" = String, Path, description = "User UUID")
     ),
+    request_body = UpdateUserDto,
     tag = "Users",
     responses(
         (status = 200, description = "User updated successfully"),
@@ -97,7 +97,7 @@ pub async fn update_user(
     service: web::Data<UpdateUserService<PostgresUserRepository, Argon2Hasher>>,
     params: web::Path<String>,
     payload: web::Json<UpdateUserDto>,
-    authenticated_user: AuthenticatedUser,
+    actor: AuthenticatedUser,
 ) -> Result<HttpResponse, ApiError> {
     let id: Uuid = Uuid::parse_str(&params)
         .map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "Invalid UUID format"))?;
@@ -108,9 +108,7 @@ pub async fn update_user(
         password: payload.password.clone(),
     };
 
-    let updated_user: UpdateUserOutput = service
-        .execute(id, update_user, &authenticated_user)
-        .await?;
+    let updated_user: UpdateUserOutput = service.execute(id, update_user, &actor).await?;
 
     Ok(HttpResponse::Ok().json(UserResponseDto {
         id: updated_user.id.to_string(),
@@ -136,12 +134,12 @@ pub async fn update_user(
 pub async fn delete_user(
     service: web::Data<DeleteUserService<PostgresUserRepository>>,
     params: web::Path<String>,
-    authenticated_user: AuthenticatedUser,
+    actor: AuthenticatedUser,
 ) -> Result<HttpResponse, ApiError> {
     let id: Uuid = Uuid::parse_str(&params)
         .map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "Invalid UUID format"))?;
 
-    service.execute(&id, &authenticated_user).await?;
+    service.execute(&id, &actor).await?;
 
     Ok(HttpResponse::Ok().finish())
 }
@@ -159,10 +157,6 @@ impl From<UserError> for ApiError {
 impl From<FindUserError> for ApiError {
     fn from(value: FindUserError) -> Self {
         match value {
-            FindUserError::Forbidden => ApiError::new(
-                StatusCode::FORBIDDEN,
-                "You don't have access to perform this action",
-            ),
             FindUserError::NotFound => ApiError::new(StatusCode::NOT_FOUND, "User not found"),
             FindUserError::RepositoryError => ApiError::internal_server_error(),
         }

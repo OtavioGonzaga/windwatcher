@@ -35,9 +35,9 @@ where
         &self,
         id: Uuid,
         input: UpdateUserInput,
-        authenticated_user: &AuthenticatedUser,
+        actor: &AuthenticatedUser,
     ) -> Result<UpdateUserOutput, UpdateUserError> {
-        authenticated_user.must_be_admin_or_owner(&id)?;
+        actor.must_be_admin_or_owner(&id)?;
 
         let user: User = self
             .repo
