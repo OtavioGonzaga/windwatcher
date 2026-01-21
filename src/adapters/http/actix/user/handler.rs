@@ -4,18 +4,19 @@ use crate::{
         hash::argon2::Argon2Hasher, http::actix::api_error::ApiError,
         persistence::postgres::user::repository::PostgresUserRepository,
     },
-    application::user::{
-        create_user::{CreateUserError, CreateUserInput, CreateUserOutput, CreateUserService},
-        delete_user::{DeleteUserError, DeleteUserService},
-        find_user::{FindUserError, FindUserService},
-        update_user::{UpdateUserError, UpdateUserInput, UpdateUserOutput, UpdateUserService},
-    },
-    domain::{
+    application::{
         auth::authenticated_user::AuthenticatedUser,
-        user::{entity::User, error::UserError},
+        user::{
+            create_user::{CreateUserError, CreateUserInput, CreateUserOutput, CreateUserService},
+            delete_user::{DeleteUserError, DeleteUserService},
+            find_user::{FindUserError, FindUserService},
+            update_user::{UpdateUserError, UpdateUserInput, UpdateUserOutput, UpdateUserService},
+        },
     },
+    domain::user::{entity::User, error::UserError},
 };
 use actix_web::{HttpResponse, http::StatusCode, web};
+use log::info;
 use uuid::Uuid;
 
 #[utoipa::path(

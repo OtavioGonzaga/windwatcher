@@ -1,14 +1,16 @@
-use crate::domain::{
-    auth::authenticated_user::AuthenticatedUser,
-    errors::{domain::DomainError, repository::RepositoryError},
-    user::{
-        entity::{User, UserRole, UserStatus},
-        error::UserError,
-        password_hasher::PasswordHasher,
-        repository::UserRepository,
-        value_objects::{
-            name::Name, password_hash::PasswordHash, password_plain::PasswordPlain,
-            username::Username,
+use crate::{
+    application::auth::authenticated_user::AuthenticatedUser,
+    domain::{
+        errors::{domain::DomainError, repository::RepositoryError},
+        user::{
+            entity::{User, UserRole, UserStatus},
+            error::UserError,
+            password_hasher::PasswordHasher,
+            repository::UserRepository,
+            value_objects::{
+                name::Name, password_hash::PasswordHash, password_plain::PasswordPlain,
+                username::Username,
+            },
         },
     },
 };
@@ -20,7 +22,7 @@ where
     R: UserRepository,
     H: PasswordHasher,
 {
-    repo: R,
+    user_repository: R,
     hasher: H,
 }
 
@@ -29,8 +31,11 @@ where
     R: UserRepository,
     H: PasswordHasher,
 {
-    pub fn new(repo: R, hasher: H) -> Self {
-        Self { repo, hasher }
+    pub fn new(user_repository: R, hasher: H) -> Self {
+        Self {
+            user_repository,
+            hasher,
+        }
     }
 
     pub async fn execute(
@@ -46,7 +51,12 @@ where
         let role: Option<UserRole> = None;
         let status: Option<UserStatus> = None;
 
-        if self.repo.find_by_username(&username).await?.is_some() {
+        if self
+            .user_repository
+            .find_by_username(&username)
+            .await?
+            .is_some()
+        {
             return Err(CreateUserError::AlreadyExists);
         }
 
@@ -55,7 +65,7 @@ where
 
         let user: User = User::new(Uuid::now_v7(), name, username, password_hash, role, status);
 
-        let user: User = self.repo.create(user).await?;
+        let user: User = self.user_repository.create(user).await?;
 
         Ok(CreateUserOutput {
             id: user.id,

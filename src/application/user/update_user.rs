@@ -1,5 +1,4 @@
-use crate::domain::{
-    auth::authenticated_user::AuthenticatedUser,
+use crate::{application::auth::authenticated_user::AuthenticatedUser, domain::{
     errors::{domain::DomainError, repository::RepositoryError},
     user::{
         entity::User,
@@ -9,7 +8,7 @@ use crate::domain::{
         repository::UserRepository,
         value_objects::{password_hash::PasswordHash, username::Username},
     },
-};
+}};
 use uuid::Uuid;
 
 #[derive(Clone)]
@@ -18,7 +17,7 @@ where
     R: UserRepository,
     H: PasswordHasher,
 {
-    repo: R,
+    user_repository: R,
     hasher: H,
 }
 
@@ -27,8 +26,8 @@ where
     R: UserRepository,
     H: PasswordHasher,
 {
-    pub fn new(repo: R, hasher: H) -> Self {
-        Self { repo, hasher }
+    pub fn new(user_repository: R, hasher: H) -> Self {
+        Self { user_repository, hasher }
     }
 
     pub async fn execute(
@@ -40,7 +39,7 @@ where
         actor.must_be_admin_or_owner(&id)?;
 
         let user: User = self
-            .repo
+            .user_repository
             .find_by_id(&id)
             .await?
             .ok_or(UpdateUserError::NotFound)?;
@@ -50,7 +49,7 @@ where
                 let username: Username = Username::new(raw)?;
 
                 if username != user.username {
-                    if self.repo.find_by_username(&username).await?.is_some() {
+                    if self.user_repository.find_by_username(&username).await?.is_some() {
                         return Err(UpdateUserError::AlreadyExists);
                     }
                 }
@@ -69,7 +68,7 @@ where
 
         let patch = UserPatch::new(input.name, username, password_hash);
 
-        let updated_user = self.repo.update(&id, patch).await?;
+        let updated_user = self.user_repository.update(&id, patch).await?;
 
         Ok(UpdateUserOutput::from(updated_user))
     }

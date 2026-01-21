@@ -1,11 +1,12 @@
 use crate::{
     adapters::{
-        auth::jwt::service::JwtTokenService,
+        auth::local::LocalAuthenticator,
         hash::argon2::Argon2Hasher,
         http::actix::{
             ApiDoc, auth::routes::routes as auth_routes, user::routes::routes as user_routes,
         },
         persistence::postgres::user::repository::PostgresUserRepository,
+        token::jwt::JwtService,
     },
     application::{
         auth::login::Login,
@@ -28,21 +29,22 @@ async fn hello() -> impl Responder {
 }
 
 pub async fn build_app(http_config: HttpConfig, db: DatabaseConnection) -> Result<(), Error> {
-    let user_repo: PostgresUserRepository = PostgresUserRepository::new(db);
+    let user_repository: PostgresUserRepository = PostgresUserRepository::new(db);
     let hasher: Argon2Hasher = Argon2Hasher;
-    let token_service: JwtTokenService =
-        JwtTokenService::new(http_config.jwt_secret.clone(), 30 * 60);
+    let token_service: JwtService = JwtService::new(http_config.jwt_secret.clone(), 30 * 60);
+    let authenticator: LocalAuthenticator<PostgresUserRepository, Argon2Hasher> =
+        LocalAuthenticator::new(user_repository.clone(), hasher.clone());
 
     let find_user_service: FindUserService<PostgresUserRepository> =
-        FindUserService::new(user_repo.clone());
+        FindUserService::new(user_repository.clone());
     let create_user_service: CreateUserService<PostgresUserRepository, Argon2Hasher> =
-        CreateUserService::new(user_repo.clone(), hasher.clone());
+        CreateUserService::new(user_repository.clone(), hasher.clone());
     let update_user_service: UpdateUserService<PostgresUserRepository, Argon2Hasher> =
-        UpdateUserService::new(user_repo.clone(), hasher.clone());
+        UpdateUserService::new(user_repository.clone(), hasher.clone());
     let delete_user_service: DeleteUserService<PostgresUserRepository> =
-        DeleteUserService::new(user_repo.clone());
-    let login: Login<PostgresUserRepository, Argon2Hasher, JwtTokenService> =
-        Login::new(user_repo.clone(), hasher.clone(), token_service.clone());
+        DeleteUserService::new(user_repository.clone());
+    let login: Login<LocalAuthenticator<PostgresUserRepository, Argon2Hasher>, JwtService> =
+        Login::new(authenticator.clone(), token_service.clone());
 
     let addrs: (String, u16) = (http_config.host.clone(), http_config.port);
 

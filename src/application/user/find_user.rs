@@ -9,19 +9,19 @@ pub struct FindUserService<R>
 where
     R: UserRepository,
 {
-    repo: R,
+    user_repository: R,
 }
 
 impl<R> FindUserService<R>
 where
     R: UserRepository,
 {
-    pub fn new(repo: R) -> Self {
-        Self { repo }
+    pub fn new(user_repository: R) -> Self {
+        Self { user_repository }
     }
 
     pub async fn find_by_id(&self, id: &Uuid) -> Result<User, FindUserError> {
-        match self.repo.find_by_id(id).await? {
+        match self.user_repository.find_by_id(id).await? {
             Some(user) => Ok(user),
             None => Err(FindUserError::NotFound),
         }

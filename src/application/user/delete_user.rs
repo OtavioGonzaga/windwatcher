@@ -1,8 +1,7 @@
-use crate::domain::{
-    auth::authenticated_user::AuthenticatedUser,
+use crate::{application::auth::authenticated_user::AuthenticatedUser, domain::{
     errors::{domain::DomainError, repository::RepositoryError},
     user::{entity::User, repository::UserRepository},
-};
+}};
 use uuid::Uuid;
 
 #[derive(Clone)]
@@ -10,15 +9,15 @@ pub struct DeleteUserService<R>
 where
     R: UserRepository,
 {
-    repo: R,
+    user_repository: R,
 }
 
 impl<R> DeleteUserService<R>
 where
     R: UserRepository,
 {
-    pub fn new(repo: R) -> Self {
-        Self { repo }
+    pub fn new(user_repository: R) -> Self {
+        Self { user_repository }
     }
 
     pub async fn execute(
@@ -29,12 +28,12 @@ where
         actor.must_be_admin_or_owner(&id)?;
 
         let user: User = self
-            .repo
+            .user_repository
             .find_by_id(id)
             .await?
             .ok_or(DeleteUserError::NotFound)?;
 
-        self.repo.delete(&user.id).await?;
+        self.user_repository.delete(&user.id).await?;
 
         Ok(())
     }
