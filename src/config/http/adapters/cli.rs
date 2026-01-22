@@ -17,7 +17,19 @@ impl HttpConfigProvider for CliHttpConfig {
 
         let host: String = args.http_host.ok_or(ConfigError::Missing("http-host"))?;
         let port: u16 = args.http_port.ok_or(ConfigError::Missing("http-port"))?;
-        let jwt_secret: String = args.jwt_secret.ok_or(ConfigError::Missing("jwt-secret"))?;
+        let token_secret: String = args
+            .token_secret
+            .ok_or(ConfigError::Missing("token-secret"))?;
+        let token_ttl: u64 = args
+            .token_ttl
+            .ok_or(ConfigError::Missing("token-ttl"))?
+            .parse()
+            .map_err(|_| ConfigError::Invalid("token-ttl"))?;
+        let refresh_token_ttl: u64 = args
+            .refresh_token_ttl
+            .ok_or(ConfigError::Missing("refresh-token-ttl"))?
+            .parse()
+            .map_err(|_| ConfigError::Invalid("refresh-token-ttl"))?;
 
         if 1024 > port {
             return Err(ConfigError::Invalid("http-port"));
@@ -30,7 +42,9 @@ impl HttpConfigProvider for CliHttpConfig {
         Ok(HttpConfig {
             host,
             port,
-            jwt_secret,
+            token_secret,
+            token_ttl,
+            refresh_token_ttl,
         })
     }
 }

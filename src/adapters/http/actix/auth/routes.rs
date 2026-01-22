@@ -1,6 +1,6 @@
-use super::handler::login;
+use super::handler::token;
 use actix_web::web;
 
 pub fn routes(cfg: &mut web::ServiceConfig) {
-    cfg.service(web::scope("/auth").route("/login", web::post().to(login)));
+    cfg.service(web::scope("/oauth").route("/token", web::post().to(token)));
 }

@@ -4,7 +4,9 @@ use crate::config::ConfigError;
 pub struct HttpConfig {
     pub host: String,
     pub port: u16,
-    pub jwt_secret: String,
+    pub token_secret: String,
+    pub token_ttl: u64,
+    pub refresh_token_ttl: u64,
 }
 
 pub trait HttpConfigProvider {

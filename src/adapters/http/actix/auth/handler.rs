@@ -1,4 +1,4 @@
-use super::dto::LoginRequest;
+use super::dto::TokenRequest;
 use crate::{
     adapters::{
         auth::local::LocalAuthenticator, hash::argon2::Argon2Hasher,
@@ -11,7 +11,7 @@ use crate::{
             error::AuthenticationError,
             login::{Login, LoginError},
         },
-        security::token::IssuedToken,
+        security::token::{IssuedToken, RefreshToken},
     },
     domain::user::value_objects::{password_plain::PasswordPlain, username::Username},
 };
@@ -20,31 +20,51 @@ use serde_json::json;
 
 #[utoipa::path(
     post,
-    path = "/login",
+    path = "/token",
     tag = "Auth",
-	request_body = LoginRequest,
+	request_body = TokenRequest,
     responses(
         (status = 200, description = "User autheticated"),
         (status = 400, description = "Invalid data provided"),
         (status = 401, description = "Invalid credentials")
     )
 )]
-pub async fn login(
-    body: web::Form<LoginRequest>,
-    login: web::Data<Login<LocalAuthenticator<PostgresUserRepository, Argon2Hasher>, JwtService>>,
+pub async fn token(
+    body: web::Form<TokenRequest>,
+    login: web::Data<Login<LocalAuthenticator<PostgresUserRepository, Argon2Hasher, JwtService>, JwtService>>,
 ) -> Result<HttpResponse, ApiError> {
-    if let Some(grant_type) = &body.grant_type {
-        if grant_type != "password" {
-            return Err(ApiError::new(
-                StatusCode::BAD_REQUEST,
-                "Unsupported grant type",
-            ));
-        }
-    }
+    let credentials: Credentials =
+        match body.grant_type.as_str() {
+            "password" => {
+                let username: &String = body.username.as_ref().ok_or_else(|| {
+                    ApiError::new(StatusCode::BAD_REQUEST, "username is required")
+                })?;
 
-    let username: Username = Username::new(body.username.clone())?;
-    let password: PasswordPlain = PasswordPlain::new(body.password.clone())?;
-    let credentials: Credentials = Credentials::UsernamePassword { username, password };
+                let password: &String = body.password.as_ref().ok_or_else(|| {
+                    ApiError::new(StatusCode::BAD_REQUEST, "password is required")
+                })?;
+
+                Credentials::UsernamePassword {
+                    username: Username::new(username.clone())?,
+                    password: PasswordPlain::new(password.clone())?,
+                }
+            }
+
+            "refresh_token" => {
+                let refresh_token: &String = body.refresh_token.as_ref().ok_or_else(|| {
+                    ApiError::new(StatusCode::BAD_REQUEST, "refresh_token is required")
+                })?;
+
+                Credentials::RefreshToken(RefreshToken::new(refresh_token.clone()))
+            }
+
+            _ => {
+                return Err(ApiError::new(
+                    StatusCode::BAD_REQUEST,
+                    "Unsupported grant type",
+                ));
+            }
+        };
 
     let IssuedToken {
         expires_in,
@@ -52,17 +72,11 @@ pub async fn login(
         refresh_token,
     } = login.execute(credentials).await?;
 
-    let refresh_token: Option<&str> = if let Some(refresh_token) = &refresh_token {
-        Some(refresh_token.as_str())
-    } else {
-        None
-    };
-
     Ok(HttpResponse::Ok().json(json!({
         "access_token": token.as_str(),
         "token_type": "Bearer",
         "expires_in": expires_in,
-        "refresh_token": refresh_token
+        "refresh_token": refresh_token.as_ref().map(|t| t.as_str())
     })))
 }
 
@@ -70,7 +84,7 @@ impl From<LoginError> for ApiError {
     fn from(value: LoginError) -> Self {
         match value {
             LoginError::Authentication(error) => match error {
-                AuthenticationError::UnsupportedCredentials => {
+                AuthenticationError::_UnsupportedCredentials => {
                     ApiError::new(StatusCode::BAD_REQUEST, "Unsupported credentials type")
                 }
                 AuthenticationError::UserInactive => {
@@ -84,7 +98,7 @@ impl From<LoginError> for ApiError {
                 }
                 AuthenticationError::ProviderUnavailable => ApiError::internal_server_error(),
             },
-            LoginError::Token(_) => ApiError::internal_server_error(),
+            LoginError::Token(_token_error) => ApiError::internal_server_error(),
         }
     }
 }

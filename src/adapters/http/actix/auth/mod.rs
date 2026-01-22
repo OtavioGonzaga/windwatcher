@@ -9,15 +9,15 @@ use utoipa::OpenApi;
 #[derive(OpenApi)]
 #[openapi(
     paths(
-        handler::login,
+        handler::token,
     ),
     components(
         schemas(
-            dto::LoginRequest,
+            dto::TokenRequest,
         )
     ),
     tags(
-        (name = "Users", description = "User management endpoints")
+        (name = "Auth", description = "Auth endpoints")
     )
 )]
 pub struct AuthApiDoc;

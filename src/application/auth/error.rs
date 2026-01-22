@@ -4,5 +4,5 @@ pub enum AuthenticationError {
     UserInactive,
     UserNotFound,
     ProviderUnavailable,
-    UnsupportedCredentials,
+    _UnsupportedCredentials,
 }

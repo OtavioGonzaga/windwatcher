@@ -18,8 +18,16 @@ impl HttpConfigProvider for EnvHttpConfig {
         let port: u16 = port
             .parse()
             .map_err(|_| ConfigError::Invalid("HTTP_PORT"))?;
-        let jwt_secret: String =
-            std::env::var("JWT_SECRET").map_err(|_| ConfigError::Missing("JWT_SECRET"))?;
+        let token_secret: String =
+            std::env::var("TOKEN_SECRET").map_err(|_| ConfigError::Missing("TOKEN_SECRET"))?;
+        let token_ttl: u64 = std::env::var("TOKEN_TTL")
+            .map_err(|_| ConfigError::Missing("TOKEN_TTL"))?
+            .parse()
+            .map_err(|_| ConfigError::Invalid("REFRESH_TOKEN_TTL"))?;
+        let refresh_token_ttl: u64 = std::env::var("REFRESH_TOKEN_TTL")
+            .map_err(|_| ConfigError::Missing("REFRESH_TOKEN_TTL"))?
+            .parse()
+            .map_err(|_| ConfigError::Invalid("REFRESH_TOKEN_TTL"))?;
 
         if !is_valid_host(&host) {
             return Err(ConfigError::Invalid("HTTP_HOST"));
@@ -28,7 +36,9 @@ impl HttpConfigProvider for EnvHttpConfig {
         Ok(HttpConfig {
             host,
             port,
-            jwt_secret,
+            token_secret,
+            token_ttl,
+            refresh_token_ttl,
         })
     }
 }

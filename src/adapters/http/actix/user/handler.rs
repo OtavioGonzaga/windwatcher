@@ -16,7 +16,6 @@ use crate::{
     domain::user::{entity::User, error::UserError},
 };
 use actix_web::{HttpResponse, http::StatusCode, web};
-use log::info;
 use uuid::Uuid;
 
 #[utoipa::path(

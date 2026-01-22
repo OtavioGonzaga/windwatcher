@@ -11,7 +11,15 @@ pub struct HttpCli {
     #[arg(long)]
     pub http_port: Option<u16>,
 
-    /// JWT secret
+    /// Token secret
     #[arg(long)]
-    pub jwt_secret: Option<String>,
+    pub token_secret: Option<String>,
+
+    /// Token time to live in seconds
+    #[arg(long)]
+    pub token_ttl: Option<String>,
+
+    /// Refresh token time to live in seconds
+    #[arg(long)]
+    pub refresh_token_ttl: Option<String>,
 }

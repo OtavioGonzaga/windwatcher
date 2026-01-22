@@ -20,7 +20,7 @@ impl Modify for JwtSecurityAddon {
         components.add_security_scheme(
             "oauth2_password",
             SecurityScheme::OAuth2(OAuth2::new([Flow::Password(Password::new(
-                "/auth/login",
+                "/oauth/token",
                 Scopes::new(),
             ))])),
         );
@@ -31,7 +31,10 @@ impl Modify for JwtSecurityAddon {
 
 #[derive(OpenApi)]
 #[openapi(
-    nest((path = "/users", api = user::UserApiDoc),(path = "/auth", api = auth::AuthApiDoc)),
+    nest(
+        (path = "/users", api = user::UserApiDoc),
+        (path = "/oauth", api = auth::AuthApiDoc)
+    ),
     modifiers(&JwtSecurityAddon),
     security(
         ("oauth2_password" = [])

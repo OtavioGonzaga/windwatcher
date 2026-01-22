@@ -63,12 +63,16 @@ fn merge_database(
 fn merge_http(configs: Vec<Result<HttpConfig, ConfigError>>) -> Result<HttpConfig, ConfigError> {
     let port: u16;
     let host: String;
-    let jwt_secret: String;
+    let token_secret: String;
+    let token_ttl: u64;
+    let refresh_token_ttl: u64;
 
     if let Some(Ok(cfg)) = configs.iter().find(|r| r.is_ok()) {
         port = cfg.port;
         host = cfg.host.clone();
-        jwt_secret = cfg.jwt_secret.clone();
+        token_secret = cfg.token_secret.clone();
+        token_ttl = cfg.token_ttl.clone();
+        refresh_token_ttl = cfg.refresh_token_ttl.clone();
     } else {
         return Err(ConfigError::Missing("HTTP configuration"));
     }
@@ -76,7 +80,9 @@ fn merge_http(configs: Vec<Result<HttpConfig, ConfigError>>) -> Result<HttpConfi
     Ok(HttpConfig {
         host,
         port,
-        jwt_secret,
+        token_secret,
+        token_ttl,
+        refresh_token_ttl,
     })
 }
 
