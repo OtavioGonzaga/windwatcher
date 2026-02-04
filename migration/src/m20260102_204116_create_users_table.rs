@@ -16,6 +16,15 @@ impl MigrationTrait for Migration {
             .await?;
 
         manager
+            .create_type(
+                Type::create()
+                    .as_enum("user_status")
+                    .values(["active", "inactive", "banned"])
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
             .create_table(
                 Table::create()
                     .table(Users::Table)
@@ -44,6 +53,12 @@ impl MigrationTrait for Migration {
                             .string_len(128)
                             .not_null()
                             .unique_key(),
+                    )
+                    .col(
+                        ColumnDef::new(Users::Status)
+                            .extra("user_status")
+                            .default("active")
+                            .not_null(),
                     )
                     .col(
                         ColumnDef::new(Users::CreatedAt)
@@ -89,6 +104,7 @@ enum Users {
     Username,
     PasswordHash,
     Role,
+    Status,
     CreatedAt,
     UpdatedAt,
 }
