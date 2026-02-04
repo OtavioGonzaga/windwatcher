@@ -1,7 +1,10 @@
-use crate::{application::auth::authenticated_user::AuthenticatedUser, domain::{
-    errors::{domain::DomainError, repository::RepositoryError},
-    user::{entity::User, repository::UserRepository},
-}};
+use crate::{
+    application::auth::authenticated_user::AuthenticatedUser,
+    domain::{
+        errors::{domain::DomainError, repository::RepositoryError},
+        user::{entity::User, repository::UserRepository},
+    },
+};
 use uuid::Uuid;
 
 #[derive(Clone)]

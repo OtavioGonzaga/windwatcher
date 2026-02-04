@@ -81,9 +81,12 @@ where
                         ApiError::new(StatusCode::UNAUTHORIZED, "Invalid token"),
                     ))),
                 },
-                None => Ok(req.into_response(actix_web::HttpResponse::from_error(
-                        ApiError::new(StatusCode::UNAUTHORIZED, "Missing token"),
+                None => Ok(
+                    req.into_response(actix_web::HttpResponse::from_error(ApiError::new(
+                        StatusCode::UNAUTHORIZED,
+                        "Missing token",
                     ))),
+                ),
             }
         })
     }

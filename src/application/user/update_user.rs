@@ -1,14 +1,17 @@
-use crate::{application::auth::authenticated_user::AuthenticatedUser, domain::{
-    errors::{domain::DomainError, repository::RepositoryError},
-    user::{
-        entity::User,
-        error::UserError,
-        password_hasher::PasswordHasher,
-        patch::UserPatch,
-        repository::UserRepository,
-        value_objects::{password_hash::PasswordHash, username::Username},
+use crate::{
+    application::auth::authenticated_user::AuthenticatedUser,
+    domain::{
+        errors::{domain::DomainError, repository::RepositoryError},
+        user::{
+            entity::User,
+            error::UserError,
+            password_hasher::PasswordHasher,
+            patch::UserPatch,
+            repository::UserRepository,
+            value_objects::{password_hash::PasswordHash, username::Username},
+        },
     },
-}};
+};
 use uuid::Uuid;
 
 #[derive(Clone)]
@@ -27,7 +30,10 @@ where
     H: PasswordHasher,
 {
     pub fn new(user_repository: R, hasher: H) -> Self {
-        Self { user_repository, hasher }
+        Self {
+            user_repository,
+            hasher,
+        }
     }
 
     pub async fn execute(
@@ -49,7 +55,12 @@ where
                 let username: Username = Username::new(raw)?;
 
                 if username != user.username {
-                    if self.user_repository.find_by_username(&username).await?.is_some() {
+                    if self
+                        .user_repository
+                        .find_by_username(&username)
+                        .await?
+                        .is_some()
+                    {
                         return Err(UpdateUserError::AlreadyExists);
                     }
                 }

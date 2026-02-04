@@ -37,7 +37,11 @@ pub async fn build_app(http_config: HttpConfig, db: DatabaseConnection) -> Resul
         http_config.refresh_token_ttl.clone() * 60,
     );
     let authenticator: LocalAuthenticator<PostgresUserRepository, Argon2Hasher, JwtService> =
-        LocalAuthenticator::new(user_repository.clone(), hasher.clone(), token_service.clone());
+        LocalAuthenticator::new(
+            user_repository.clone(),
+            hasher.clone(),
+            token_service.clone(),
+        );
 
     let find_user_service: FindUserService<PostgresUserRepository> =
         FindUserService::new(user_repository.clone());
@@ -47,8 +51,10 @@ pub async fn build_app(http_config: HttpConfig, db: DatabaseConnection) -> Resul
         UpdateUserService::new(user_repository.clone(), hasher.clone());
     let delete_user_service: DeleteUserService<PostgresUserRepository> =
         DeleteUserService::new(user_repository.clone());
-    let login: Login<LocalAuthenticator<PostgresUserRepository, Argon2Hasher, JwtService>, JwtService> =
-        Login::new(authenticator.clone(), token_service.clone());
+    let login: Login<
+        LocalAuthenticator<PostgresUserRepository, Argon2Hasher, JwtService>,
+        JwtService,
+    > = Login::new(authenticator.clone(), token_service.clone());
 
     let addrs: (String, u16) = (http_config.host.clone(), http_config.port);
 

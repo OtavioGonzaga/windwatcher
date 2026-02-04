@@ -1,8 +1,8 @@
 pub mod dto;
 pub mod extractor;
 pub mod handler;
-pub mod routes;
 pub mod middleware;
+pub mod routes;
 
 use utoipa::OpenApi;
 

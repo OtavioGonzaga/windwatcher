@@ -13,7 +13,8 @@ impl DomainPasswordHasher for Argon2Hasher {
 
         let salt: SaltString = SaltString::generate(&mut OsRng);
 
-        let password_hash: PasswordHash<'_> = argon2.hash_password(plain.as_bytes(), &salt).unwrap();
+        let password_hash: PasswordHash<'_> =
+            argon2.hash_password(plain.as_bytes(), &salt).unwrap();
 
         password_hash.to_string()
     }

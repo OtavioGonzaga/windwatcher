@@ -15,4 +15,3 @@ pub struct TokenRequest {
     /// Refresh token (refresh_token grant)
     pub refresh_token: Option<String>,
 }
-

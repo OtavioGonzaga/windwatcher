@@ -31,7 +31,9 @@ use serde_json::json;
 )]
 pub async fn token(
     body: web::Form<TokenRequest>,
-    login: web::Data<Login<LocalAuthenticator<PostgresUserRepository, Argon2Hasher, JwtService>, JwtService>>,
+    login: web::Data<
+        Login<LocalAuthenticator<PostgresUserRepository, Argon2Hasher, JwtService>, JwtService>,
+    >,
 ) -> Result<HttpResponse, ApiError> {
     let credentials: Credentials =
         match body.grant_type.as_str() {
