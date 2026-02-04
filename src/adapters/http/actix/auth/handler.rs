@@ -1,9 +1,11 @@
 use super::dto::TokenRequest;
 use crate::{
     adapters::{
-        auth::local::LocalAuthenticator, hash::argon2::Argon2Hasher,
-        http::actix::api_error::ApiError,
-        persistence::postgres::user::repository::PostgresUserRepository, token::jwt::JwtService,
+        auth::local::LocalAuthenticator,
+        hash::argon2::Argon2Hasher,
+        http::actix::{api_error::ApiError, auth::dto::GrantType},
+        persistence::postgres::user::repository::PostgresUserRepository,
+        token::jwt::JwtService,
     },
     application::{
         auth::{
@@ -22,7 +24,10 @@ use serde_json::json;
     post,
     path = "/token",
     tag = "Auth",
-	request_body = TokenRequest,
+    request_body(
+        content = TokenRequest,
+        content_type = "application/x-www-form-urlencoded"
+    ),
     responses(
         (status = 200, description = "User autheticated"),
         (status = 400, description = "Invalid data provided"),
@@ -36,8 +41,8 @@ pub async fn token(
     >,
 ) -> Result<HttpResponse, ApiError> {
     let credentials: Credentials =
-        match body.grant_type.as_str() {
-            "password" => {
+        match body.grant_type {
+            GrantType::Password => {
                 let username: &String = body.username.as_ref().ok_or_else(|| {
                     ApiError::new(StatusCode::BAD_REQUEST, "username is required")
                 })?;
@@ -52,7 +57,7 @@ pub async fn token(
                 }
             }
 
-            "refresh_token" => {
+            GrantType::RefreshToken => {
                 let refresh_token: &String = body.refresh_token.as_ref().ok_or_else(|| {
                     ApiError::new(StatusCode::BAD_REQUEST, "refresh_token is required")
                 })?;
@@ -60,7 +65,7 @@ pub async fn token(
                 Credentials::RefreshToken(RefreshToken::new(refresh_token.clone()))
             }
 
-            _ => {
+            GrantType::Unsupported => {
                 return Err(ApiError::new(
                     StatusCode::BAD_REQUEST,
                     "Unsupported grant type",

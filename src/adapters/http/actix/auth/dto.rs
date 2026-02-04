@@ -2,9 +2,19 @@ use serde::Deserialize;
 use utoipa::ToSchema;
 
 #[derive(Deserialize, ToSchema)]
+pub enum GrantType  {
+    #[serde(rename = "password")]
+    Password,
+    #[serde(rename = "refresh_token")]
+    RefreshToken,
+    #[serde(other)]
+    Unsupported,
+}
+
+#[derive(Deserialize, ToSchema)]
 pub struct TokenRequest {
     /// OAuth2 grant type
-    pub grant_type: String,
+    pub grant_type: GrantType,
 
     /// Username (password grant)
     pub username: Option<String>,
