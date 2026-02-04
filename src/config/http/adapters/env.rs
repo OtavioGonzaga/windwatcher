@@ -9,7 +9,7 @@ pub struct EnvHttpConfig;
 
 impl HttpConfigProvider for EnvHttpConfig {
     fn load() -> Result<HttpConfig, ConfigError> {
-        dotenvy::dotenv().unwrap();
+        dotenvy::dotenv().ok();
 
         let host: String =
             std::env::var("HTTP_HOST").map_err(|_| ConfigError::Missing("HTTP_HOST"))?;

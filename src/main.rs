@@ -8,12 +8,11 @@ use crate::{
     adapters::{http::actix::server::build_app, persistence::postgres::connection::connect_to_db},
     config::Config,
 };
-use actix_web::main;
 use log::info;
 use sea_orm::DatabaseConnection;
 use std::io::Error;
 
-#[main]
+#[actix_web::main]
 async fn main() -> Result<(), Error> {
     let Config {
         http: http_config,

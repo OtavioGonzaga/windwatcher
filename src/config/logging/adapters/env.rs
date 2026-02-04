@@ -7,7 +7,7 @@ pub struct EnvLoggingConfig;
 
 impl LoggingConfigProvider for EnvLoggingConfig {
     fn load() -> Result<LoggingConfig, ConfigError> {
-        dotenvy::dotenv().unwrap();
+        dotenvy::dotenv().ok();
 
         let level: String =
             std::env::var("LOG_LEVEL").map_err(|_| ConfigError::Missing("LOG_LEVEL"))?;

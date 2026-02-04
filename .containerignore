@@ -1,0 +1,16 @@
+# Rust
+target/
+**/target/
+
+# Env / secrets
+.env
+.env.*
+
+# Git
+.git
+.gitignore
+
+# Editor / OS
+.vscode/
+
+Containerfile
