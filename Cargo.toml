@@ -1,0 +1,125 @@
+[package]
+name = "windwatcher"
+version = "0.1.0"
+edition = "2024"
+authors = ["Otavio Luiz Gonzaga <otaviolgonzaga@gmail.com>"]
+license = "MIT"
+
+[features]
+default = ["sqlite", "queue-sqlite"]
+full = [
+	"mongodb",
+	"sqlite",
+	"postgres",
+	"mysql",
+	"queue-memory",
+	"queue-sqlite",
+	"queue-postgres",
+	"queue-mysql",
+	"queue-redis",
+]
+postgres = ["sea-orm/sqlx-postgres"]
+mysql = ["sea-orm/sqlx-mysql"]
+sqlite = ["sea-orm/sqlx-sqlite"]
+mongodb = ["dep:mongodb"]
+queue-memory = ["dep:apalis"]
+queue-sqlite = [
+	"dep:apalis",
+	"dep:apalis-sql",
+	"dep:sqlx",
+	"apalis-sql/sqlite",
+	"apalis-sql/tokio-comp",
+]
+queue-postgres = [
+	"dep:apalis",
+	"dep:apalis-sql",
+	"dep:sqlx",
+	"apalis-sql/postgres",
+	"apalis-sql/tokio-comp",
+]
+queue-mysql = [
+	"dep:apalis",
+	"dep:apalis-sql",
+	"dep:sqlx",
+	"apalis-sql/mysql",
+	"apalis-sql/tokio-comp",
+]
+queue-redis = ["dep:apalis", "dep:apalis-redis"]
+
+[dependencies]
+# ── Web framework ──────────────────────────────────────────────────────────────
+axum = { version = "0.8.9", features = ["ws", "macros"] }
+tower = "0.5.3"
+tower-http = { version = "0.6.11", features = ["trace", "cors"] }
+
+# ── Async runtime ──────────────────────────────────────────────────────────────
+tokio = { version = "1", features = ["full"] }
+
+# ── Configuration ──────────────────────────────────────────────────────────────
+figment = { version = "0.10.19", features = ["toml", "env"] }
+dotenvy = "0.15.7"
+
+# ── ORM / SQL databases ────────────────────────────────────────────────────────
+sea-orm = { version = "1.1.20", features = [
+	"runtime-tokio-rustls",
+	"macros",
+	"with-uuid",
+	"with-chrono",
+] }
+sea-orm-migration = { version = "1.1.20", features = ["runtime-tokio-rustls"] }
+
+# ── MongoDB (optional) ─────────────────────────────────────────────────────────
+mongodb = { version = "3.6.0", optional = true }
+
+# ── Futures (streams for WebSocket and MongoDB cursors) ────────────────────────
+futures = "0.3.32"
+
+# ── Authentication ─────────────────────────────────────────────────────────────
+jsonwebtoken = { version = "10.4.0", features = ["rust_crypto"] }
+argon2 = "0.5.3"
+rand_core = "0.10.1"
+
+# ── UUIDs ─────────────────────────────────────────────────────────────────────
+uuid = { version = "1.23.1", features = ["v4", "v7", "serde"] }
+
+# ── Serialization ─────────────────────────────────────────────────────────────
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+
+# ── Time ──────────────────────────────────────────────────────────────────────
+chrono = { version = "0.4.44", features = ["serde"] }
+
+# ── Error handling ─────────────────────────────────────────────────────────────
+thiserror = "2.0.18"
+anyhow = "1.0.102"
+
+# ── Logging ────────────────────────────────────────────────────────────────────
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+
+# ── Async trait ────────────────────────────────────────────────────────────────
+async-trait = "0.1.89"
+
+# ── WebSocket connection management ────────────────────────────────────────────
+dashmap = "6.2.1"
+
+# ── Background jobs ─────────────────────────────────────────────────────────────
+apalis = { version = "0.7.4", optional = true, features = ["limit"] }
+apalis-sql = { version = "0.7.4", optional = true }
+apalis-redis = { version = "0.7.4", optional = true }
+sqlx = { version = "0.8.6", optional = true, default-features = false, features = [
+	"runtime-tokio-rustls",
+	"chrono",
+	"uuid",
+	"json",
+] }
+
+[dev-dependencies]
+# ── Mocking ────────────────────────────────────────────────────────────────────
+mockall = "0.14.0"
+
+# ── Integration test HTTP client ───────────────────────────────────────────────
+tower = { version = "0.5.3", features = ["util"] }
+
+# ── WebSocket test client ──────────────────────────────────────────────────────
+tokio-tungstenite = "0.29.0"

@@ -1,0 +1,19 @@
+/target
+
+# Config
+windwatcher.toml
+.env
+
+# Agents
+.agents/*
+!.agents/README.md
+!.agents/memory/
+!.agents/prompts/
+!.agents/artifacts/
+.agents/artifacts/*
+!.agents/artifacts/.gitkeep
+
+# SQLite
+*.db
+*.db-wal
+*.db-shm

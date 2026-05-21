@@ -1,0 +1,35 @@
+# windwatcher.example.toml - exemplo de configurações para Windwatcher
+# Copie este ficheiro para `windwatcher.toml` ou prefira definir variáveis de ambiente
+# prefixadas com `WINDWATCHER_` (ambiente tem prioridade sobre o ficheiro TOML).
+
+# URL de conexão com a base de dados.
+# Exemplos:
+# database_url = "sqlite://windwatcher_local_data.db?mode=rwc"
+# database_url = "postgresql://user:pass@localhost/windwatcher"
+# database_url = "mysql://user:pass@localhost/windwatcher"
+
+database_url = "sqlite://windwatcher_local_data.db?mode=rwc"
+
+# Forçar provider (lowercase): "postgres", "mysql", "sqlite", "mongodb"
+# / Se omitido o provider é inferido a partir de `database_url`.
+database_provider = "sqlite"
+
+# Fila de background planejada para Apalis.
+# Providers: "memory", "sqlite", "postgres", "mysql", "redis".
+queue_provider = "sqlite"
+queue_url = "sqlite://windwatcher_jobs.db?mode=rwc"
+queue_name = "chat_messages"
+queue_concurrency = 4
+
+# Host e porta do servidor HTTP
+server_host = "0.0.0.0"
+server_port = 3000
+
+# JWT
+# Altere para um segredo forte antes de colocar em produção.
+jwt_secret = "change-this-secret-in-production"
+# Tempo de validade do JWT em segundos (padrão: 86400 = 24 horas)
+jwt_expiry_secs = 86400
+
+# Observação: a aplicação também respeita a variável de ambiente RUST_LOG para
+# configuração de logging. Exemplo: RUST_LOG = "windwatcher=debug,sea_orm=warn"
