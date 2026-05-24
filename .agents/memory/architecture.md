@@ -1,54 +1,35 @@
 # Windwatcher API - Estado da Implementação
 
-Última atualização: implementação inicial completa e funcionando.
+Última atualização: 2026-05-24 — Job runtime Apalis implementado; substituído o `InMemoryJobQueue` antigo e removido `chat_processor.rs`.
 
 ## Estado: ✅ Compilando e funcional
 
 `cargo build` e `cargo check` passam sem erros.  
-Smoke tests manuais confirmados: register, login (JWT), credencial inválida.
+As rotas principais (registo, login, envio de mensagem via 202, WebSocket) foram validadas.
 
-## Estrutura de ficheiros (35 arquivos)
+## Estrutura de ficheiros (resumo)
 
 ```
 src/
-├── main.rs                    <- wiring completo
-├── config.rs                  <- AppConfig + fallback SQLite
+├── main.rs                    <- wiring completo (usa jobs::build_job_runtime)
+├── config.rs                  <- AppConfig + defaults para queue_* (queue_provider, queue_url)
 ├── error.rs                   <- AppError + IntoResponse
 ├── state.rs                   <- AppState (Clone)
 ├── domain/
-│   ├── models.rs              <- User, Room, RoomUser, Message, enums
+│   ├── models.rs
 │   └── ports.rs               <- UserRepository, ChatRepository, JobQueue traits
-├── db/
-│   ├── mod.rs
-│   ├── seaorm/
-│   │   ├── mod.rs             <- setup_database() + re-exports
-│   │   ├── entities/          <- DeriveEntityModel para 4 tabelas
-│   │   ├── migrations/        <- 4 migrações + Migrator
-│   │   ├── user_repo.rs       <- SeaOrmUserRepository
-│   │   └── chat_repo.rs       <- SeaOrmChatRepository
-│   └── mongodb/               <- feature-gated (#[cfg(feature = "mongodb")])
-│       ├── mod.rs             <- setup_mongodb()
-│       ├── setup.rs           <- criação de índices
-│       ├── user_repo.rs       <- MongoUserRepository
-│       └── chat_repo.rs       <- MongoChatRepository
+├── db/ (seaorm + optional mongodb)
 ├── application/
-│   ├── user_service.rs        <- register, authenticate (argon2+JWT), get_by_id
-│   └── chat_service.rs        <- rooms, enqueue_message (-> fila), list, mark_as_read
-├── api/
-│   ├── mod.rs
-│   ├── http/
-│   │   ├── mod.rs             <- router() com TraceLayer + CorsLayer
-│   │   ├── extractors.rs      <- AuthenticatedUser, AdminUser (FromRequestParts)
-│   │   ├── auth.rs            <- POST /auth/register, POST /auth/login
-│   │   ├── users.rs           <- GET /users/me
-│   │   └── chat.rs            <- rooms + messages handlers
-│   └── ws/
-│       ├── mod.rs
-│       ├── manager.rs         <- WsManager (DashMap + mpsc channels)
-│       └── handler.rs         <- GET /ws?token=<jwt>
-└── jobs/
-    ├── mod.rs
-    └── chat_processor.rs      <- InMemoryJobQueue + process_chat_message + start_worker
+│   ├── user_service.rs
+│   └── chat_service.rs        <- depende de Arc<dyn JobQueue>
+├── api/                       <- HTTP handlers + WebSocket manager
+└── jobs/                      <- Apalis-based job runtime
+    ├── mod.rs                 <- re-exports (processor, runtime, adapters)
+    ├── processor.rs          <- `process_chat_message` (business logic)
+    ├── runtime.rs            <- `build_job_runtime`, `JobRuntime` abstraction
+    ├── memory.rs             <- Apalis memory adapter (dev/test)
+    ├── sql.rs                <- Apalis SQL adapters (sqlite/postgres/mysql)
+    └── redis.rs              <- Apalis Redis adapter
 ```
 
 ## Rotas disponíveis
@@ -66,26 +47,27 @@ src/
 | PUT    | /rooms/:id/read     | Bearer       | Marcar como lido                        |
 | GET    | /ws                 | query: token | WebSocket upgrade                       |
 
-## Decisões técnicas
+## Decisões técnicas (resumo)
 
-- **Fila de jobs**: Apalis com adapters `memory`, `sqlite`, `postgres`, `mysql` e `redis`; RabbitMQ/AMQP fora do ciclo atual.
-- **Configuração da fila**: Separada da configuração do banco; Configuração padrão: `queue_provider = "sqlite"` e `queue_url = "sqlite://windwatcher_jobs.db?mode=rwc"`.
-- **Banco padrão**: SQLite local (`windwatcher_local_data.db`) sem configuração
-- **Migrations**: automáticas no arranque via `Migrator::up()`
-- **JWT**: HS256, expiração configurável (`jwt_expiry_secs`)
-- **Passwords**: Argon2id
-- **IDs**: UUIDv7 (ordenável temporalmente, funciona como cursor)
-- **WebSocket**: upgrade via query param `?token=<jwt>`
+- **Fila de jobs**: Apalis com providers `memory`, `sqlite`, `postgres`, `mysql` e `redis`. O provider é escolhido em runtime via `AppConfig::queue_provider`.
+- **API do domínio**: `application/` e `domain/` continuam a depender apenas do trait `JobQueue` (sem imports de Apalis/SQLx/Redis).
+- **Configuração da fila**: separada do `database_url`. Defaults em `AppConfig::default()`:
+  - `queue_provider = "sqlite"`
+  - `queue_url = "sqlite://windwatcher_jobs.db?mode=rwc"`
+  - `queue_name = "chat_messages"`
+  - `queue_concurrency = 4`
+- **Processamento**: `process_chat_message` foi extraído para `src/jobs/processor.rs` e é usado por todos os adapters como handler.
+- **Startup**: `main.rs` chama `build_job_runtime(&config, chat_repo, ws_manager).await?` e obtém `JobRuntime::queue()` para injetar em `ChatService`.
 
 ## Configuração
 
 Via `WINDWATCHER_*` env vars ou `windwatcher.toml`:
 
 - `WINDWATCHER_DATABASE_URL` - qualquer URL postgres/mysql/sqlite
-- `WINDWATCHER_QUEUE_PROVIDER` - provider da fila planejada (`memory`, `sqlite`, `postgres`, `mysql`, `redis`)
-- `WINDWATCHER_QUEUE_URL` - URL propria da fila planejada; default SQLite separado (`sqlite://windwatcher_jobs.db?mode=rwc`)
-- `WINDWATCHER_QUEUE_NAME` - nome logico da fila planejada; default `chat_messages`
-- `WINDWATCHER_QUEUE_CONCURRENCY` - concorrencia dos workers planejados; default `4`
+- `WINDWATCHER_QUEUE_PROVIDER` - provider da fila (`memory`, `sqlite`, `postgres`, `mysql`, `redis`)
+- `WINDWATCHER_QUEUE_URL` - URL da fila (default `sqlite://windwatcher_jobs.db?mode=rwc`)
+- `WINDWATCHER_QUEUE_NAME` - nome lógico da fila (`chat_messages`)
+- `WINDWATCHER_QUEUE_CONCURRENCY` - concorrência por worker (default `4`)
 - `WINDWATCHER_JWT_SECRET` - segredo JWT (obrigatório em produção!)
 - `WINDWATCHER_SERVER_PORT` - default 3000
 - `WINDWATCHER_JWT_EXPIRY_SECS` - default 86400

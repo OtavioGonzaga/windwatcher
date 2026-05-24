@@ -20,7 +20,7 @@
 //! | [`application`] | Use-case orchestration (user & chat services)            |
 //! | [`db`]          | SeaORM and MongoDB adapter implementations               |
 //! | [`api`]         | HTTP handlers, JWT extractors, WebSocket upgrade         |
-//! | [`jobs`]        | In-memory background job worker                          |
+//! | [`jobs`]        | Background job runtime (Apalis-backed)                    |
 //!
 //! ## Technology stack
 //!
@@ -38,8 +38,8 @@
 //! POST /rooms/:id/messages
 //!   -> JWT extractor (AuthenticatedUser)
 //!   -> ChatService::enqueue_message()        <- generates UUIDv7, returns 202
-//!       -> InMemoryJobQueue::enqueue()
-//!           -> tokio background worker
+//!       -> JobQueue::enqueue_chat_message()
+//!           -> background job runtime (Apalis worker)
 //!               -> ChatRepository::add_message()
 //!               -> ChatRepository::increment_unread()
 //!               -> WsManager::send_to_users()  <- broadcasts to online members

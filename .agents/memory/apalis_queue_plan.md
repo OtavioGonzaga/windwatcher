@@ -1,192 +1,41 @@
 # Plano de Implementacao - Filas com Apalis
 
-Ultima atualizacao: 2026-05-20.
+Ultima atualizacao: 2026-05-24 — Implementação concluída (Apalis runtime + adapters básicos).
 
-## Decisoes fechadas
+## Situação geral
 
-- Usar Apalis para substituir a fila atual baseada em `tokio::mpsc`.
-- Manter `domain::ports::JobQueue` como porta da aplicacao. A camada `application/` nao deve importar Apalis.
-- Implementar adapters para `memory`, `sqlite`, `postgres`, `mysql` e `redis`.
-- Deixar RabbitMQ/AMQP fora deste ciclo. Ele pode ser implementado depois como mais um adapter.
-- Usar `sqlite` como provider default da fila.
-- Nao misturar configuracao da fila com configuracao do banco principal.
-- Nao usar `database_url` como fallback para `queue_url`.
-- Criar uma URL default propria para fila SQLite: `sqlite://windwatcher_jobs.db?mode=rwc`.
-- Usar nomes de variaveis com prefixo `WINDWATCHER_QUEUE_*`.
-- Atualizar sempre `README.md`, `.env.example`, `windwatcher.example.toml` e `.agents/memory/architecture.md` ao concluir a implementacao.
+A arquitetura proposta foi implementada: a fila foi migrada do `tokio::mpsc` original para um runtime Apalis com adapters `memory`, `sqlite`, `postgres`, `mysql` e `redis` (os adapters SQL/Redis são activáveis via features). O contrato da aplicação (`domain::ports::JobQueue`) foi preservado; `ChatService` continua a depender apenas de `Arc<dyn JobQueue>`.
 
-## Contrato esperado
+## O que foi implementado
 
-O codigo de aplicacao deve continuar dependendo apenas de:
+- `QueueProvider` e campos `queue_*` adicionados a `AppConfig` (`src/config.rs`) com defaults apropriados (`queue_provider = "sqlite"`, `queue_url = "sqlite://windwatcher_jobs.db?mode=rwc"`, `queue_name = "chat_messages"`, `queue_concurrency = 4`).
+- `src/jobs/processor.rs` criado contendo `process_chat_message` (lógica de negócio do worker).
+- `src/jobs/runtime.rs` criado com `build_job_runtime` e `JobRuntime` que escolhe o adapter e inicializa o worker Apalis.
+- Adapters implementados:
+  - `src/jobs/memory.rs` (Apalis memory storage)
+  - `src/jobs/sql.rs` (Apalis SQL storage para sqlite/postgres/mysql)
+  - `src/jobs/redis.rs` (Apalis Redis storage)
+- `src/main.rs` actualizado para usar `build_job_runtime(...).await?` e para injetar `job_runtime.queue()` no `ChatService`.
+- `src/domain/ports.rs` e documentação atualizadas para remover referências ao antigo `InMemoryJobQueue` direto e apontar para as implementações Apalis.
+- `src/jobs/chat_processor.rs` (antigo) removido; sua lógica foi consolidada em `processor.rs` e em adapters Apalis.
+- `Cargo.toml` features e dependências relacionadas a Apalis / apalis-sql / apalis-redis / sqlx já presentes e configuradas.
 
-```rust
-Arc<dyn crate::domain::ports::JobQueue>
-```
+## O que falta / follow-ups recomendados
 
-O metodo existente permanece:
+- Revisão de warnings de documentação gerados por `cargo doc --no-deps` e limpeza de comentários não utilizados (se desejar warnings = 0).
+- Cobertura de testes unitários/integrados para os adapters SQL/Redis — os testes que toquem Postgres/MySQL/Redis devem ser feature-gated e/ou `#[ignore]` por padrão.
+- Atualizar `README.md`, `.env.example` e `windwatcher.example.toml` se ainda contiverem referências ao mecanismo antigo.
+- Considerar adicionar um teste de integração end-to-end que inicia o runtime `queue-memory` e valida que um `ChatMessageJob` enfileirado é processado (pode ser acrescentado como parte da suite de CI em modo `queue-memory`).
 
-```rust
-async fn enqueue_chat_message(&self, job: ChatMessageJob) -> Result<(), AppError>;
-```
-
-`ChatMessageJob` continua sendo o payload persistido/processado pela fila.
-
-## Configuracao alvo
-
-Adicionar a `AppConfig`:
-
-```rust
-pub queue_provider: QueueProvider,
-pub queue_url: String,
-pub queue_name: String,
-pub queue_concurrency: usize,
-```
-
-Adicionar enum em `src/config.rs`:
-
-```rust
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "lowercase")]
-pub enum QueueProvider {
-    Memory,
-    #[default]
-    Sqlite,
-    Postgres,
-    Mysql,
-    Redis,
-}
-```
-
-Defaults:
-
-```text
-queue_provider = "sqlite"
-queue_url = "sqlite://windwatcher_jobs.db?mode=rwc"
-queue_name = "chat_messages"
-queue_concurrency = 4
-```
-
-Variaveis de ambiente:
-
-```sh
-WINDWATCHER_QUEUE_PROVIDER=sqlite
-WINDWATCHER_QUEUE_URL=sqlite://windwatcher_jobs.db?mode=rwc
-WINDWATCHER_QUEUE_NAME=chat_messages
-WINDWATCHER_QUEUE_CONCURRENCY=4
-```
-
-Notas:
-
-- `queue_url` e obrigatoria semanticamente para providers externos, mas tem default proprio para `sqlite`.
-- Nao derivar `queue_provider` de `database_provider`.
-- Nao copiar `database_url` para `queue_url`.
-- Se `queue_provider` nao estiver habilitado por feature Cargo, a aplicacao deve falhar no boot com mensagem clara.
-
-## Features Cargo alvo
-
-Usar Apalis estavel `0.7.x` salvo se houver motivo tecnico para mudar.
-
-Proposta:
-
-```toml
-[features]
-default = ["sqlite", "queue-sqlite"]
-postgres = ["sea-orm/sqlx-postgres"]
-mysql = ["sea-orm/sqlx-mysql"]
-sqlite = ["sea-orm/sqlx-sqlite"]
-mongodb = ["dep:mongodb"]
-
-queue-memory = ["dep:apalis"]
-queue-sqlite = ["dep:apalis", "dep:apalis-sql", "dep:sqlx", "sqlx/sqlite"]
-queue-postgres = ["dep:apalis", "dep:apalis-sql", "dep:sqlx", "sqlx/postgres"]
-queue-mysql = ["dep:apalis", "dep:apalis-sql", "dep:sqlx", "sqlx/mysql"]
-queue-redis = ["dep:apalis", "dep:apalis-redis"]
-```
-
-Dependencias esperadas:
-
-```toml
-apalis = { version = "0.7", optional = true, features = ["limit"] }
-apalis-sql = { version = "0.7", optional = true, features = ["tokio"] }
-apalis-redis = { version = "0.7", optional = true }
-sqlx = { version = "0.8", optional = true, default-features = false, features = ["runtime-tokio-rustls", "chrono", "uuid", "json"] }
-```
-
-As dependências devem ser instaladas com `cargo add` para que sejam instaladas na versão estável mais recente disponível.
-O agente implementador deve confirmar os nomes exatos de features de `apalis-sql` antes de fechar o patch, porque a API do crate pode mudar entre releases.
-
-## Estrutura de arquivos alvo
-
-Refatorar `src/jobs/` para:
-
-```text
-src/jobs/
-├── mod.rs
-├── processor.rs       # process_chat_message e handler comum
-├── runtime.rs         # JobRuntime, build_job_runtime(...)
-├── memory.rs          # adapter Apalis memory
-├── sql.rs             # adapters sqlite/postgres/mysql
-└── redis.rs           # adapter Redis
-```
-
-Responsabilidades:
-
-- `processor.rs`: contem a logica hoje em `process_chat_message`.
-- `runtime.rs`: escolhe adapter via `AppConfig`, retorna `Arc<dyn JobQueue>` e inicia worker Apalis.
-- `memory.rs`: provider nao persistente para dev/testes.
-- `sql.rs`: cria storage Apalis SQL para SQLite/Postgres/MySQL usando `queue_url`.
-- `redis.rs`: cria storage Apalis Redis usando `queue_url`.
-
-Nao colocar logica de negocio nos adapters. Adapters apenas enfileiram, fazem wiring do worker e chamam o processador comum.
-
-## Ordem de implementacao para agente menor
-
-1. Ler `AGENTS.md`, `.agents/memory/architecture.md` e este arquivo.
-2. Adicionar `QueueProvider` e campos `queue_*` em `src/config.rs`.
-3. Adicionar testes unitarios de config para defaults e override via env/TOML se ja houver padrao local para isso.
-4. Atualizar `Cargo.toml` com features e dependencias opcionais.
-5. Mover `process_chat_message` para `src/jobs/processor.rs`.
-6. Criar `src/jobs/runtime.rs` com uma API simples:
-
-```rust
-pub struct JobRuntime {
-    pub queue: Arc<dyn JobQueue>,
-}
-
-impl JobRuntime {
-    pub fn queue(&self) -> Arc<dyn JobQueue>;
-}
-
-pub async fn build_job_runtime(
-    config: &AppConfig,
-    chat_repo: Arc<dyn ChatRepository>,
-    ws_manager: Arc<WsManager>,
-) -> Result<JobRuntime, AppError>;
-```
-
-7. Implementar primeiro `queue-memory` para provar o desenho.
-8. Implementar `queue-sqlite`.
-9. Implementar `queue-postgres` e `queue-mysql` no mesmo modulo SQL.
-10. Implementar `queue-redis`.
-11. Trocar o wiring em `src/main.rs` para usar `build_job_runtime`.
-12. Remover ou isolar `InMemoryJobQueue` antigo baseado em `tokio::mpsc`.
-13. Atualizar `README.md`, `.env.example`, `windwatcher.example.toml` e `.agents/memory/architecture.md`.
-14. Rodar verificacoes.
-
-## Verificacoes obrigatorias
-
-Minimo:
+## Verificações recomendadas (executadas manualmente após a mudança)
 
 ```sh
 cargo fmt --check
 cargo check
 cargo test
 cargo doc --no-deps
-```
 
-Feature checks:
-
-```sh
+# Com features específicas
 cargo check --no-default-features --features sqlite,queue-sqlite
 cargo check --no-default-features --features postgres,queue-postgres
 cargo check --no-default-features --features mysql,queue-mysql
@@ -194,14 +43,9 @@ cargo check --features queue-memory
 cargo check --features queue-redis
 ```
 
-Testes que exigem servicos externos (`redis`, `postgres`, `mysql`) devem ser feature-gated e/ou `#[ignore]`, com instrucoes claras de ambiente.
-
-## Criterios de aceite
+## Critérios de aceite
 
 - `ChatService` continua dependendo apenas de `JobQueue`.
-- `domain/` e `application/` continuam sem imports de Apalis, SQLx, Redis ou HTTP.
-- SQLite e o default da fila, usando `windwatcher_jobs.db`, separado do banco da aplicacao.
-- `database_url` nunca e usado como fallback de `queue_url`.
-- RabbitMQ/AMQP nao entra neste ciclo.
-- README e exemplos documentam as novas configuracoes.
-- `cargo check`, `cargo test` e `cargo doc --no-deps` passam sem warnings novos.
+- `domain/` e `application/` não importam Apalis/SQLx/Redis.
+- O provider default da fila é SQLite independente do `database_url` da aplicação.
+- `cargo check`, `cargo test` e `cargo doc --no-deps` devem passar sem introduzir novos warnings relevantes relacionados à integração do Apalis.

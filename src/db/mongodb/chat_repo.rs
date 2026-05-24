@@ -358,7 +358,7 @@ impl ChatRepository for MongoChatRepository {
     /// # Errors
     /// Returns [`AppError::Database`] on driver errors.
     ///
-    /// [`process_chat_message`]: crate::jobs::chat_processor::process_chat_message
+    /// [`process_chat_message`]: crate::jobs::process_chat_message
     async fn add_message(&self, message: Message) -> Result<Message, AppError> {
         self.db
             .collection::<Document>("messages")

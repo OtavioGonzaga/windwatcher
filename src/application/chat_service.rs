@@ -125,9 +125,9 @@ pub struct ChatService {
     pub chat_repo: Arc<dyn ChatRepository>,
     /// Background job queue for asynchronous message processing.
     ///
-    /// The default implementation is an in-memory [`tokio`] channel
-    /// ([`crate::jobs::InMemoryJobQueue`]).  Swap for an Apalis-backed
-    /// implementation to gain durability across restarts.
+    /// The job queue is provided by the job runtime (see [`crate::jobs::build_job_runtime`]),
+    /// which supports Apalis-backed providers (memory/sql/redis). Use the injected
+    /// [`JobQueue`] implementation to enqueue messages.
     pub job_queue: Arc<dyn JobQueue>,
 }
 
@@ -138,8 +138,8 @@ impl ChatService {
     ///
     /// * `chat_repo` - concrete repository implementation (e.g. the SeaORM
     ///   adapter [`crate::db::seaorm::SeaOrmChatRepository`]).
-    /// * `job_queue` - concrete job queue implementation.  In production this
-    ///   defaults to [`crate::jobs::InMemoryJobQueue`].
+    /// * `job_queue` - concrete job queue implementation. In production this is
+    ///   typically obtained from [`crate::jobs::build_job_runtime`].
     pub fn new(chat_repo: Arc<dyn ChatRepository>, job_queue: Arc<dyn JobQueue>) -> Self {
         Self {
             chat_repo,

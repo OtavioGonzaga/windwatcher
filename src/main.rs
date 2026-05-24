@@ -26,7 +26,7 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!(
         host = %config.server_host,
         port = %config.server_port,
-        db   = %config.database_url,
+        db = %config.database_url,
         "starting windwatcher"
     );
 

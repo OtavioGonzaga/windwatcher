@@ -11,7 +11,7 @@
 //! | ------------------- | ------------------------------------------------- |
 //! | [`UserRepository`]  | `SeaOrmUserRepository`, `MongoUserRepository`     |
 //! | [`ChatRepository`]  | `SeaOrmChatRepository`, `MongoChatRepository`     |
-//! | [`JobQueue`]        | `InMemoryJobQueue`                                |
+//! | [`JobQueue`]        | Apalis-backed implementations (see `crate::jobs`) |
 //!
 //! All traits are `Send + Sync` and object-safe so they can be boxed or
 //! wrapped in [`std::sync::Arc`] and injected through [`crate::state::AppState`].
@@ -183,11 +183,9 @@ pub trait ChatRepository: Send + Sync {
 
 /// Port for submitting background work items.
 ///
-/// The current implementation is [`InMemoryJobQueue`][crate::jobs::chat_processor::InMemoryJobQueue],
-/// which uses a Tokio `mpsc` channel and a single spawned worker task.  For
-/// production durability (survive process restarts) this should be replaced
-/// with an [Apalis](https://github.com/geofmureithi/apalis)-backed
-/// implementation that persists jobs to a database.
+/// Job runtime implementations live in [`crate::jobs`] and are Apalis-backed
+/// (e.g. `crate::jobs::memory`, `crate::jobs::sql`, `crate::jobs::redis`).
+/// For production durability prefer a persisted provider (sqlite/postgres/mysql/redis).
 #[cfg_attr(test, mockall::automock)]
 #[async_trait]
 pub trait JobQueue: Send + Sync {

@@ -27,14 +27,9 @@ use windwatcher::{
 ///
 /// Every call gets a **separate** database - no state leaks between tests.
 pub async fn build_state() -> AppState {
-    let queue_db_path = std::env::temp_dir().join(format!(
-        "windwatcher_jobs_test_{}.db",
-        Uuid::now_v7()
-    ));
-    let queue_url = format!(
-        "sqlite://{}?mode=rwc",
-        queue_db_path.to_string_lossy()
-    );
+    let queue_db_path =
+        std::env::temp_dir().join(format!("windwatcher_jobs_test_{}.db", Uuid::now_v7()));
+    let queue_url = format!("sqlite://{}?mode=rwc", queue_db_path.to_string_lossy());
 
     let config = AppConfig {
         database_url: "sqlite::memory:".into(),
