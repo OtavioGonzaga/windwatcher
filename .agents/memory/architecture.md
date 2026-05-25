@@ -1,6 +1,6 @@
 # Windwatcher API - Estado da Implementação
 
-Última atualização: 2026-05-24 — Job runtime Apalis implementado; substituído o `InMemoryJobQueue` antigo e removido `chat_processor.rs`.
+Última atualização: 2026-05-24 — API documentada com OpenAPI/Swagger via `utoipa` e `utoipa-swagger-ui`.
 
 ## Estado: ✅ Compilando e funcional
 
@@ -23,6 +23,7 @@ src/
 │   ├── user_service.rs
 │   └── chat_service.rs        <- depende de Arc<dyn JobQueue>
 ├── api/                       <- HTTP handlers + WebSocket manager
+│   └── http/docs.rs           <- OpenAPI document + schemas de documentação
 └── jobs/                      <- Apalis-based job runtime
     ├── mod.rs                 <- re-exports (processor, runtime, adapters)
     ├── processor.rs          <- `process_chat_message` (business logic)
@@ -46,10 +47,14 @@ src/
 | GET    | /rooms/:id/messages | Bearer       | Listar mensagens (cursor: ?before=uuid) |
 | PUT    | /rooms/:id/read     | Bearer       | Marcar como lido                        |
 | GET    | /ws                 | query: token | WebSocket upgrade                       |
+| GET    | /swagger-ui         | -            | Swagger UI                              |
+| GET    | /api-docs/openapi.json | -         | OpenAPI JSON                            |
 
 ## Decisões técnicas (resumo)
 
 - **Fila de jobs**: Apalis com providers `memory`, `sqlite`, `postgres`, `mysql` e `redis`. O provider é escolhido em runtime via `AppConfig::queue_provider`.
+- **Documentação da API**: `utoipa` 5.5.0 gera o documento OpenAPI em `src/api/http/docs.rs`; `utoipa-swagger-ui` serve `/swagger-ui` e `/api-docs/openapi.json`.
+- **Schemas OpenAPI**: definidos como tipos espelho no módulo HTTP para não acoplar `domain/` e `application/` aos derives de documentação.
 - **API do domínio**: `application/` e `domain/` continuam a depender apenas do trait `JobQueue` (sem imports de Apalis/SQLx/Redis).
 - **Configuração da fila**: separada do `database_url`. Defaults em `AppConfig::default()`:
   - `queue_provider = "sqlite"`

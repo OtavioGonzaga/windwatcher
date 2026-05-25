@@ -15,6 +15,10 @@
 use axum::{Json, extract::State, http::StatusCode};
 
 use crate::{
+    api::http::docs::{
+        AuthTokenResponse as AuthTokenResponseSchema, ErrorResponse, LoginRequest,
+        RegisterUserRequest, UserResponse,
+    },
     application::user_service::{AuthTokenResponse, LoginDto, RegisterUserDto},
     domain::models::User,
     error::AppError,
@@ -38,6 +42,17 @@ use crate::{
 /// | `201 Created`              | [`User`] JSON | Account created successfully     |
 /// | `409 Conflict`             | error message | Username or e-mail already taken |
 /// | `422 Unprocessable Entity` | error message | Malformed request body           |
+#[utoipa::path(
+    post,
+    path = "/auth/register",
+    tag = "auth",
+    request_body = RegisterUserRequest,
+    responses(
+        (status = 201, description = "Account created successfully", body = UserResponse),
+        (status = 409, description = "Username or e-mail already taken", body = ErrorResponse),
+        (status = 422, description = "Malformed request body or validation error", body = ErrorResponse)
+    )
+)]
 pub async fn register(
     State(state): State<AppState>,
     Json(dto): Json<RegisterUserDto>,
@@ -65,6 +80,17 @@ pub async fn register(
 ///
 /// The returned JWT should be included as `Authorization: Bearer <token>` in
 /// subsequent requests to protected endpoints.
+#[utoipa::path(
+    post,
+    path = "/auth/login",
+    tag = "auth",
+    request_body = LoginRequest,
+    responses(
+        (status = 200, description = "Authentication successful", body = AuthTokenResponseSchema),
+        (status = 401, description = "Invalid credentials", body = ErrorResponse),
+        (status = 422, description = "Malformed request body", body = ErrorResponse)
+    )
+)]
 pub async fn login(
     State(state): State<AppState>,
     Json(dto): Json<LoginDto>,

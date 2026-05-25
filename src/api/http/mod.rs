@@ -27,6 +27,7 @@
 
 pub mod auth;
 pub mod chat;
+pub mod docs;
 pub mod extractors;
 pub mod users;
 
@@ -35,8 +36,10 @@ use axum::{
     routing::{get, post, put},
 };
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
+use utoipa::OpenApi;
+use utoipa_swagger_ui::SwaggerUi;
 
-use crate::state::AppState;
+use crate::{api::http::docs::ApiDoc, state::AppState};
 
 /// Assemble the top-level HTTP [`Router`] with all routes and middleware.
 ///
@@ -80,6 +83,8 @@ pub fn router() -> Router<AppState> {
             post(chat::send_message).get(chat::list_messages),
         )
         .route("/rooms/{room_id}/read", put(chat::mark_as_read))
+        // ── OpenAPI / Swagger UI ──────────────────────────────────────────────
+        .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
         // ── Middleware ────────────────────────────────────────────────────────
         .layer(TraceLayer::new_for_http())
         .layer(CorsLayer::permissive())

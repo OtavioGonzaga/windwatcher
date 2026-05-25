@@ -31,7 +31,13 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 
 use crate::{
-    api::http::extractors::AuthenticatedUser,
+    api::http::{
+        docs::{
+            CreateDirectRoomRequest, CreateGroupRoomRequest, ErrorResponse, MarkAsReadRequest,
+            MessageResponse, RoomResponse, SendMessageAcceptedResponse, SendMessageRequest,
+        },
+        extractors::AuthenticatedUser,
+    },
     application::chat_service::{CreateGroupRoomDto, ListMessagesDto, SendMessageDto},
     domain::models::{Message, Room},
     error::AppError,
@@ -68,6 +74,18 @@ pub struct CreateDirectRoomBody {
 /// | ------------------ | ------------- | ------------------------------------- |
 /// | `200 OK`           | [`Room`] JSON | Existing or newly created direct room |
 /// | `401 Unauthorized` | error         | Invalid or missing JWT                |
+#[utoipa::path(
+    post,
+    path = "/rooms/direct",
+    tag = "rooms",
+    request_body = CreateDirectRoomRequest,
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Existing or newly created direct room", body = RoomResponse),
+        (status = 401, description = "Invalid or missing JWT", body = ErrorResponse),
+        (status = 422, description = "Malformed request body", body = ErrorResponse)
+    )
+)]
 pub async fn create_direct_room(
     State(state): State<AppState>,
     AuthenticatedUser(claims): AuthenticatedUser,
@@ -112,6 +130,18 @@ pub async fn create_direct_room(
 /// | ------------------ | ------------- | ------------------------ |
 /// | `201 Created`      | [`Room`] JSON | Newly created group room |
 /// | `401 Unauthorized` | error         | Invalid or missing JWT   |
+#[utoipa::path(
+    post,
+    path = "/rooms/group",
+    tag = "rooms",
+    request_body = CreateGroupRoomRequest,
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 201, description = "Newly created group room", body = RoomResponse),
+        (status = 401, description = "Invalid or missing JWT", body = ErrorResponse),
+        (status = 422, description = "Malformed request body or validation error", body = ErrorResponse)
+    )
+)]
 pub async fn create_group_room(
     State(state): State<AppState>,
     AuthenticatedUser(claims): AuthenticatedUser,
@@ -163,6 +193,21 @@ pub async fn create_group_room(
 /// | `202 Accepted`     | `{ message_id }` | Message enqueued; `message_id` is the UUIDv7 |
 /// | `400 Bad Request`  | error            | `content` field missing                      |
 /// | `401 Unauthorized` | error            | Invalid or missing JWT                       |
+#[utoipa::path(
+    post,
+    path = "/rooms/{room_id}/messages",
+    tag = "messages",
+    request_body = SendMessageRequest,
+    security(("bearer_auth" = [])),
+    params(
+        ("room_id" = Uuid, Path, description = "Target room UUID")
+    ),
+    responses(
+        (status = 202, description = "Message enqueued for background delivery", body = SendMessageAcceptedResponse),
+        (status = 401, description = "Invalid or missing JWT", body = ErrorResponse),
+        (status = 422, description = "Malformed request body or validation error", body = ErrorResponse)
+    )
+)]
 pub async fn send_message(
     State(state): State<AppState>,
     AuthenticatedUser(claims): AuthenticatedUser,
@@ -237,6 +282,21 @@ pub struct ListMessagesParams {
 /// | ------------------ | ---------------- | ------------------------------ |
 /// | `200 OK`           | `Message[]` JSON | List of messages, newest-first |
 /// | `401 Unauthorized` | error            | Invalid or missing JWT         |
+#[utoipa::path(
+    get,
+    path = "/rooms/{room_id}/messages",
+    tag = "messages",
+    security(("bearer_auth" = [])),
+    params(
+        ("room_id" = Uuid, Path, description = "Room to fetch history from"),
+        ("before" = Option<Uuid>, Query, description = "Exclusive UUIDv7 cursor for messages older than this ID"),
+        ("limit" = Option<u64>, Query, description = "Maximum number of messages to return")
+    ),
+    responses(
+        (status = 200, description = "List of messages, newest-first", body = Vec<MessageResponse>),
+        (status = 401, description = "Invalid or missing JWT", body = ErrorResponse)
+    )
+)]
 pub async fn list_messages(
     State(state): State<AppState>,
     AuthenticatedUser(_claims): AuthenticatedUser,
@@ -285,6 +345,21 @@ pub async fn list_messages(
 /// | `204 No Content`   | -     | Unread counter reset successfully        |
 /// | `400 Bad Request`  | error | `message_id` missing or not a valid UUID |
 /// | `401 Unauthorized` | error | Invalid or missing JWT                   |
+#[utoipa::path(
+    put,
+    path = "/rooms/{room_id}/read",
+    tag = "messages",
+    request_body = MarkAsReadRequest,
+    security(("bearer_auth" = [])),
+    params(
+        ("room_id" = Uuid, Path, description = "Room to mark as read")
+    ),
+    responses(
+        (status = 204, description = "Unread counter reset successfully"),
+        (status = 401, description = "Invalid or missing JWT", body = ErrorResponse),
+        (status = 422, description = "Malformed request body or validation error", body = ErrorResponse)
+    )
+)]
 pub async fn mark_as_read(
     State(state): State<AppState>,
     AuthenticatedUser(claims): AuthenticatedUser,

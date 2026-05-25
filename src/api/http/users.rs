@@ -11,7 +11,12 @@ use axum::{Json, extract::State};
 use uuid::Uuid;
 
 use crate::{
-    api::http::extractors::AuthenticatedUser, domain::models::User, error::AppError,
+    api::http::{
+        docs::{ErrorResponse, UserResponse},
+        extractors::AuthenticatedUser,
+    },
+    domain::models::User,
+    error::AppError,
     state::AppState,
 };
 
@@ -29,6 +34,17 @@ use crate::{
 /// | `200 OK`           | [`User`] JSON | Profile without password hash       |
 /// | `401 Unauthorized` | error message | Missing or invalid JWT              |
 /// | `404 Not Found`    | error message | User deleted after token was issued |
+#[utoipa::path(
+    get,
+    path = "/users/me",
+    tag = "users",
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Current user profile", body = UserResponse),
+        (status = 401, description = "Missing or invalid JWT", body = ErrorResponse),
+        (status = 404, description = "User deleted after token was issued", body = ErrorResponse)
+    )
+)]
 pub async fn me(
     State(state): State<AppState>,
     AuthenticatedUser(claims): AuthenticatedUser,
