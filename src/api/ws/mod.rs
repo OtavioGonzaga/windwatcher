@@ -3,8 +3,8 @@
 //! Provides real-time, bi-directional communication between the server and
 //! authenticated clients.  The sub-module is split into two concerns:
 //!
-//! | Module      | Responsibility                                                 |
-//! | ----------- | -------------------------------------------------------------- |
+//! | Module      | Responsibility                                                  |
+//! | ----------- | --------------------------------------------------------------- |
 //! | [`handler`] | HTTP -> WebSocket upgrade, JWT validation, per-socket I/O loop  |
 //! | [`manager`] | In-memory registry of active connections; server -> client push |
 //!

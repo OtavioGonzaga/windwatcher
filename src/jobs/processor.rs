@@ -25,9 +25,11 @@ pub async fn process_chat_message(
         created_at: chrono::Utc::now(),
     };
 
-    let saved = chat_repo.add_message(message).await?;
-    chat_repo.increment_unread(room_id, sender_id).await?;
-    let members = chat_repo.get_room_members(room_id).await?;
+    let (saved, _, members) = tokio::try_join!(
+        chat_repo.add_message(message),
+        chat_repo.increment_unread(room_id, sender_id),
+        chat_repo.get_room_members(room_id),
+    )?;
 
     ws_manager
         .send_to_users(&members, SocketMessage::NewMessage(saved))

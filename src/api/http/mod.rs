@@ -5,13 +5,13 @@
 //!
 //! ## Route map
 //!
-//! | Method | Path                       | Auth       | Handler                      |
-//! | ------ | ----------------           | ---------- | ---------------------------- |
-//! | `POST` | `/auth/register`           | -          | [`auth::register`]           |
-//! | `POST` | `/auth/login`              | -          | [`auth::login`]              |
-//! | `GET`  | `/users/me`                | Bearer JWT | [`users::me`]                |
-//! | `POST` | `/rooms/direct`            | Bearer JWT | [`chat::create_direct_room`] |
-//! | `POST` | `/rooms/group`             | Bearer JWT | [`chat::create_group_room`]  |
+//! | Method | Path                        | Auth       | Handler                      |
+//! | ------ | --------------------------- | ---------- | ---------------------------- |
+//! | `POST` | `/auth/register`            | -          | [`auth::register`]           |
+//! | `POST` | `/auth/login`               | -          | [`auth::login`]              |
+//! | `GET`  | `/users/me`                 | Bearer JWT | [`users::me`]                |
+//! | `POST` | `/rooms/direct`             | Bearer JWT | [`chat::create_direct_room`] |
+//! | `POST` | `/rooms/group`              | Bearer JWT | [`chat::create_group_room`]  |
 //! | `POST` | `/rooms/{room_id}/messages` | Bearer JWT | [`chat::send_message`]       |
 //! | `GET`  | `/rooms/{room_id}/messages` | Bearer JWT | [`chat::list_messages`]      |
 //! | `PUT`  | `/rooms/{room_id}/read`     | Bearer JWT | [`chat::mark_as_read`]       |
@@ -21,7 +21,7 @@
 //! 1. **[`TraceLayer`]** - emits structured
 //!    `tracing` spans for every HTTP request, including latency and status code.
 //! 2. **[`CorsLayer::permissive`](tower_http::cors::CorsLayer::permissive)** -
-//!    allows all origins, methods and headers.  Tighten this in production by
+//!    allows all origins, methods and headers. Tighten this in production by
 //!    replacing with an explicit [`CorsLayer`]
 //!    configuration.
 
@@ -48,13 +48,13 @@ use crate::{api::http::docs::ApiDoc, state::AppState};
 ///
 /// ## Routes mounted
 ///
-/// | Method | Path                       | Handler                      |
-/// | ------ | -------------------------- | ---------------------------- |
-/// | `POST` | `/auth/register`           | [`auth::register`]           |
-/// | `POST` | `/auth/login`              | [`auth::login`]              |
-/// | `GET`  | `/users/me`                | [`users::me`]                |
-/// | `POST` | `/rooms/direct`            | [`chat::create_direct_room`] |
-/// | `POST` | `/rooms/group`             | [`chat::create_group_room`]  |
+/// | Method | Path                        | Handler                      |
+/// | ------ | --------------------------- | ---------------------------- |
+/// | `POST` | `/auth/register`            | [`auth::register`]           |
+/// | `POST` | `/auth/login`               | [`auth::login`]              |
+/// | `GET`  | `/users/me`                 | [`users::me`]                |
+/// | `POST` | `/rooms/direct`             | [`chat::create_direct_room`] |
+/// | `POST` | `/rooms/group`              | [`chat::create_group_room`]  |
 /// | `POST` | `/rooms/{room_id}/messages` | [`chat::send_message`]       |
 /// | `GET`  | `/rooms/{room_id}/messages` | [`chat::list_messages`]      |
 /// | `PUT`  | `/rooms/{room_id}/read`     | [`chat::mark_as_read`]       |

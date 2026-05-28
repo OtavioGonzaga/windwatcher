@@ -12,7 +12,7 @@
 //!        │
 //!        └── one entry per online user
 //!               │
-//!               └── Sender <-──(async channel)──► Receiver (owned by ws handler task)
+//!               └── Sender <---(async channel)---> Receiver (owned by ws handler task)
 //! ```
 //!
 //! ## Concurrency
@@ -123,7 +123,7 @@ impl WsManager {
         for user_id in user_ids {
             if let Some(tx) = self.connections.get(user_id) {
                 // Best-effort: ignore send errors (connection may be closing).
-                let _ = tx.send(msg.clone()).await;
+                tx.try_send(msg.clone()).ok();
             }
         }
     }

@@ -95,12 +95,26 @@ pub async fn ws_handler(
 
 // ── Socket loop ──────────────────────────────────────────────────────────
 
-/// Per-connection I/O loop.
+/// # Per-connection I/O loop.
 ///
 /// Splits the WebSocket into sender/receiver halves, registers the user in
 /// [`WsManager`](crate::api::ws::manager::WsManager), then enters the
 /// `tokio::select!` loop described below.  When the loop exits (for any
 /// reason), the user is deregistered via `WsManager::disconnect`.
+///
+/// # The select! loop
+///
+/// The select! loop races two async branches on every iteration:
+///
+/// • Branch A (outgoing): waits for the next SocketMessage pushed by
+///   WsManager::send_to_users.  Serialises it to JSON and sends it as a
+///   WebSocket Text frame.  Breaks the loop if the send fails (client gone).
+///
+/// • Branch B (incoming): waits for the next frame from the client.
+///   - Close frame or stream end  -> break (clean disconnect).
+///   - Ping frame                 -> reply with Pong (keepalive).
+///   - Any other error            -> log and break.
+///   - Text / Binary frames       -> ignored (server-to-client only for now).
 async fn handle_socket(socket: WebSocket, state: AppState, user_id: Uuid) {
     let (mut ws_sender, mut ws_receiver) = socket.split();
 
@@ -108,17 +122,6 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: Uuid) {
     let mut rx = state.ws_manager.connect(user_id);
     tracing::info!(%user_id, online = state.ws_manager.online_count(), "ws connected");
 
-    // The select! loop races two async branches on every iteration:
-    //
-    // • Branch A (outgoing): waits for the next SocketMessage pushed by
-    //   WsManager::send_to_users.  Serialises it to JSON and sends it as a
-    //   WebSocket Text frame.  Breaks the loop if the send fails (client gone).
-    //
-    // • Branch B (incoming): waits for the next frame from the client.
-    //   - Close frame or stream end  -> break (clean disconnect).
-    //   - Ping frame                 -> reply with Pong (keepalive).
-    //   - Any other error            -> log and break.
-    //   - Text / Binary frames       -> ignored (server-to-client only for now).
     loop {
         tokio::select! {
             // ── Outgoing: server pushes a message to this client ──────────────
