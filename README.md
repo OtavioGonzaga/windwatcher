@@ -1,4 +1,4 @@
-# Windwatcher
+# ![windwatcher](docs/assets/windwatcher-banner.png)
 
 An embeddable, self-hostable messaging engine written in Rust.
 
