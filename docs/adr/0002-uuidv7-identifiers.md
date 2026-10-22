@@ -18,7 +18,8 @@ distinct Rust newtypes: `UserId`, `SessionId`, `ConversationId`, and
 `MessageId`.
 
 Generation produces UUIDv7 values, and construction or parsing of existing
-values validates the UUID version. The underlying UUID remains intentionally
+values validates both version 7 and the RFC 9562 variant (named `RFC4122` by
+the `uuid` crate). The underlying UUID remains intentionally
 available through explicit APIs; it is part of the public Rust contract rather
 than a hidden implementation detail.
 

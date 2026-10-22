@@ -11,6 +11,7 @@ pub struct Username(String);
 
 /// An error returned when a username does not satisfy its domain rules.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum UsernameError {
     /// The canonical username contains fewer than three characters.
     TooShort,

@@ -1,17 +1,20 @@
 use std::{error::Error, fmt, str::FromStr};
 
-use uuid::{Uuid, Version};
+use uuid::{Uuid, Variant, Version};
 
 /// An error returned when constructing a Windwatcher domain identifier.
 ///
-/// Windwatcher identifiers are UUIDv7 values. A UUID with another version is
-/// therefore rejected even when its textual representation is valid.
+/// Windwatcher identifiers are RFC 9562 UUIDv7 values. A UUID with another
+/// version or variant is rejected even when its textual representation is valid.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum IdentifierError {
     /// The supplied text was not a valid UUID.
     InvalidUuid(uuid::Error),
     /// The supplied UUID was valid but was not version 7.
     NotVersion7(Uuid),
+    /// The supplied UUID did not use the RFC 9562 variant.
+    InvalidVariant(Uuid),
 }
 
 impl fmt::Display for IdentifierError {
@@ -19,6 +22,9 @@ impl fmt::Display for IdentifierError {
         match self {
             Self::InvalidUuid(_) => formatter.write_str("invalid UUID"),
             Self::NotVersion7(uuid) => write!(formatter, "UUID {uuid} is not version 7"),
+            Self::InvalidVariant(uuid) => {
+                write!(formatter, "UUID {uuid} does not use the RFC 9562 variant")
+            }
         }
     }
 }
@@ -27,24 +33,26 @@ impl Error for IdentifierError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::InvalidUuid(error) => Some(error),
-            Self::NotVersion7(_) => None,
+            Self::NotVersion7(_) | Self::InvalidVariant(_) => None,
         }
     }
 }
 
 fn validate_uuid_v7(uuid: Uuid) -> Result<Uuid, IdentifierError> {
-    if uuid.get_version() == Some(Version::SortRand) {
-        Ok(uuid)
-    } else {
-        Err(IdentifierError::NotVersion7(uuid))
+    if uuid.get_version() != Some(Version::SortRand) {
+        return Err(IdentifierError::NotVersion7(uuid));
     }
+    if uuid.get_variant() != Variant::RFC4122 {
+        return Err(IdentifierError::InvalidVariant(uuid));
+    }
+    Ok(uuid)
 }
 
 macro_rules! domain_id {
     ($name:ident, $description:literal) => {
         #[doc = $description]
         ///
-        /// This identifier always contains a UUIDv7. It can be generated
+        /// This identifier always contains an RFC 9562 UUIDv7. It can be generated
         /// without persistence coordination and explicitly converted to its
         /// underlying [`Uuid`].
         #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -52,6 +60,10 @@ macro_rules! domain_id {
 
         impl $name {
             /// Generates a new UUIDv7 identifier.
+            #[expect(
+                clippy::new_without_default,
+                reason = "Generating a fresh identity must be an explicit operation"
+            )]
             #[must_use]
             pub fn new() -> Self {
                 Self(Uuid::now_v7())
@@ -67,13 +79,6 @@ macro_rules! domain_id {
             #[must_use]
             pub fn into_uuid(self) -> Uuid {
                 self.0
-            }
-        }
-
-        impl Default for $name {
-            /// Generates a new UUIDv7 identifier.
-            fn default() -> Self {
-                Self::new()
             }
         }
 
@@ -126,7 +131,7 @@ domain_id!(MessageId, "The UUIDv7 identifier of a future message.");
 mod tests {
     use std::str::FromStr;
 
-    use uuid::{Uuid, Version};
+    use uuid::{Uuid, Variant, Version};
 
     use super::{ConversationId, IdentifierError, MessageId, SessionId, UserId};
 
@@ -142,6 +147,8 @@ mod tests {
 
                     assert_eq!(first.as_uuid().get_version(), Some(Version::SortRand));
                     assert_eq!(second.as_uuid().get_version(), Some(Version::SortRand));
+                    assert_eq!(first.as_uuid().get_variant(), Variant::RFC4122);
+                    assert_eq!(second.as_uuid().get_variant(), Variant::RFC4122);
                     assert_ne!(first, second);
                 }
 
@@ -174,6 +181,37 @@ mod tests {
                     let error = $type::try_from(v4).unwrap_err();
 
                     assert!(matches!(error, IdentifierError::NotVersion7(_)));
+                }
+
+                #[test]
+                fn non_rfc_variants_are_rejected_on_both_construction_paths() {
+                    for (text, variant) in [
+                        ("018f6f34-0000-7000-0000-000000000000", Variant::NCS),
+                        ("018f6f34-0000-7000-c000-000000000000", Variant::Microsoft),
+                        ("018f6f34-0000-7000-e000-000000000000", Variant::Future),
+                    ] {
+                        let uuid = Uuid::parse_str(text).unwrap();
+                        assert_eq!(uuid.get_version(), Some(Version::SortRand));
+                        assert_eq!(uuid.get_variant(), variant);
+                        assert!(matches!(
+                            $type::try_from(uuid),
+                            Err(IdentifierError::InvalidVariant(_))
+                        ));
+                        assert!(matches!(
+                            text.parse::<$type>(),
+                            Err(IdentifierError::InvalidVariant(_))
+                        ));
+                    }
+                }
+
+                #[test]
+                fn rfc_uuid_v7_is_accepted_on_both_construction_paths() {
+                    let text = "018f6f34-0000-7000-8000-000000000000";
+                    let uuid = Uuid::parse_str(text).unwrap();
+
+                    assert_eq!(uuid.get_variant(), Variant::RFC4122);
+                    assert_eq!($type::try_from(uuid).unwrap().as_uuid(), uuid);
+                    assert_eq!(text.parse::<$type>().unwrap().as_uuid(), uuid);
                 }
 
                 #[test]
