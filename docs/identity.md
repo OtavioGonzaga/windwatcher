@@ -23,7 +23,15 @@ and updates its modification timestamp. Enabling a disabled user clears that
 state and updates the modification timestamp. Repeating either operation when
 the user is already in the requested state is a no-op.
 
-## Current limitations
+## Credentials and persisted state
 
-This domain slice does not yet implement credentials, registration, sessions,
-authentication, authorization, persistence, or HTTP contracts.
+`User` does not contain authentication material. Local password hashes are
+separate values persisted alongside the user through an atomic storage port.
+`LocalAuthentication` transfers the user and credential only for authentication;
+ordinary user lookups do not expose credentials.
+
+`DisableUser` and `EnableUser` load and persist these domain transitions, skipping
+writes for no-ops. They are trusted operator capabilities: callers establish
+trust before invoking them. There are no global administrator roles. See
+[local authentication](authentication.md) for registration, password policy,
+and persistence contracts. Sessions and transport contracts are not implemented.

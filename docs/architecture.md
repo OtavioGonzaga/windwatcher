@@ -36,8 +36,14 @@ The library must not depend on server-specific concerns.
 
 ## Current state
 
-The reusable `windwatcher` crate now contains the initial core domain primitives:
-UUIDv7 identifiers and the user identity model. They remain independent of
-infrastructure, persistence, HTTP, and runtime concerns. Adapters and further
-domain behavior will be introduced incrementally with the deliveries that
-implement them.
+The reusable `windwatcher` crate contains UUIDv7 identifiers, the user identity
+model, and local identity application services. Registration, authentication,
+and persisted enable/disable operations depend on the `IdentityStore` and
+`PasswordHasher` ports. The Argon2id adapter implements the password port;
+concrete persistence is supplied by the embedding application.
+
+Ports return native Rust `Send` futures and impose no executor. The initial
+Argon2id adapter performs CPU-bound work on the polling thread; hosts can wrap
+the port with runtime-specific blocking-pool execution. See
+[local authentication](authentication.md) and
+[ADR 0003](adr/0003-local-credentials-and-authentication.md).
