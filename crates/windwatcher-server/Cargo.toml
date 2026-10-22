@@ -1,0 +1,18 @@
+[package]
+name = "windwatcher-server"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Official self-hosted server for Windwatcher."
+keywords = ["messaging", "self-hosted", "server"]
+categories = ["network-programming"]
+
+[[bin]]
+name = "windwatcher"
+path = "src/main.rs"
+doc = false
+
+[dependencies]
+windwatcher = { path = "../windwatcher", version = "0.1.0" }
