@@ -3,7 +3,9 @@
 All local identity behavior lives in the reusable `windwatcher` library.
 `RegisterLocalUser`, `AuthenticateLocalUser`, `DisableUser`, and `EnableUser`
 are application services wired to caller-provided ports. Authentication returns
-only `User`; it does not establish a session or issue tokens.
+only `User`; it does not establish a session or issue tokens. Hosts compose a
+successful `AuthenticateLocalUser` call with `CreateSession` when they need a
+login/session flow; see [sessions and tokens](sessions.md).
 
 ## Passwords
 

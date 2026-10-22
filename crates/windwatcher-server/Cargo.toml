@@ -15,4 +15,4 @@ path = "src/main.rs"
 doc = false
 
 [dependencies]
-windwatcher = { path = "../windwatcher", version = "0.1.0" }
+windwatcher = { path = "../windwatcher", version = "0.1.0", features = ["jwt-hs256"] }

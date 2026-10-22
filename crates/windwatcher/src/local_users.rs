@@ -1,6 +1,6 @@
 use crate::{
     IdentityStore, IdentityStoreError, PasswordHashError, PasswordHasher, PasswordPolicyError,
-    SecretPassword, User, UserId, UsernameError,
+    SecretPassword, SessionStore, SessionStoreError, User, UserId, UsernameError,
 };
 use time::OffsetDateTime;
 
@@ -90,6 +90,9 @@ pub enum ManageUserError {
     /// An operational persistence failure occurred.
     #[error("user state storage failed")]
     Storage(#[source] IdentityStoreError),
+    /// An operational failure prevented session revocation after disabling.
+    #[error("session revocation storage failed")]
+    SessionStorage(#[source] SessionStoreError),
 }
 
 impl From<IdentityStoreError> for ManageUserError {
@@ -102,15 +105,17 @@ impl From<IdentityStoreError> for ManageUserError {
 }
 
 /// Trusted operator capability to disable a persisted user; performs no authorization.
-pub struct DisableUser<'a, S> {
-    store: &'a S,
+pub struct DisableUser<'a, I, S> {
+    store: &'a I,
+    sessions: &'a S,
 }
-impl<'a, S: IdentityStore> DisableUser<'a, S> {
+impl<'a, I: IdentityStore, S: SessionStore> DisableUser<'a, I, S> {
     /// Wires the persistence port. Callers must establish operator trust.
-    pub fn new(store: &'a S) -> Self {
-        Self { store }
+    pub fn new(store: &'a I, sessions: &'a S) -> Self {
+        Self { store, sessions }
     }
-    /// Disables the user at `now`; an already disabled user causes no write.
+    /// Disables the user at `now`. An already-disabled user skips its identity
+    /// write but still retries session revocation.
     pub async fn execute(&self, id: UserId, now: OffsetDateTime) -> Result<User, ManageUserError> {
         let mut user = self
             .store
@@ -121,6 +126,10 @@ impl<'a, S: IdentityStore> DisableUser<'a, S> {
             user.disable(now);
             self.store.update_user(&user).await?;
         }
+        self.sessions
+            .revoke_all_for_user(id, now)
+            .await
+            .map_err(ManageUserError::SessionStorage)?;
         Ok(user)
     }
 }

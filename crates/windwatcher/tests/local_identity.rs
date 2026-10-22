@@ -137,6 +137,45 @@ impl IdentityStore for FakeStore {
         Ok(())
     }
 }
+impl SessionStore for FakeStore {
+    async fn create_session(
+        &self,
+        _: &Session,
+        _: &RefreshTokenHash,
+    ) -> Result<(), SessionStoreError> {
+        Ok(())
+    }
+    async fn find_by_refresh_token_hash(
+        &self,
+        _: &RefreshTokenHash,
+    ) -> Result<Option<Session>, SessionStoreError> {
+        Ok(None)
+    }
+    async fn rotate_refresh_token(
+        &self,
+        _: SessionId,
+        _: &RefreshTokenHash,
+        _: &RefreshTokenHash,
+        _: OffsetDateTime,
+    ) -> Result<RefreshRotationResult, SessionStoreError> {
+        Ok(RefreshRotationResult::Rejected)
+    }
+    async fn revoke_session_for_user(
+        &self,
+        _: UserId,
+        _: SessionId,
+        _: OffsetDateTime,
+    ) -> Result<bool, SessionStoreError> {
+        Ok(false)
+    }
+    async fn revoke_all_for_user(
+        &self,
+        _: UserId,
+        _: OffsetDateTime,
+    ) -> Result<(), SessionStoreError> {
+        Ok(())
+    }
+}
 fn count(value: &AtomicUsize) -> usize {
     value.load(Ordering::SeqCst)
 }
@@ -273,7 +312,7 @@ fn disabled_state_is_disclosed_only_after_password_verification() {
         let store = FakeStore::default();
         let hasher = FakeHasher::default();
         let user = register(&store, &hasher).await;
-        DisableUser::new(&store)
+        DisableUser::new(&store, &store)
             .execute(user.id(), now(20))
             .await
             .unwrap();
@@ -338,7 +377,7 @@ fn persisted_state_transitions_preserve_identity_and_no_ops_skip_writes() {
         let hasher = FakeHasher::default();
         let user = register(&store, &hasher).await;
         let enable = EnableUser::new(&store);
-        let disable = DisableUser::new(&store);
+        let disable = DisableUser::new(&store, &store);
         assert_eq!(enable.execute(user.id(), now(15)).await.unwrap(), user);
         assert_eq!(count(&store.writes), 0);
         let disabled = disable.execute(user.id(), now(20)).await.unwrap();
@@ -373,7 +412,7 @@ fn management_reports_missing_users_and_storage_failures() {
         let store = FakeStore::default();
         let hasher = FakeHasher::default();
         let enable = EnableUser::new(&store);
-        let disable = DisableUser::new(&store);
+        let disable = DisableUser::new(&store, &store);
         assert!(matches!(
             enable.execute(UserId::new(), now(0)).await,
             Err(ManageUserError::UserNotFound)

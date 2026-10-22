@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- First-class sessions with absolute expiration, individual revocation, and
+  owner-scoped asynchronous session storage contracts.
+- Opaque 256-bit refresh tokens, SHA-256 persistence fingerprints, and atomic
+  refresh-token rotation.
+- Format-independent access-token abstractions and an optional HS256 JWT adapter.
+- Session revocation when a user is disabled.
 - Local registration and password authentication through asynchronous identity
   storage and password hashing ports, with explicit self-registration policy.
 - Zeroized password secrets, opaque PHC hashes, and an Argon2id adapter.
