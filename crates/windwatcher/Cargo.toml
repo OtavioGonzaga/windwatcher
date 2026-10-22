@@ -10,3 +10,5 @@ keywords = ["messaging", "embedded", "self-hosted"]
 categories = ["network-programming"]
 
 [dependencies]
+time = "0.3"
+uuid = { version = "1", features = ["v7"] }
