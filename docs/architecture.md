@@ -36,6 +36,8 @@ The library must not depend on server-specific concerns.
 
 ## Current state
 
-This repository currently contains only the project foundation. Domain modules,
-adapters, runtime functionality, and their ADRs will be introduced incrementally
-with the deliveries that implement them.
+The reusable `windwatcher` crate now contains the initial core domain primitives:
+UUIDv7 identifiers and the user identity model. They remain independent of
+infrastructure, persistence, HTTP, and runtime concerns. Adapters and further
+domain behavior will be introduced incrementally with the deliveries that
+implement them.
