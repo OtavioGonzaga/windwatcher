@@ -127,7 +127,9 @@ async fn creation_validation_uses_ports_before_persistence() {
         StartDirectConversation::new(&missing, &store)
             .execute(UserId::new(), UserId::new(), now)
             .await,
-        Err(ConversationOperationError::ParticipantNotFound(_))
+        Err(windwatcher::StartDirectConversationError::Operation(
+            ConversationOperationError::ParticipantNotFound(_)
+        ))
     ));
 
     let id = UserId::new();
@@ -138,6 +140,8 @@ async fn creation_validation_uses_ports_before_persistence() {
         CreateGroupConversation::new(&identity, &store)
             .execute(id, " \t", &[], now)
             .await,
-        Err(ConversationOperationError::InvalidTitle(_))
+        Err(windwatcher::CreateGroupConversationError::Operation(
+            ConversationOperationError::InvalidTitle(_)
+        ))
     ));
 }

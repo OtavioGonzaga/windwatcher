@@ -32,6 +32,8 @@ pub enum AddMemberStoreOutcome {
     Added,
     /// The target was already a member.
     AlreadyMember,
+    /// The actor no longer had Group-management permission at mutation time.
+    NotAuthorized,
 }
 /// Result of an idempotent Group metadata mutation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -40,6 +42,8 @@ pub enum ChangeStoreOutcome {
     Changed,
     /// The requested state already existed.
     Unchanged,
+    /// The actor no longer had permission at mutation time.
+    NotAuthorized,
 }
 /// Result of leaving a Group.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
