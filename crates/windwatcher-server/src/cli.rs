@@ -1,6 +1,7 @@
-use std::path::PathBuf;
+use std::{fmt, path::PathBuf};
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
+use zeroize::Zeroize;
 
 #[derive(Debug, Parser)]
 #[command(name = "windwatcher", about = "Windwatcher operator commands")]
@@ -52,7 +53,7 @@ pub enum UserCommand {
     Create(CreateUserArgs),
 }
 
-#[derive(Debug, Args)]
+#[derive(Args)]
 pub struct CreateUserArgs {
     #[arg(long)]
     pub username: String,
@@ -65,6 +66,44 @@ pub struct CreateUserArgs {
     /// Read an exact UTF-8 password from a file.
     #[arg(long, conflicts_with_all = ["password", "password_stdin"])]
     pub password_file: Option<PathBuf>,
+}
+
+/// Plaintext command input that is redacted in diagnostics and zeroized on drop.
+pub struct SensitiveString(String);
+impl SensitiveString {
+    pub fn new(value: String) -> Self {
+        Self(value)
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub fn into_inner(self) -> String {
+        let mut value = self;
+        std::mem::take(&mut value.0)
+    }
+}
+impl Drop for SensitiveString {
+    fn drop(&mut self) {
+        self.0.zeroize();
+    }
+}
+impl fmt::Debug for SensitiveString {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("SensitiveString([REDACTED])")
+    }
+}
+impl fmt::Debug for CreateUserArgs {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CreateUserArgs")
+            .field("username", &self.username)
+            .field("password", &self.password.as_ref().map(|_| "[REDACTED]"))
+            .field("password_stdin", &self.password_stdin)
+            .field("password_file", &self.password_file)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum, serde::Deserialize, serde::Serialize)]

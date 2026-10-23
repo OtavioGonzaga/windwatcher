@@ -35,6 +35,11 @@ Generate a file safely with `printf '%s' "$SECRET" > jwt.key`. `config check`
 validates JWT configuration, while migration and provisioning commands intentionally
 do not resolve JWT or session policy.
 
+When environment variables configure either JWT secret source, that source replaces
+the complete TOML secret source. Setting both `WINDWATCHER__AUTH__JWT__SECRET` and
+`WINDWATCHER__AUTH__JWT__SECRET_FILE` is an error. Direct environment-secret values
+are read as exact UTF-8 text rather than Figment's structured-value syntax.
+
 ## Logging
 
 `logging.filter` accepts `tracing_subscriber::EnvFilter` syntax and `logging.format`

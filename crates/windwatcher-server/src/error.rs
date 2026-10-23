@@ -32,4 +32,57 @@ impl AppError {
     pub fn hint(&self) -> Option<&'static str> {
         matches!(self, Self::SchemaPending).then_some("run `windwatcher migrate`")
     }
+
+    pub fn operator_message(&self) -> String {
+        match self {
+            Self::DataDirectory { path, source } => {
+                format!(
+                    "failed to create data directory {}: {source}",
+                    path.display()
+                )
+            }
+            Self::MigrationStatus(source) => source
+                .downcast_ref::<windwatcher::SqliteStorageError>()
+                .and_then(|error| match error {
+                    windwatcher::SqliteStorageError::InvalidMigrationHistory(message) => {
+                        Some(format!("invalid database migration history: {message}"))
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| self.to_string()),
+            Self::UserCreation(windwatcher::CreateLocalUserError::InvalidUsername(error)) => {
+                format!("invalid username: {error}")
+            }
+            Self::UserCreation(windwatcher::CreateLocalUserError::InvalidPassword(error)) => {
+                format!("invalid password: {error}")
+            }
+            _ => self.to_string(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AppError;
+
+    #[test]
+    fn operator_messages_expose_safe_actionable_causes() {
+        let password = AppError::UserCreation(windwatcher::CreateLocalUserError::InvalidPassword(
+            windwatcher::PasswordPolicyError::TooShort,
+        ));
+        assert_eq!(
+            password.operator_message(),
+            "invalid password: password must contain at least 8 characters"
+        );
+
+        let migration = AppError::MigrationStatus(Box::new(
+            windwatcher::SqliteStorageError::InvalidMigrationHistory(
+                "migration 1 checksum differs".into(),
+            ),
+        ));
+        assert_eq!(
+            migration.operator_message(),
+            "invalid database migration history: migration 1 checksum differs"
+        );
+    }
 }

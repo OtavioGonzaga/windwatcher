@@ -6,8 +6,13 @@ use std::{
 
 use time::OffsetDateTime;
 use windwatcher::{Argon2idPasswordHasher, CreateLocalUser, CreateLocalUserError, SecretPassword};
+use zeroize::Zeroize;
 
-use crate::{cli::CreateUserArgs, error::AppError, storage::Storage};
+use crate::{
+    cli::{CreateUserArgs, SensitiveString},
+    error::AppError,
+    storage::Storage,
+};
 
 pub async fn migrate(storage: &Storage) -> Result<(), AppError> {
     let before = storage
@@ -64,7 +69,11 @@ pub async fn migration_status(storage: &Storage) -> Result<(), AppError> {
     Ok(())
 }
 
-pub async fn create_user(storage: &Storage, args: &CreateUserArgs) -> Result<(), AppError> {
+pub async fn create_user(
+    storage: &Storage,
+    args: CreateUserArgs,
+    argument_password: Option<SensitiveString>,
+) -> Result<(), AppError> {
     let status = storage
         .migration_status()
         .await
@@ -72,7 +81,7 @@ pub async fn create_user(storage: &Storage, args: &CreateUserArgs) -> Result<(),
     if !status.is_current() {
         return Err(AppError::SchemaPending);
     }
-    let password = password(args)?;
+    let password = password(&args, argument_password)?;
     tracing::info!(username = %args.username, "user provisioning started");
     let hasher = Argon2idPasswordHasher;
     let user = CreateLocalUser::new(storage, &hasher)
@@ -93,25 +102,27 @@ pub async fn create_user(storage: &Storage, args: &CreateUserArgs) -> Result<(),
     Ok(())
 }
 
-fn password(args: &CreateUserArgs) -> Result<SecretPassword, AppError> {
-    let value = match (&args.password, args.password_stdin, &args.password_file) {
-        (Some(password), false, None) => {
-            eprintln!(
-                "warning: --password may expose the password through process arguments; prefer interactive input, --password-stdin, or --password-file"
-            );
-            password.clone()
-        }
+fn password(
+    args: &CreateUserArgs,
+    argument_password: Option<SensitiveString>,
+) -> Result<SecretPassword, AppError> {
+    let value = match (argument_password, args.password_stdin, &args.password_file) {
+        (Some(password), false, None) => password,
         (None, true, None) => read_password(&mut io::stdin())?,
         (None, false, Some(path)) => read_password_file(path)?,
         (None, false, None) => {
             if !io::stdin().is_terminal() {
                 return Err(AppError::PasswordInput("stdin is not interactive; use --password, --password-stdin, or --password-file".into()));
             }
-            let first = rpassword::prompt_password("Password: ")
-                .map_err(|error| AppError::PasswordInput(error.to_string()))?;
-            let confirmation = rpassword::prompt_password("Confirm password: ")
-                .map_err(|error| AppError::PasswordInput(error.to_string()))?;
-            if first != confirmation {
+            let first = SensitiveString::new(
+                rpassword::prompt_password("Password: ")
+                    .map_err(|error| AppError::PasswordInput(error.to_string()))?,
+            );
+            let confirmation = SensitiveString::new(
+                rpassword::prompt_password("Confirm password: ")
+                    .map_err(|error| AppError::PasswordInput(error.to_string()))?,
+            );
+            if first.as_str() != confirmation.as_str() {
                 return Err(AppError::PasswordInput(
                     "password confirmation does not match".into(),
                 ));
@@ -124,10 +135,11 @@ fn password(args: &CreateUserArgs) -> Result<SecretPassword, AppError> {
             ));
         }
     };
-    SecretPassword::new(value).map_err(|error| AppError::PasswordInput(error.to_string()))
+    SecretPassword::new(value.into_inner())
+        .map_err(|error| AppError::PasswordInput(error.to_string()))
 }
 
-fn read_password_file(path: &Path) -> Result<String, AppError> {
+fn read_password_file(path: &Path) -> Result<SensitiveString, AppError> {
     fs::File::open(path)
         .map_err(|error| {
             AppError::PasswordInput(format!(
@@ -137,19 +149,23 @@ fn read_password_file(path: &Path) -> Result<String, AppError> {
         })
         .and_then(|mut file| read_password(&mut file))
 }
-fn read_password(reader: &mut impl Read) -> Result<String, AppError> {
+fn read_password(reader: &mut impl Read) -> Result<SensitiveString, AppError> {
     let mut bytes = Vec::with_capacity(1025);
     reader
         .take(1025)
         .read_to_end(&mut bytes)
         .map_err(|error| AppError::PasswordInput(error.to_string()))?;
     if bytes.len() > 1024 {
+        bytes.zeroize();
         return Err(AppError::PasswordInput(
             "password must contain at most 1024 UTF-8 bytes".into(),
         ));
     }
-    String::from_utf8(bytes)
-        .map_err(|_| AppError::PasswordInput("password input must be valid UTF-8".into()))
+    let value = String::from_utf8(bytes).map_err(|error| {
+        error.into_bytes().zeroize();
+        AppError::PasswordInput("password input must be valid UTF-8".into())
+    })?;
+    Ok(SensitiveString::new(value))
 }
 
 #[cfg(test)]
@@ -161,12 +177,15 @@ mod tests {
     #[test]
     fn password_input_preserves_exact_utf8_bytes() {
         assert_eq!(
-            read_password(&mut Cursor::new(" leading\ntrailing ")).unwrap(),
+            read_password(&mut Cursor::new(" leading\ntrailing "))
+                .unwrap()
+                .as_str(),
             " leading\ntrailing "
         );
         assert_eq!(
             read_password(&mut Cursor::new("å".repeat(512)))
                 .unwrap()
+                .as_str()
                 .len(),
             1024
         );

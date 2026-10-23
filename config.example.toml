@@ -17,7 +17,7 @@ session_ttl = "30d"
 [auth.jwt]
 issuer = "windwatcher"
 secret_file = "/etc/windwatcher/jwt.key"
-# secret = "replace-with-at-least-32-bytes"
+# secret = "replace-with-a-secret-at-least-32-bytes-long"
 
 [logging]
 filter = "info"

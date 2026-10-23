@@ -15,7 +15,7 @@ use storage::Storage;
 #[tokio::main]
 async fn main() {
     if let Err(error) = run().await {
-        eprintln!("error: {error}");
+        eprintln!("error: {}", error.operator_message());
         if let Some(hint) = error.hint() {
             eprintln!("hint: {hint}");
         }
@@ -24,7 +24,18 @@ async fn main() {
 }
 
 async fn run() -> Result<(), AppError> {
-    let cli = Cli::parse();
+    let mut cli = Cli::parse();
+    let argument_password = match &mut cli.command {
+        Command::User {
+            command: cli::UserCommand::Create(args),
+        } => args.password.take().map(cli::SensitiveString::new),
+        _ => None,
+    };
+    if argument_password.is_some() {
+        eprintln!(
+            "warning: --password may expose the password through process arguments; prefer interactive input, --password-stdin, or --password-file"
+        );
+    }
     let mode = if cli.system {
         RuntimeMode::System
     } else {
@@ -56,7 +67,7 @@ async fn run() -> Result<(), AppError> {
             command: cli::UserCommand::Create(args),
         } => {
             let storage = connect_storage(&raw, &paths).await?;
-            commands::create_user(&storage, &args).await
+            commands::create_user(&storage, args, argument_password).await
         }
     }
 }

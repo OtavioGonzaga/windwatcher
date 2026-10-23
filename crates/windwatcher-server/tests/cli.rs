@@ -217,3 +217,118 @@ fn session_policy_semantics_do_not_block_migration() {
         .failure()
         .stderr(predicate::str::contains("at least one second"));
 }
+
+#[test]
+fn environment_jwt_source_replaces_toml_source_and_preserves_literal_values() {
+    let directory = TempDir::new().unwrap();
+    let path = directory.path().join("secret-precedence.toml");
+    fs::write(
+        &path,
+        format!(
+            "[storage.sqlite]\nurl = {:?}\n\n[auth.jwt]\nsecret_file = {:?}\n",
+            directory
+                .path()
+                .join("windwatcher.db")
+                .display()
+                .to_string(),
+            directory
+                .path()
+                .join("missing-old-secret")
+                .display()
+                .to_string(),
+        ),
+    )
+    .unwrap();
+    command(&path)
+        .env(
+            "WINDWATCHER__AUTH__JWT__SECRET",
+            "[abcdefghijklmnopqrstuvwxyz123456]",
+        )
+        .args(["config", "check"])
+        .assert()
+        .success();
+
+    let replacement_file = directory.path().join("replacement-secret");
+    fs::write(&replacement_file, "abcdefghijklmnopqrstuvwxyz123456").unwrap();
+    fs::write(
+        &path,
+        "[auth.jwt]\nsecret = \"abcdefghijklmnopqrstuvwxyz123456\"\n",
+    )
+    .unwrap();
+    command(&path)
+        .env("WINDWATCHER__AUTH__JWT__SECRET_FILE", &replacement_file)
+        .args(["config", "check"])
+        .assert()
+        .success();
+}
+
+#[test]
+fn conflicting_environment_jwt_sources_are_rejected() {
+    let directory = TempDir::new().unwrap();
+    let config = complete_config(&directory, "warn");
+    command(&config)
+        .env(
+            "WINDWATCHER__AUTH__JWT__SECRET",
+            "abcdefghijklmnopqrstuvwxyz123456",
+        )
+        .env(
+            "WINDWATCHER__AUTH__JWT__SECRET_FILE",
+            directory.path().join("secret"),
+        )
+        .args(["config", "check"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("are mutually exclusive"));
+}
+
+#[test]
+fn config_check_validates_sqlite_options_without_creating_a_database() {
+    let directory = TempDir::new().unwrap();
+    let invalid = directory.path().join("invalid-sqlite.toml");
+    fs::write(
+        &invalid,
+        "[storage.sqlite]\nurl = \"sqlite://windwatcher.db?mode=invalid\"\n\n[auth.jwt]\nsecret = \"abcdefghijklmnopqrstuvwxyz123456\"\n",
+    )
+    .unwrap();
+    command(&invalid)
+        .args(["config", "check"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "invalid SQLite storage configuration",
+        ));
+
+    let database = directory.path().join("not-created.db");
+    let valid = directory.path().join("valid-sqlite.toml");
+    fs::write(
+        &valid,
+        format!(
+            "[storage.sqlite]\nurl = {:?}\n\n[auth.jwt]\nsecret = \"abcdefghijklmnopqrstuvwxyz123456\"\n",
+            database.display().to_string()
+        ),
+    )
+    .unwrap();
+    command(&valid).args(["config", "check"]).assert().success();
+    assert!(!database.exists());
+}
+
+#[test]
+fn password_argument_warning_precedes_schema_validation() {
+    let directory = TempDir::new().unwrap();
+    let config = config(&directory);
+    command(&config)
+        .args([
+            "user",
+            "create",
+            "--username",
+            "otavio",
+            "--password",
+            "correct horse battery staple",
+        ])
+        .assert()
+        .failure()
+        .stderr(
+            predicate::str::contains("warning: --password")
+                .and(predicate::str::contains("database schema is not current")),
+        );
+}

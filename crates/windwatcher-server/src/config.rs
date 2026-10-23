@@ -1,4 +1,8 @@
-use std::{fmt, fs, path::PathBuf, time::Duration};
+use std::{
+    env, fmt, fs, io,
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 use figment::{
     Figment,
@@ -85,6 +89,11 @@ pub struct RawJwt {
     pub secret: Option<String>,
     pub secret_file: Option<PathBuf>,
 }
+
+enum EnvJwtSource {
+    Value(String),
+    File(PathBuf),
+}
 impl fmt::Debug for RawJwt {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -122,20 +131,88 @@ impl Default for RawLogging {
 pub fn load(paths: &ResolvedPaths, explicit: Option<PathBuf>) -> Result<RawConfig, AppError> {
     let is_explicit = explicit.is_some();
     let config_file = explicit.unwrap_or_else(|| paths.config_file.clone());
-    if is_explicit && !config_file.is_file() {
-        return Err(AppError::Config(format!(
-            "configuration file {} does not exist",
-            config_file.display()
-        )));
-    }
+    let config_file = discover_config_file(&config_file, is_explicit)?;
     let mut figment = Figment::from(Serialized::defaults(RawConfig::default()));
-    if config_file.is_file() {
-        figment = figment.merge(Toml::file(&config_file));
+    if let Some(config_file) = config_file {
+        figment = figment.merge(Toml::file(config_file));
     }
-    figment
-        .merge(Env::prefixed("WINDWATCHER__").split("__"))
+    let mut raw: RawConfig = figment
+        .merge(
+            Env::prefixed("WINDWATCHER__")
+                .filter(|key| {
+                    !key.as_str().eq_ignore_ascii_case("AUTH__JWT__SECRET")
+                        && !key.as_str().eq_ignore_ascii_case("AUTH__JWT__SECRET_FILE")
+                })
+                .split("__"),
+        )
         .extract()
-        .map_err(|error| AppError::Config(error.to_string()))
+        .map_err(|error| AppError::Config(error.to_string()))?;
+    if let Some(source) = environment_jwt_source()? {
+        match source {
+            EnvJwtSource::Value(secret) => {
+                raw.auth.jwt.secret = Some(secret);
+                raw.auth.jwt.secret_file = None;
+            }
+            EnvJwtSource::File(path) => {
+                raw.auth.jwt.secret = None;
+                raw.auth.jwt.secret_file = Some(path);
+            }
+        }
+    }
+    Ok(raw)
+}
+
+fn discover_config_file(path: &Path, explicit: bool) -> Result<Option<PathBuf>, AppError> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => match fs::metadata(path) {
+            Ok(target) if target.is_file() => Ok(Some(path.to_path_buf())),
+            Ok(_) => Err(AppError::Config(format!(
+                "configuration path {} is not a regular file",
+                path.display()
+            ))),
+            Err(error) => Err(AppError::Config(format!(
+                "failed to inspect configuration file {}: {error}",
+                path.display()
+            ))),
+        },
+        Ok(metadata) if metadata.is_file() => Ok(Some(path.to_path_buf())),
+        Ok(_) => Err(AppError::Config(format!(
+            "configuration path {} is not a regular file",
+            path.display()
+        ))),
+        Err(error) if error.kind() == io::ErrorKind::NotFound && !explicit => Ok(None),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Err(AppError::Config(format!(
+            "configuration file {} does not exist",
+            path.display()
+        ))),
+        Err(error) => Err(AppError::Config(format!(
+            "failed to inspect configuration file {}: {error}",
+            path.display()
+        ))),
+    }
+}
+
+fn environment_jwt_source() -> Result<Option<EnvJwtSource>, AppError> {
+    let secret = environment_utf8("WINDWATCHER__AUTH__JWT__SECRET")?;
+    let secret_file = environment_utf8("WINDWATCHER__AUTH__JWT__SECRET_FILE")?;
+    match (secret, secret_file) {
+        (Some(_), Some(_)) => Err(AppError::Config(
+            "WINDWATCHER__AUTH__JWT__SECRET and WINDWATCHER__AUTH__JWT__SECRET_FILE are mutually exclusive".into(),
+        )),
+        (Some(secret), None) => Ok(Some(EnvJwtSource::Value(secret))),
+        (None, Some(path)) => Ok(Some(EnvJwtSource::File(PathBuf::from(path)))),
+        (None, None) => Ok(None),
+    }
+}
+
+fn environment_utf8(key: &str) -> Result<Option<String>, AppError> {
+    match env::var(key) {
+        Ok(value) => Ok(Some(value)),
+        Err(env::VarError::NotPresent) => Ok(None),
+        Err(env::VarError::NotUnicode(_)) => Err(AppError::Config(format!(
+            "environment variable {key} must be valid UTF-8"
+        ))),
+    }
 }
 
 pub fn resolve_sqlite(
@@ -173,6 +250,9 @@ pub fn resolve_sqlite(
     let create_if_missing = config
         .and_then(|sqlite| sqlite.create_if_missing)
         .unwrap_or(true);
+    options
+        .validate()
+        .map_err(|error| AppError::Config(error.to_string()))?;
     Ok((options, derived, create_if_missing))
 }
 
@@ -297,5 +377,19 @@ mod tests {
         };
         assert!(resolve_sqlite(&raw, &paths).is_ok());
         assert!(resolve_session(&raw).is_err());
+    }
+
+    #[test]
+    fn default_config_must_be_absent_or_a_regular_file() {
+        let directory = tempfile::TempDir::new().unwrap();
+        let missing = directory.path().join("missing.toml");
+        assert!(discover_config_file(&missing, false).unwrap().is_none());
+        assert!(discover_config_file(directory.path(), false).is_err());
+
+        let link = directory.path().join("broken.toml");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(directory.path().join("missing-target"), &link).unwrap();
+        #[cfg(unix)]
+        assert!(discover_config_file(&link, false).is_err());
     }
 }
