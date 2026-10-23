@@ -4,13 +4,13 @@ CREATE TABLE users (
     disabled_at INTEGER NULL,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
-);
+) STRICT;
 
 CREATE TABLE local_credentials (
     user_id BLOB NOT NULL PRIMARY KEY CHECK(length(user_id) = 16),
     password_hash TEXT NOT NULL,
     FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
-);
+) STRICT;
 
 CREATE TABLE sessions (
     id BLOB NOT NULL PRIMARY KEY CHECK(length(id) = 16),
@@ -21,6 +21,6 @@ CREATE TABLE sessions (
     revoked_at INTEGER NULL,
     CHECK(expires_at > created_at),
     FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
-);
+) STRICT;
 
 CREATE INDEX sessions_user_id ON sessions(user_id);

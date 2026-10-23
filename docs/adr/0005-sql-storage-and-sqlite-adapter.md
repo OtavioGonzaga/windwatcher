@@ -19,7 +19,7 @@ remain runtime-independent; the adapter may use SQLx's Tokio integration.
 
 SQLite migrations are explicit, embedded, forward-only SQL files. SQLite stores
 UUIDs as BLOB(16), refresh fingerprints as BLOB(32), and timestamps as Unix
-microseconds. Each official database adapter will be concrete rather than using
+microseconds; `STRICT` tables enforce those SQLite storage classes. Each official database adapter will be concrete rather than using
 SQLx `AnyPool`, and must satisfy reusable application-level storage contracts.
 
 ## Consequences

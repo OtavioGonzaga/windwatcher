@@ -39,6 +39,9 @@ The embedded, forward-only SQLite migrations create `users`,
 - timestamps: signed Unix microseconds in INTEGER columns;
 - password hashes: encoded PHC TEXT.
 
+All three tables use SQLite `STRICT` mode, so these declared storage classes are
+enforced in addition to the identifier and fingerprint length checks.
+
 The adapter enables foreign keys on every connection, configures a nonzero busy
 timeout, and uses WAL as a file-backed operational improvement. Correctness
 comes from constraints, transactions, and atomic SQL statements rather than

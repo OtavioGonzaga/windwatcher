@@ -66,13 +66,13 @@ pub enum SqliteStorageError {
     Configuration(String),
     /// SQLite could not establish or maintain a connection.
     #[error("SQLite connection failure")]
-    Connection(#[source] sqlx::Error),
+    Connection(#[source] Box<dyn Error + Send + Sync>),
     /// Applying or validating embedded migrations failed.
     #[error("SQLite migration failure")]
-    Migration(#[source] sqlx::migrate::MigrateError),
+    Migration(#[source] Box<dyn Error + Send + Sync>),
     /// Schema inspection failed.
     #[error("SQLite schema inspection failure")]
-    Schema(#[source] sqlx::Error),
+    Schema(#[source] Box<dyn Error + Send + Sync>),
     /// The migration ledger was inconsistent with embedded migrations.
     #[error("invalid SQLite migration history: {0}")]
     InvalidMigrationHistory(String),
@@ -123,6 +123,11 @@ impl SqliteStorage {
                 "max_connections must be greater than zero".into(),
             ));
         }
+        if options.busy_timeout.is_zero() {
+            return Err(SqliteStorageError::Configuration(
+                "busy_timeout must be greater than zero".into(),
+            ));
+        }
         let is_memory = matches!(
             options.database_url.as_str(),
             ":memory:" | "sqlite::memory:"
@@ -162,7 +167,7 @@ impl SqliteStorage {
             })
             .connect_with(connect_options)
             .await
-            .map_err(SqliteStorageError::Connection)?;
+            .map_err(|error| SqliteStorageError::Connection(Box::new(error)))?;
         Ok(Self { pool })
     }
 
@@ -171,7 +176,7 @@ impl SqliteStorage {
         MIGRATOR
             .run(&self.pool)
             .await
-            .map_err(SqliteStorageError::Migration)
+            .map_err(|error| SqliteStorageError::Migration(Box::new(error)))
     }
 
     /// Inspects embedded and applied migration state without applying migrations.
@@ -181,7 +186,7 @@ impl SqliteStorage {
         )
         .fetch_one(&self.pool)
         .await
-        .map_err(SqliteStorageError::Schema)?;
+        .map_err(|error| SqliteStorageError::Schema(Box::new(error)))?;
         let latest_version = MIGRATOR.iter().map(|migration| migration.version).max();
         if ledger_exists == 0 {
             return Ok(MigrationStatus {
@@ -194,14 +199,18 @@ impl SqliteStorage {
             sqlx::query("SELECT version, checksum, success FROM _sqlx_migrations ORDER BY version")
                 .fetch_all(&self.pool)
                 .await
-                .map_err(SqliteStorageError::Schema)?;
+                .map_err(|error| SqliteStorageError::Schema(Box::new(error)))?;
         let mut current_version = None;
         for row in rows {
-            let version: i64 = row.try_get("version").map_err(SqliteStorageError::Schema)?;
+            let version: i64 = row
+                .try_get("version")
+                .map_err(|error| SqliteStorageError::Schema(Box::new(error)))?;
             let checksum: Vec<u8> = row
                 .try_get("checksum")
-                .map_err(SqliteStorageError::Schema)?;
-            let success: bool = row.try_get("success").map_err(SqliteStorageError::Schema)?;
+                .map_err(|error| SqliteStorageError::Schema(Box::new(error)))?;
+            let success: bool = row
+                .try_get("success")
+                .map_err(|error| SqliteStorageError::Schema(Box::new(error)))?;
             let Some(migration) = MIGRATOR
                 .iter()
                 .find(|migration| migration.version == version)
@@ -240,7 +249,7 @@ async fn rows_count(pool: &SqlitePool) -> Result<usize, SqliteStorageError> {
     let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM _sqlx_migrations WHERE success = 1")
         .fetch_one(pool)
         .await
-        .map_err(SqliteStorageError::Schema)?;
+        .map_err(|error| SqliteStorageError::Schema(Box::new(error)))?;
     usize::try_from(count)
         .map_err(|_| SqliteStorageError::InvalidMigrationHistory("invalid migration count".into()))
 }
@@ -260,9 +269,13 @@ fn unexpected_identity(message: &'static str) -> IdentityStoreError {
 fn unexpected_session(message: &'static str) -> SessionStoreError {
     SessionStoreError::Unexpected(Box::new(Corrupt(message)))
 }
+fn sqlite_primary_code(code: &str) -> Option<u32> {
+    code.parse::<u32>().ok().map(|code| code & 0xff)
+}
+
 fn unavailable(error: &sqlx::Error) -> bool {
     matches!(error, sqlx::Error::PoolTimedOut | sqlx::Error::PoolClosed)
-        || matches!(error, sqlx::Error::Database(database) if matches!(database.code().as_deref(), Some("5") | Some("6") | Some("SQLITE_BUSY") | Some("SQLITE_LOCKED")))
+        || matches!(error, sqlx::Error::Database(database) if matches!(database.code().as_deref().and_then(sqlite_primary_code), Some(5 | 6)))
 }
 fn identity_error(error: sqlx::Error) -> IdentityStoreError {
     if unavailable(&error) {
@@ -492,5 +505,18 @@ impl SessionStore for SqliteStorage {
             .await
             .map_err(session_error)?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sqlite_primary_code;
+
+    #[test]
+    fn sqlite_primary_code_normalizes_extended_busy_and_locked_codes() {
+        assert_eq!(sqlite_primary_code("5"), Some(5));
+        assert_eq!(sqlite_primary_code("517"), Some(5));
+        assert_eq!(sqlite_primary_code("262"), Some(6));
+        assert_eq!(sqlite_primary_code("not-a-code"), None);
     }
 }

@@ -2,13 +2,13 @@
 
 use std::{sync::Arc, time::Duration as StdDuration};
 
-use sqlx::{Executor, Row};
+use sqlx::{Connection, Executor, Row, SqliteConnection};
 use tempfile::TempDir;
 use time::{Duration, OffsetDateTime};
 use windwatcher::{
     IdentityStore, IdentityStoreError, OsRefreshTokenProvider, PasswordHash, RefreshRotationResult,
     RefreshToken, RefreshTokenProvider, Session, SessionId, SessionStore, SqliteStorage,
-    SqliteStorageOptions, User, UserId,
+    SqliteStorageError, SqliteStorageOptions, User, UserId,
 };
 
 mod support;
@@ -78,6 +78,14 @@ async fn migration_is_explicit_idempotent_and_reports_status() {
     let status = storage.check_schema().await.unwrap();
     assert_eq!(status.current_version(), Some(1));
     assert!(status.is_current());
+
+    assert!(matches!(
+        SqliteStorage::connect(
+            SqliteStorageOptions::new(":memory:").busy_timeout(StdDuration::ZERO),
+        )
+        .await,
+        Err(SqliteStorageError::Configuration(_))
+    ));
 }
 
 #[tokio::test]
@@ -186,7 +194,8 @@ async fn concurrent_username_registration_has_one_database_winner() {
 async fn sessions_use_atomic_refresh_cas_and_preserve_revocation() {
     let (_directory, storage) = store().await;
     let owner = persisted_user(&storage, "alice").await;
-    support::session_store_contract::run(&storage, owner.id()).await;
+    let other_owner = persisted_user(&storage, "other_user").await;
+    support::session_store_contract::run(&storage, owner.id(), other_owner.id()).await;
     let provider = OsRefreshTokenProvider;
     let first = RefreshToken::parse("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".into()).unwrap();
     let second = RefreshToken::parse("AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE".into()).unwrap();
@@ -311,4 +320,64 @@ async fn storage_enforces_foreign_keys_and_physical_representations() {
     let created_at: i64 = row.try_get("created_at").unwrap();
     assert_eq!(id.len(), 16);
     assert_eq!(created_at, 1_700_000_000_000_000);
+}
+
+#[tokio::test]
+async fn strict_tables_reject_incorrect_storage_classes_and_lengths() {
+    let (directory, storage) = store().await;
+    let user = persisted_user(&storage, "alice").await;
+    let url = format!(
+        "sqlite://{}",
+        directory.path().join("windwatcher.db").display()
+    );
+    let inspector = sqlx::SqlitePool::connect(&url).await.unwrap();
+
+    assert!(sqlx::query("INSERT INTO users (id, username, created_at, updated_at) VALUES ('text-id', 'text_id', 0, 0)")
+        .execute(&inspector).await.is_err());
+    assert!(sqlx::query("INSERT INTO users (id, username, created_at, updated_at) VALUES (?, 'text_timestamp', 'not-an-integer', 0)")
+        .bind(UserId::new().as_uuid().into_bytes().to_vec())
+        .execute(&inspector).await.is_err());
+    assert!(sqlx::query("INSERT INTO sessions (id, user_id, refresh_token_hash, created_at, expires_at) VALUES (?, ?, 'text-hash', 0, 1)")
+        .bind(SessionId::new().as_uuid().into_bytes().to_vec())
+        .bind(user.id().as_uuid().into_bytes().to_vec())
+        .execute(&inspector).await.is_err());
+    assert!(sqlx::query("INSERT INTO sessions (id, user_id, refresh_token_hash, created_at, expires_at) VALUES (?, ?, x'00', 0, 1)")
+        .bind(SessionId::new().as_uuid().into_bytes().to_vec())
+        .bind(user.id().as_uuid().into_bytes().to_vec())
+        .execute(&inspector).await.is_err());
+
+    let credential_user_id = UserId::new();
+    inspector.execute(sqlx::query("INSERT INTO users (id, username, created_at, updated_at) VALUES (?, 'credential_user', 0, 0)")
+        .bind(credential_user_id.as_uuid().into_bytes().to_vec())).await.unwrap();
+    assert!(
+        sqlx::query("INSERT INTO local_credentials (user_id, password_hash) VALUES (?, x'00')")
+            .bind(credential_user_id.as_uuid().into_bytes().to_vec())
+            .execute(&inspector)
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn locked_database_is_normalized_as_unavailable() {
+    let directory = TempDir::new().unwrap();
+    let url = format!("sqlite://{}", directory.path().join("locked.db").display());
+    let storage = SqliteStorage::connect(
+        SqliteStorageOptions::new(url.clone())
+            .max_connections(1)
+            .busy_timeout(StdDuration::from_millis(1)),
+    )
+    .await
+    .unwrap();
+    storage.migrate().await.unwrap();
+    let mut user = persisted_user(&storage, "alice").await;
+    let mut lock = SqliteConnection::connect(&url).await.unwrap();
+    sqlx::query("BEGIN EXCLUSIVE")
+        .execute(&mut lock)
+        .await
+        .unwrap();
+    user.disable(timestamp(10));
+    let result = storage.update_user(&user).await;
+    sqlx::query("ROLLBACK").execute(&mut lock).await.unwrap();
+    assert!(matches!(result, Err(IdentityStoreError::Unavailable(_))));
 }
