@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Optional SQLx-backed SQLite persistence through `SqliteStorage`, including
+  explicit embedded migrations and `IdentityStore`/`SessionStore` implementations.
+- SQLite storage contract and concurrency coverage for identity creation and
+  refresh-token rotation.
 - First-class sessions with absolute expiration, individual revocation, and
   owner-scoped asynchronous session storage contracts.
 - Opaque 256-bit refresh tokens, SHA-256 persistence fingerprints, and atomic

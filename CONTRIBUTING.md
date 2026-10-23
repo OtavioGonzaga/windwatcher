@@ -71,6 +71,14 @@ when reasonable. Do not add artificial tests for trivial implementation details
 or documentation-only changes. Future adapters should share contract-test suites
 where appropriate.
 
+## SQLite migrations
+
+SQLite migrations live in `crates/windwatcher/migrations/sqlite`. Add stable,
+sequential forward-only SQL files; never edit a released migration. SQL files
+use LF line endings because migration checksums are platform-independent.
+SQLite integration tests create disposable temporary databases and require no
+external database server or `DATABASE_URL`.
+
 ## Documentation
 
 Keep the README concise. Put conceptual and operational documentation under

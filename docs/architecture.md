@@ -42,7 +42,10 @@ Registration, authentication, and user state depend on `IdentityStore` and
 `PasswordHasher`; session creation, refresh, and revocation depend on
 `SessionStore`, `RefreshTokenProvider`, and `AccessTokenCodec`. The optional
 HS256 JWT adapter implements the access-token port, but JWT is not required by
-embedding applications. Concrete persistence is supplied by the embedding app.
+embedding applications. The optional `sqlite` feature provides the first
+official persistence adapter: `SqliteStorage` implements both storage ports
+while keeping SQLx and its Tokio runtime requirement at the infrastructure
+boundary.
 
 Ports return native Rust `Send` futures and impose no executor. The initial
 Argon2id adapter performs CPU-bound work on the polling thread; hosts can wrap

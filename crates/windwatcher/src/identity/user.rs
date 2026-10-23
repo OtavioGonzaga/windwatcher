@@ -28,6 +28,27 @@ impl User {
         }
     }
 
+    /// Reconstructs a user loaded by a persistence adapter.
+    ///
+    /// Storage adapters must use this constructor rather than deriving state
+    /// from a sequence of transitions, so persisted timestamps remain exact.
+    #[must_use]
+    pub fn restore(
+        id: UserId,
+        username: Username,
+        disabled_at: Option<OffsetDateTime>,
+        created_at: OffsetDateTime,
+        updated_at: OffsetDateTime,
+    ) -> Self {
+        Self {
+            id,
+            username,
+            disabled_at,
+            created_at,
+            updated_at,
+        }
+    }
+
     /// Returns the user's stable domain identifier.
     #[must_use]
     pub fn id(&self) -> UserId {
