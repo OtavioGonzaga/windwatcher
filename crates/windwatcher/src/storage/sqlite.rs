@@ -775,7 +775,7 @@ impl ConversationStore for SqliteStorage {
         let value = match role {
             GroupRole::Admin => "admin",
             GroupRole::Member => "member",
-            GroupRole::Owner => return Ok(ChangeStoreOutcome::Unchanged),
+            GroupRole::Owner => return Err(ConversationStoreError::InvalidGroupRole),
         };
         let mut tx = self.pool.begin().await.map_err(conversation_error)?;
         let authorized: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM conversations c JOIN conversation_members m ON m.conversation_id = c.id WHERE c.id = ? AND c.kind = 'group' AND m.user_id = ? AND m.role IN ('owner', 'admin')").bind(id_bytes(id)).bind(id_bytes(actor)).fetch_one(&mut *tx).await.map_err(conversation_error)?;

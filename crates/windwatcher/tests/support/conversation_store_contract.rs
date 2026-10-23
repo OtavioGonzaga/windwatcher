@@ -14,6 +14,7 @@ pub async fn run<S: ConversationStore>(
     outsider: UserId,
 ) {
     let now = OffsetDateTime::UNIX_EPOCH;
+    let later = now + time::Duration::seconds(1);
     let invalid_direct = Conversation::new_direct(ConversationId::new(), now);
     assert!(matches!(
         store.create_group(&invalid_direct, owner, &[]).await,
@@ -59,6 +60,29 @@ pub async fn run<S: ConversationStore>(
             .unwrap()
             .role(),
         MembershipRole::Direct
+    );
+    assert_eq!(
+        store
+            .add_group_member(direct_id, owner, outsider, later)
+            .await
+            .unwrap(),
+        AddMemberStoreOutcome::NotAuthorized
+    );
+    assert_eq!(
+        store.leave_group(direct_id, owner, later).await.unwrap(),
+        LeaveStoreOutcome::Direct
+    );
+    assert_eq!(
+        store
+            .rename_group(
+                direct_id,
+                owner,
+                &GroupTitle::new("not a Direct rename").unwrap(),
+                later,
+            )
+            .await
+            .unwrap(),
+        ChangeStoreOutcome::NotAuthorized
     );
 
     let self_direct = Conversation::new_direct(ConversationId::new(), now);
@@ -114,6 +138,12 @@ pub async fn run<S: ConversationStore>(
             .unwrap(),
         ChangeStoreOutcome::Changed
     );
+    assert!(matches!(
+        store
+            .set_group_member_role(group.id(), owner, member, GroupRole::Owner, later)
+            .await,
+        Err(ConversationStoreError::InvalidGroupRole)
+    ));
     assert_eq!(
         store
             .add_group_member(group.id(), member, outsider, now)
@@ -148,6 +178,43 @@ pub async fn run<S: ConversationStore>(
             .await
             .unwrap(),
         AddMemberStoreOutcome::AlreadyMember
+    );
+    let before_rename = store
+        .find_conversation(group.id())
+        .await
+        .unwrap()
+        .unwrap()
+        .updated_at();
+    let renamed = GroupTitle::new("renamed group").unwrap();
+    assert_eq!(
+        store
+            .rename_group(group.id(), admin, &renamed, later)
+            .await
+            .unwrap(),
+        ChangeStoreOutcome::Changed
+    );
+    let after_rename = store
+        .find_conversation(group.id())
+        .await
+        .unwrap()
+        .unwrap()
+        .updated_at();
+    assert!(after_rename > before_rename);
+    assert_eq!(
+        store
+            .rename_group(group.id(), admin, &renamed, later)
+            .await
+            .unwrap(),
+        ChangeStoreOutcome::Unchanged
+    );
+    assert_eq!(
+        store
+            .find_conversation(group.id())
+            .await
+            .unwrap()
+            .unwrap()
+            .updated_at(),
+        after_rename
     );
     assert_eq!(
         store

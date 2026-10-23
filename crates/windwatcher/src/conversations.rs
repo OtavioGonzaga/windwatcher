@@ -63,30 +63,31 @@ pub enum LeaveGroupOutcome {
 }
 
 macro_rules! application_error {
-    ($name:ident { $($variants:tt)* }) => {
+    ($documentation:literal, $name:ident { $($variants:tt)* }) => {
+        #[doc = $documentation]
         #[allow(missing_docs)]
         #[derive(Debug, thiserror::Error)]
         #[non_exhaustive]
         pub enum $name { $($variants)* }
     };
 }
-application_error!(StartDirectConversationError {
+application_error!("Failures starting a Direct conversation.", StartDirectConversationError {
     #[error("conversation participant does not exist")] ParticipantNotFound(UserId),
     #[error("identity lookup failed")] Identity(#[source] IdentityStoreError),
     #[error("conversation storage failed")] Storage(#[source] ConversationStoreError),
 });
-application_error!(CreateGroupConversationError {
+application_error!("Failures creating a Group conversation.", CreateGroupConversationError {
     #[error("conversation participant does not exist")] ParticipantNotFound(UserId),
     #[error("invalid group title")] InvalidTitle(#[source] GroupTitleError),
     #[error("identity lookup failed")] Identity(#[source] IdentityStoreError),
     #[error("conversation storage failed")] Storage(#[source] ConversationStoreError),
 });
-application_error!(GetConversationError {
+application_error!("Failures loading a conversation.", GetConversationError {
     #[error("conversation not found")] ConversationNotFound,
     #[error("actor is not a conversation member")] NotMember,
     #[error("conversation storage failed")] Storage(#[source] ConversationStoreError),
 });
-application_error!(AddGroupMemberError {
+application_error!("Failures adding a Group member.", AddGroupMemberError {
     #[error("conversation not found")] ConversationNotFound,
     #[error("actor is not a conversation member")] NotMember,
     #[error("insufficient group permissions")] InsufficientPermissions,
@@ -95,7 +96,7 @@ application_error!(AddGroupMemberError {
     #[error("identity lookup failed")] Identity(#[source] IdentityStoreError),
     #[error("conversation storage failed")] Storage(#[source] ConversationStoreError),
 });
-application_error!(RemoveGroupMemberError {
+application_error!("Failures removing a Group member.", RemoveGroupMemberError {
     #[error("conversation not found")] ConversationNotFound,
     #[error("actor is not a conversation member")] NotMember,
     #[error("insufficient group permissions")] InsufficientPermissions,
@@ -104,7 +105,7 @@ application_error!(RemoveGroupMemberError {
     #[error("target is not a group member")] TargetNotMember,
     #[error("conversation storage failed")] Storage(#[source] ConversationStoreError),
 });
-application_error!(SetGroupMemberRoleError {
+application_error!("Failures changing a Group member role.", SetGroupMemberRoleError {
     #[error("conversation not found")] ConversationNotFound,
     #[error("actor is not a conversation member")] NotMember,
     #[error("insufficient group permissions")] InsufficientPermissions,
@@ -114,7 +115,7 @@ application_error!(SetGroupMemberRoleError {
     #[error("owner role must be changed through ownership transfer")] OwnerRoleNotAssignable,
     #[error("conversation storage failed")] Storage(#[source] ConversationStoreError),
 });
-application_error!(TransferGroupOwnershipError {
+application_error!("Failures transferring Group ownership.", TransferGroupOwnershipError {
     #[error("conversation not found")] ConversationNotFound,
     #[error("actor is not a conversation member")] NotMember,
     #[error("insufficient group permissions")] InsufficientPermissions,
@@ -122,14 +123,14 @@ application_error!(TransferGroupOwnershipError {
     #[error("target is not a group member")] TargetNotMember,
     #[error("conversation storage failed")] Storage(#[source] ConversationStoreError),
 });
-application_error!(LeaveGroupConversationError {
+application_error!("Failures leaving a Group conversation.", LeaveGroupConversationError {
     #[error("conversation not found")] ConversationNotFound,
     #[error("actor is not a conversation member")] NotMember,
     #[error("operation is not supported for Direct conversations")] DirectOperationNotSupported,
     #[error("ownership transfer is required before the owner leaves")] OwnershipTransferRequired,
     #[error("conversation storage failed")] Storage(#[source] ConversationStoreError),
 });
-application_error!(RenameGroupConversationError {
+application_error!("Failures renaming a Group conversation.", RenameGroupConversationError {
     #[error("conversation not found")] ConversationNotFound,
     #[error("actor is not a conversation member")] NotMember,
     #[error("insufficient group permissions")] InsufficientPermissions,

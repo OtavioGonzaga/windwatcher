@@ -20,6 +20,9 @@ pub enum ConversationStoreError {
         /// The kind supplied to the operation.
         actual: ConversationKind,
     },
+    /// A generic role mutation received the Owner role.
+    #[error("owner role must be changed through ownership transfer")]
+    InvalidGroupRole,
     /// Storage is temporarily unavailable.
     #[error("conversation storage unavailable")]
     Unavailable(#[source] Box<dyn Error + Send + Sync>),
