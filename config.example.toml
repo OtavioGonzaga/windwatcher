@@ -1,0 +1,24 @@
+# Windwatcher configuration. Precedence: defaults < TOML < WINDWATCHER__... < CLI.
+
+[storage.sqlite]
+# Omit url for the mode-specific default database path.
+# url = "/var/lib/windwatcher/windwatcher.db"
+create_if_missing = true
+max_connections = 8
+busy_timeout = "5s"
+
+[auth]
+registration = "closed"
+
+[auth.session]
+access_token_ttl = "15m"
+session_ttl = "30d"
+
+[auth.jwt]
+issuer = "windwatcher"
+secret_file = "/etc/windwatcher/jwt.key"
+# secret = "replace-with-at-least-32-bytes"
+
+[logging]
+filter = "info"
+format = "compact"

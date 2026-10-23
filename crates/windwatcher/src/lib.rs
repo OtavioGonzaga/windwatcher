@@ -15,8 +15,8 @@ mod storage;
 pub use authentication::{AuthenticateLocalUser, AuthenticateLocalUserError};
 pub use identity_store::{IdentityStore, IdentityStoreError, LocalAuthentication};
 pub use local_users::{
-    DisableUser, EnableUser, ManageUserError, RegisterLocalUser, RegisterLocalUserError,
-    RegistrationPolicy,
+    CreateLocalUser, CreateLocalUserError, DisableUser, EnableUser, ManageUserError,
+    RegisterLocalUser, RegisterLocalUserError, RegistrationPolicy,
 };
 pub use password::{
     Argon2idPasswordHasher, PasswordHash, PasswordHashError, PasswordHasher, PasswordPolicyError,

@@ -248,6 +248,33 @@ fn registration_rejections_do_not_hash_or_write() {
 }
 
 #[test]
+fn trusted_creation_is_independent_from_self_registration_policy() {
+    block_on(async {
+        let store = FakeStore::default();
+        let hasher = FakeHasher::default();
+        assert!(matches!(
+            RegisterLocalUser::new(&store, &hasher, RegistrationPolicy::Closed)
+                .execute("alice", &password("password"), now(0))
+                .await,
+            Err(RegisterLocalUserError::RegistrationClosed)
+        ));
+        let user = CreateLocalUser::new(&store, &hasher)
+            .execute("alice", &password("password"), now(1))
+            .await
+            .unwrap();
+        assert_eq!(user.username().as_str(), "alice");
+        assert_eq!(count(&hasher.hashes), 1);
+        assert_eq!(count(&store.creates), 1);
+        assert!(matches!(
+            CreateLocalUser::new(&store, &hasher)
+                .execute("ALICE", &password("password"), now(2))
+                .await,
+            Err(CreateLocalUserError::UsernameTaken)
+        ));
+    });
+}
+
+#[test]
 fn registration_operational_failures_never_leave_partial_users() {
     block_on(async {
         let store = FakeStore::default();

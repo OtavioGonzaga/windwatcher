@@ -5,6 +5,9 @@
 - [Local authentication](authentication.md): credentials, application services,
   and storage/password port contracts.
 - [Sessions and tokens](sessions.md): session lifecycle and token contracts.
+- [Server configuration](server-configuration.md): operational configuration,
+  paths, secrets, and logging.
+- [CLI](cli.md): explicit migration and user-provisioning commands.
 - [Architectural Decision Records](adr/README.md): significant decisions made
   with their implementation.
 - [Contributing](../CONTRIBUTING.md): development workflow and repository rules.

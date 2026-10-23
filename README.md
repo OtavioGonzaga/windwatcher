@@ -20,6 +20,14 @@ can embed directly or run through an official self-hosted server.
 
 The packages are independently versioned.
 
+## Operator commands
+
+```bash
+windwatcher migrate
+windwatcher user create --username otavio
+windwatcher config check
+```
+
 ## Development
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development requirements, workflow,

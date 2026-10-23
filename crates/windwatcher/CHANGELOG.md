@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `CreateLocalUser`, a trusted local-user provisioning use case independent of
+  self-registration policy.
+
 - Optional SQLx-backed SQLite persistence through `SqliteStorage`, including
   explicit embedded migrations and `IdentityStore`/`SessionStore` implementations.
 - SQLite storage contract and concurrency coverage for identity creation and

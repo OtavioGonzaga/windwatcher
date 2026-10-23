@@ -1,7 +1,7 @@
 # Local credentials and authentication
 
 All local identity behavior lives in the reusable `windwatcher` library.
-`RegisterLocalUser`, `AuthenticateLocalUser`, `DisableUser`, and `EnableUser`
+`RegisterLocalUser`, `CreateLocalUser`, `AuthenticateLocalUser`, `DisableUser`, and `EnableUser`
 are application services wired to caller-provided ports. Authentication returns
 only `User`; it does not establish a session or issue tokens. Hosts compose a
 successful `AuthenticateLocalUser` call with `CreateSession` when they need a
@@ -50,6 +50,10 @@ username validation, hashing, or storage. It does not prohibit future trusted
 operator creation. `Open` validates input, creates a UUIDv7 identity with the
 supplied timestamp, hashes the exact secret, and invokes atomic storage creation.
 Username conflicts map to `UsernameTaken`; operational errors remain distinct.
+
+`CreateLocalUser` is a separate trusted operator provisioning use case. It shares
+the same validation, hashing, and atomic persistence behavior, but deliberately
+does not inspect `RegistrationPolicy` and never creates a session.
 
 ## Storage adapter obligations
 
