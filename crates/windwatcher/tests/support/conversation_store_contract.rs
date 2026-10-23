@@ -15,6 +15,7 @@ pub async fn run<S: ConversationStore>(
 ) {
     let now = OffsetDateTime::UNIX_EPOCH;
     let later = now + time::Duration::seconds(1);
+    let later_again = later + time::Duration::seconds(1);
     let invalid_direct = Conversation::new_direct(ConversationId::new(), now);
     assert!(matches!(
         store.create_group(&invalid_direct, owner, &[]).await,
@@ -104,6 +105,22 @@ pub async fn run<S: ConversationStore>(
         MembershipRole::Direct
     );
 
+    let owner_only = Conversation::new_group(
+        ConversationId::new(),
+        GroupTitle::new("owner only").unwrap(),
+        now,
+    );
+    store.create_group(&owner_only, owner, &[]).await.unwrap();
+    assert_eq!(
+        store
+            .find_member(owner_only.id(), owner)
+            .await
+            .unwrap()
+            .unwrap()
+            .role(),
+        MembershipRole::Group(GroupRole::Owner)
+    );
+
     let group = Conversation::new_group(
         ConversationId::new(),
         GroupTitle::new("group").unwrap(),
@@ -144,6 +161,74 @@ pub async fn run<S: ConversationStore>(
             .await,
         Err(ConversationStoreError::InvalidGroupRole)
     ));
+    assert_eq!(
+        store
+            .remove_group_member(group.id(), admin, owner, later)
+            .await
+            .unwrap(),
+        ChangeStoreOutcome::Unchanged
+    );
+    assert_eq!(
+        store
+            .set_group_member_role(group.id(), admin, owner, GroupRole::Member, later)
+            .await
+            .unwrap(),
+        ChangeStoreOutcome::Unchanged
+    );
+    assert_eq!(
+        store
+            .find_member(group.id(), owner)
+            .await
+            .unwrap()
+            .unwrap()
+            .role(),
+        MembershipRole::Group(GroupRole::Owner)
+    );
+    assert_eq!(
+        store
+            .set_group_member_role(group.id(), owner, admin, GroupRole::Member, later)
+            .await
+            .unwrap(),
+        ChangeStoreOutcome::Changed
+    );
+    assert_eq!(
+        store
+            .find_member(group.id(), admin)
+            .await
+            .unwrap()
+            .unwrap()
+            .role(),
+        MembershipRole::Group(GroupRole::Member)
+    );
+    let after_demotion = store
+        .find_conversation(group.id())
+        .await
+        .unwrap()
+        .unwrap()
+        .updated_at();
+    assert_eq!(
+        store
+            .set_group_member_role(group.id(), owner, admin, GroupRole::Member, later_again)
+            .await
+            .unwrap(),
+        ChangeStoreOutcome::Unchanged
+    );
+    assert_eq!(
+        store
+            .find_conversation(group.id())
+            .await
+            .unwrap()
+            .unwrap()
+            .updated_at(),
+        after_demotion
+    );
+    assert_eq!(
+        store
+            .set_group_member_role(group.id(), owner, admin, GroupRole::Admin, later_again)
+            .await
+            .unwrap(),
+        ChangeStoreOutcome::Changed
+    );
     assert_eq!(
         store
             .add_group_member(group.id(), member, outsider, now)
@@ -188,7 +273,7 @@ pub async fn run<S: ConversationStore>(
     let renamed = GroupTitle::new("renamed group").unwrap();
     assert_eq!(
         store
-            .rename_group(group.id(), admin, &renamed, later)
+            .rename_group(group.id(), owner, &renamed, later)
             .await
             .unwrap(),
         ChangeStoreOutcome::Changed
@@ -202,7 +287,7 @@ pub async fn run<S: ConversationStore>(
     assert!(after_rename > before_rename);
     assert_eq!(
         store
-            .rename_group(group.id(), admin, &renamed, later)
+            .rename_group(group.id(), owner, &renamed, later)
             .await
             .unwrap(),
         ChangeStoreOutcome::Unchanged
@@ -218,7 +303,7 @@ pub async fn run<S: ConversationStore>(
     );
     assert_eq!(
         store
-            .set_group_member_role(group.id(), admin, member, GroupRole::Admin, now)
+            .set_group_member_role(group.id(), owner, member, GroupRole::Admin, now)
             .await
             .unwrap(),
         ChangeStoreOutcome::Changed
