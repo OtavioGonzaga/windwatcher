@@ -37,8 +37,10 @@ do not resolve JWT or session policy.
 
 When environment variables configure either JWT secret source, that source replaces
 the complete TOML secret source. Setting both `WINDWATCHER__AUTH__JWT__SECRET` and
-`WINDWATCHER__AUTH__JWT__SECRET_FILE` is an error. Direct environment-secret values
-are read as exact UTF-8 text rather than Figment's structured-value syntax.
+`WINDWATCHER__AUTH__JWT__SECRET_FILE` is a semantic JWT error reported by `config
+check` and future runtime commands, but does not block migration or provisioning.
+Direct environment-secret values are read as exact UTF-8 text rather than Figment's
+structured-value syntax.
 
 ## Logging
 

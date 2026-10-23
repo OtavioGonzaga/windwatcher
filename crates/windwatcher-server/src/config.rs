@@ -90,9 +90,9 @@ pub struct RawJwt {
     pub secret_file: Option<PathBuf>,
 }
 
-enum EnvJwtSource {
-    Value(String),
-    File(PathBuf),
+struct EnvJwtOverride {
+    secret: Option<String>,
+    secret_file: Option<PathBuf>,
 }
 impl fmt::Debug for RawJwt {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -147,17 +147,9 @@ pub fn load(paths: &ResolvedPaths, explicit: Option<PathBuf>) -> Result<RawConfi
         )
         .extract()
         .map_err(|error| AppError::Config(error.to_string()))?;
-    if let Some(source) = environment_jwt_source()? {
-        match source {
-            EnvJwtSource::Value(secret) => {
-                raw.auth.jwt.secret = Some(secret);
-                raw.auth.jwt.secret_file = None;
-            }
-            EnvJwtSource::File(path) => {
-                raw.auth.jwt.secret = None;
-                raw.auth.jwt.secret_file = Some(path);
-            }
-        }
+    if let Some(override_) = environment_jwt_override()? {
+        raw.auth.jwt.secret = override_.secret;
+        raw.auth.jwt.secret_file = override_.secret_file;
     }
     Ok(raw)
 }
@@ -192,15 +184,18 @@ fn discover_config_file(path: &Path, explicit: bool) -> Result<Option<PathBuf>, 
     }
 }
 
-fn environment_jwt_source() -> Result<Option<EnvJwtSource>, AppError> {
+fn environment_jwt_override() -> Result<Option<EnvJwtOverride>, AppError> {
     let secret = environment_utf8("WINDWATCHER__AUTH__JWT__SECRET")?;
     let secret_file = environment_utf8("WINDWATCHER__AUTH__JWT__SECRET_FILE")?;
     match (secret, secret_file) {
-        (Some(_), Some(_)) => Err(AppError::Config(
-            "WINDWATCHER__AUTH__JWT__SECRET and WINDWATCHER__AUTH__JWT__SECRET_FILE are mutually exclusive".into(),
-        )),
-        (Some(secret), None) => Ok(Some(EnvJwtSource::Value(secret))),
-        (None, Some(path)) => Ok(Some(EnvJwtSource::File(PathBuf::from(path)))),
+        (Some(secret), secret_file) => Ok(Some(EnvJwtOverride {
+            secret: Some(secret),
+            secret_file: secret_file.map(PathBuf::from),
+        })),
+        (None, Some(path)) => Ok(Some(EnvJwtOverride {
+            secret: None,
+            secret_file: Some(PathBuf::from(path)),
+        })),
         (None, None) => Ok(None),
     }
 }

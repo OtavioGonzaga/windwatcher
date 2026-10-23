@@ -275,6 +275,18 @@ fn conflicting_environment_jwt_sources_are_rejected() {
             "WINDWATCHER__AUTH__JWT__SECRET_FILE",
             directory.path().join("secret"),
         )
+        .arg("migrate")
+        .assert()
+        .success();
+    command(&config)
+        .env(
+            "WINDWATCHER__AUTH__JWT__SECRET",
+            "abcdefghijklmnopqrstuvwxyz123456",
+        )
+        .env(
+            "WINDWATCHER__AUTH__JWT__SECRET_FILE",
+            directory.path().join("secret"),
+        )
         .args(["config", "check"])
         .assert()
         .failure()

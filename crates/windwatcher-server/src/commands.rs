@@ -151,10 +151,10 @@ fn read_password_file(path: &Path) -> Result<SensitiveString, AppError> {
 }
 fn read_password(reader: &mut impl Read) -> Result<SensitiveString, AppError> {
     let mut bytes = Vec::with_capacity(1025);
-    reader
-        .take(1025)
-        .read_to_end(&mut bytes)
-        .map_err(|error| AppError::PasswordInput(error.to_string()))?;
+    if let Err(error) = reader.take(1025).read_to_end(&mut bytes) {
+        bytes.zeroize();
+        return Err(AppError::PasswordInput(error.to_string()));
+    }
     if bytes.len() > 1024 {
         bytes.zeroize();
         return Err(AppError::PasswordInput(
