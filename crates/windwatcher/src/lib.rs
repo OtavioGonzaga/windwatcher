@@ -8,6 +8,7 @@ mod identity;
 mod identity_store;
 mod local_users;
 mod password;
+mod session;
 
 pub use authentication::{AuthenticateLocalUser, AuthenticateLocalUserError};
 pub use identity_store::{IdentityStore, IdentityStoreError, LocalAuthentication};
@@ -19,6 +20,15 @@ pub use password::{
     Argon2idPasswordHasher, PasswordHash, PasswordHashError, PasswordHasher, PasswordPolicyError,
     SecretPassword,
 };
+pub use session::{
+    AccessToken, AccessTokenClaims, AccessTokenCodec, AccessTokenError, CreateSession,
+    CreateSessionError, OsRefreshTokenProvider, RefreshRotationResult, RefreshSession,
+    RefreshSessionError, RefreshToken, RefreshTokenError, RefreshTokenHash, RefreshTokenProvider,
+    RevokeSession, RevokeSessionError, Session, SessionError, SessionGrant, SessionPolicy,
+    SessionPolicyError, SessionStore, SessionStoreError,
+};
+#[cfg(feature = "jwt-hs256")]
+pub use session::{Hs256JwtAccessTokenCodec, Hs256SigningSecret, Hs256SigningSecretError};
 
 pub use id::{ConversationId, IdentifierError, MessageId, SessionId, UserId};
 pub use identity::{User, Username, UsernameError};

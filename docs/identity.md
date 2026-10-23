@@ -30,8 +30,9 @@ separate values persisted alongside the user through an atomic storage port.
 `LocalAuthentication` transfers the user and credential only for authentication;
 ordinary user lookups do not expose credentials.
 
-`DisableUser` and `EnableUser` load and persist these domain transitions, skipping
-writes for no-ops. They are trusted operator capabilities: callers establish
-trust before invoking them. There are no global administrator roles. See
-[local authentication](authentication.md) for registration, password policy,
-and persistence contracts. Sessions and transport contracts are not implemented.
+`DisableUser` and `EnableUser` load and persist these domain transitions. Disabling
+also revokes every session, including on retries for an already-disabled user.
+Re-enabling does not restore revoked sessions. They are trusted operator
+capabilities: callers establish trust before invoking them. There are no global
+administrator roles. See [local authentication](authentication.md) and
+[sessions and tokens](sessions.md) for persistence contracts.

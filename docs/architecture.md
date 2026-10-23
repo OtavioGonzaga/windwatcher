@@ -37,10 +37,12 @@ The library must not depend on server-specific concerns.
 ## Current state
 
 The reusable `windwatcher` crate contains UUIDv7 identifiers, the user identity
-model, and local identity application services. Registration, authentication,
-and persisted enable/disable operations depend on the `IdentityStore` and
-`PasswordHasher` ports. The Argon2id adapter implements the password port;
-concrete persistence is supplied by the embedding application.
+model, local identity application services, and session lifecycle use cases.
+Registration, authentication, and user state depend on `IdentityStore` and
+`PasswordHasher`; session creation, refresh, and revocation depend on
+`SessionStore`, `RefreshTokenProvider`, and `AccessTokenCodec`. The optional
+HS256 JWT adapter implements the access-token port, but JWT is not required by
+embedding applications. Concrete persistence is supplied by the embedding app.
 
 Ports return native Rust `Send` futures and impose no executor. The initial
 Argon2id adapter performs CPU-bound work on the polling thread; hosts can wrap
