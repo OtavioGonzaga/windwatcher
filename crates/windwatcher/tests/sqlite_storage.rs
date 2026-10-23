@@ -200,10 +200,11 @@ async fn conversation_store_contract_preserves_lifecycle_semantics() {
 
 #[tokio::test]
 async fn concurrent_direct_creation_converges_for_peer_and_self_pairs() {
-    let (_directory, storage) = store().await;
+    let (directory, storage) = store().await;
     let storage = Arc::new(storage);
     let alice = persisted_user(&storage, "alice").await;
     let bob = persisted_user(&storage, "bob").await;
+    let mut direct_ids = Vec::new();
     for (first, second) in [(alice.id(), bob.id()), (alice.id(), alice.id())] {
         let barrier = Arc::new(tokio::sync::Barrier::new(2));
         let tasks = [(), ()].map(|_| {
@@ -222,7 +223,29 @@ async fn concurrent_direct_creation_converges_for_peer_and_self_pairs() {
             StartDirectStoreOutcome::Created(conversation)
             | StartDirectStoreOutcome::Existing(conversation) => conversation.id(),
         };
-        assert_eq!(id(left.await.unwrap()), id(right.await.unwrap()));
+        let conversation_id = id(left.await.unwrap());
+        assert_eq!(conversation_id, id(right.await.unwrap()));
+        direct_ids.push(conversation_id);
+    }
+    let url = format!(
+        "sqlite://{}",
+        directory.path().join("windwatcher.db").display()
+    );
+    let inspector = sqlx::SqlitePool::connect(&url).await.unwrap();
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM conversations WHERE kind = 'direct'")
+        .fetch_one(&inspector)
+        .await
+        .unwrap();
+    assert_eq!(count, 2);
+    for (id, member_count) in [(direct_ids[0], 2_i64), (direct_ids[1], 1_i64)] {
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM conversation_members WHERE conversation_id = ?",
+        )
+        .bind(id.as_uuid().into_bytes().to_vec())
+        .fetch_one(&inspector)
+        .await
+        .unwrap();
+        assert_eq!(count, member_count);
     }
 }
 
@@ -404,6 +427,123 @@ async fn group_creation_and_ownership_transfer_roll_back_on_persistence_failure(
             .unwrap()
             .role(),
         windwatcher::MembershipRole::Group(GroupRole::Member)
+    );
+}
+
+#[tokio::test]
+async fn group_management_permission_matrix_and_owner_only_lifecycle_hold() {
+    let (_directory, storage) = store().await;
+    let owner = persisted_user(&storage, "matrix_owner").await;
+    let admin = persisted_user(&storage, "matrix_admin").await;
+    let member = persisted_user(&storage, "matrix_member").await;
+    let target = persisted_user(&storage, "matrix_target").await;
+    let group = CreateGroupConversation::new(&storage, &storage)
+        .execute(
+            owner.id(),
+            "matrix",
+            &[admin.id(), member.id(), target.id()],
+            timestamp(600),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        SetGroupMemberRole::new(&storage)
+            .execute(
+                owner.id(),
+                group.id(),
+                admin.id(),
+                GroupRole::Admin,
+                timestamp(601)
+            )
+            .await
+            .unwrap(),
+        ChangeStoreOutcome::Changed
+    );
+    assert_eq!(
+        SetGroupMemberRole::new(&storage)
+            .execute(
+                admin.id(),
+                group.id(),
+                target.id(),
+                GroupRole::Admin,
+                timestamp(602)
+            )
+            .await
+            .unwrap(),
+        ChangeStoreOutcome::Changed
+    );
+    let before = storage
+        .find_conversation(group.id())
+        .await
+        .unwrap()
+        .unwrap()
+        .updated_at();
+    assert_eq!(
+        SetGroupMemberRole::new(&storage)
+            .execute(
+                admin.id(),
+                group.id(),
+                target.id(),
+                GroupRole::Admin,
+                timestamp(603)
+            )
+            .await
+            .unwrap(),
+        ChangeStoreOutcome::Unchanged
+    );
+    assert_eq!(
+        storage
+            .find_conversation(group.id())
+            .await
+            .unwrap()
+            .unwrap()
+            .updated_at(),
+        before
+    );
+    assert_eq!(
+        windwatcher::RemoveGroupMember::new(&storage)
+            .execute(admin.id(), group.id(), target.id(), timestamp(604))
+            .await
+            .unwrap(),
+        ChangeStoreOutcome::Changed
+    );
+    assert!(matches!(
+        windwatcher::RemoveGroupMember::new(&storage)
+            .execute(member.id(), group.id(), admin.id(), timestamp(605))
+            .await,
+        Err(ConversationOperationError::InsufficientPermissions)
+    ));
+    assert_eq!(
+        windwatcher::RemoveGroupMember::new(&storage)
+            .execute(owner.id(), group.id(), admin.id(), timestamp(605))
+            .await
+            .unwrap(),
+        ChangeStoreOutcome::Changed
+    );
+    assert!(matches!(
+        LeaveGroupConversation::new(&storage)
+            .execute(owner.id(), group.id(), timestamp(606))
+            .await,
+        Err(ConversationOperationError::OwnershipTransferRequired)
+    ));
+    assert_eq!(
+        LeaveGroupConversation::new(&storage)
+            .execute(member.id(), group.id(), timestamp(607))
+            .await
+            .unwrap(),
+        LeaveStoreOutcome::Left
+    );
+
+    let owner_only = CreateGroupConversation::new(&storage, &storage)
+        .execute(owner.id(), "owner only", &[], timestamp(608))
+        .await
+        .unwrap();
+    assert_eq!(
+        LeaveGroupConversation::new(&storage)
+            .execute(owner.id(), owner_only.id(), timestamp(609))
+            .await
+            .unwrap(),
+        LeaveStoreOutcome::ConversationDeleted
     );
 }
 
