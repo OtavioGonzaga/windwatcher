@@ -18,6 +18,11 @@ file and requires it to exist; it does not change the selected mode's data path.
 does not load `.env` automatically. Relative explicit filesystem paths are relative
 to the process working directory.
 
+Malformed values, including invalid duration syntax, invalidate every command.
+Semantic authentication failures such as a missing JWT secret or invalid session
+policy are resolved only by `config check` and future runtime commands, so they do
+not block migration or trusted user provisioning.
+
 ## Storage, auth, and secrets
 
 SQLite is the default storage backend; `[storage.sqlite]` optionally sets `url`,
@@ -35,3 +40,4 @@ do not resolve JWT or session policy.
 `logging.filter` accepts `tracing_subscriber::EnvFilter` syntax and `logging.format`
 is `compact`, `pretty`, or `json`. Logs and warnings go to stderr; command results
 go to stdout. `--log-filter` and `--log-format` override the configured values.
+Configuration debug output redacts direct JWT secrets.

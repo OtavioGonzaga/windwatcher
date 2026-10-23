@@ -78,7 +78,12 @@ pub async fn create_user(storage: &Storage, args: &CreateUserArgs) -> Result<(),
     let user = CreateLocalUser::new(storage, &hasher)
         .execute(&args.username, &password, OffsetDateTime::now_utc())
         .await
-        .map_err(AppError::UserCreation)?;
+        .map_err(|error| match error {
+            CreateLocalUserError::UsernameTaken => AppError::UsernameTaken {
+                username: args.username.clone(),
+            },
+            other => AppError::UserCreation(other),
+        })?;
     println!(
         "Created user {:?} ({})",
         user.username().as_str(),
@@ -147,7 +152,29 @@ fn read_password(reader: &mut impl Read) -> Result<String, AppError> {
         .map_err(|_| AppError::PasswordInput("password input must be valid UTF-8".into()))
 }
 
-#[allow(dead_code)]
-fn _map_user_error(error: CreateLocalUserError) -> AppError {
-    AppError::UserCreation(error)
+#[cfg(test)]
+mod tests {
+    use std::io::Cursor;
+
+    use super::read_password;
+
+    #[test]
+    fn password_input_preserves_exact_utf8_bytes() {
+        assert_eq!(
+            read_password(&mut Cursor::new(" leading\ntrailing ")).unwrap(),
+            " leading\ntrailing "
+        );
+        assert_eq!(
+            read_password(&mut Cursor::new("å".repeat(512)))
+                .unwrap()
+                .len(),
+            1024
+        );
+    }
+
+    #[test]
+    fn password_input_rejects_invalid_utf8_and_oversized_values() {
+        assert!(read_password(&mut Cursor::new(vec![0xff])).is_err());
+        assert!(read_password(&mut Cursor::new(vec![b'x'; 1025])).is_err());
+    }
 }

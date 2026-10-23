@@ -107,6 +107,28 @@ fn argument_password_warns_without_echoing_the_secret() {
 }
 
 #[test]
+fn password_file_preserves_exact_input_and_duplicate_user_is_operator_friendly() {
+    let directory = TempDir::new().unwrap();
+    let config = config(&directory);
+    let password_file = directory.path().join("password");
+    fs::write(&password_file, " leading password\n").unwrap();
+    command(&config).arg("migrate").assert().success();
+    command(&config)
+        .args(["user", "create", "--username", "otavio", "--password-file"])
+        .arg(&password_file)
+        .assert()
+        .success();
+    command(&config)
+        .args(["user", "create", "--username", "otavio", "--password-file"])
+        .arg(&password_file)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "username \"otavio\" is already taken",
+        ));
+}
+
+#[test]
 fn logging_cli_and_environment_overrides_take_precedence_over_toml() {
     let directory = TempDir::new().unwrap();
     let config = complete_config(&directory, "[");
@@ -131,4 +153,67 @@ fn unknown_configuration_fields_are_rejected() {
         .assert()
         .failure()
         .stderr(predicate::str::contains("unknown field"));
+}
+
+#[test]
+fn explicit_missing_config_and_malformed_durations_fail_every_command() {
+    let directory = TempDir::new().unwrap();
+    command(&directory.path().join("missing.toml"))
+        .arg("migrate")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("does not exist"));
+
+    let path = directory.path().join("invalid-duration.toml");
+    fs::write(&path, "[auth.session]\naccess_token_ttl = \"banana\"\n").unwrap();
+    command(&path)
+        .arg("migrate")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("access_token_ttl"));
+}
+
+#[test]
+fn missing_default_config_allows_environment_only_configuration() {
+    let directory = TempDir::new().unwrap();
+    let mut command = Command::cargo_bin("windwatcher").unwrap();
+    command
+        .env("XDG_CONFIG_HOME", directory.path().join("config"))
+        .env("XDG_DATA_HOME", directory.path().join("data"))
+        .env(
+            "WINDWATCHER__STORAGE__SQLITE__URL",
+            directory.path().join("windwatcher.db"),
+        )
+        .env(
+            "WINDWATCHER__AUTH__JWT__SECRET",
+            "12345678901234567890123456789012",
+        )
+        .args(["config", "check"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Configuration valid."));
+}
+
+#[test]
+fn session_policy_semantics_do_not_block_migration() {
+    let directory = TempDir::new().unwrap();
+    let path = directory.path().join("semantic-session.toml");
+    fs::write(
+        &path,
+        format!(
+            "[storage.sqlite]\nurl = {:?}\n\n[auth.session]\naccess_token_ttl = \"500ms\"\n",
+            directory
+                .path()
+                .join("windwatcher.db")
+                .display()
+                .to_string()
+        ),
+    )
+    .unwrap();
+    command(&path).arg("migrate").assert().success();
+    command(&path)
+        .args(["config", "check"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("at least one second"));
 }

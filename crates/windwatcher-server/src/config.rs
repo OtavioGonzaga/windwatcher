@@ -1,11 +1,14 @@
-use std::{fs, path::PathBuf, time::Duration};
+use std::{fmt, fs, path::PathBuf, time::Duration};
 
 use figment::{
     Figment,
     providers::{Env, Format, Serialized, Toml},
 };
 use serde::{Deserialize, Deserializer, Serialize};
-use windwatcher::{Hs256SigningSecret, RegistrationPolicy, SessionPolicy, SqliteStorageOptions};
+use windwatcher::{
+    Hs256JwtAccessTokenCodec, Hs256SigningSecret, RegistrationPolicy, SessionPolicy,
+    SqliteStorageOptions,
+};
 
 use crate::{cli::LogFormat, error::AppError, paths::ResolvedPaths};
 
@@ -75,12 +78,22 @@ impl Default for RawSession {
         }
     }
 }
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct RawJwt {
     pub issuer: String,
     pub secret: Option<String>,
     pub secret_file: Option<PathBuf>,
+}
+impl fmt::Debug for RawJwt {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("RawJwt")
+            .field("issuer", &self.issuer)
+            .field("secret", &self.secret.as_ref().map(|_| "[REDACTED]"))
+            .field("secret_file", &self.secret_file)
+            .finish()
+    }
 }
 impl Default for RawJwt {
     fn default() -> Self {
@@ -179,7 +192,7 @@ pub fn resolve_session(raw: &RawConfig) -> Result<SessionPolicy, AppError> {
         .map_err(|_| AppError::Config("session duration is out of range".into()))?;
     SessionPolicy::new(access, session).map_err(|error| AppError::Config(error.to_string()))
 }
-pub fn resolve_jwt(raw: &RawConfig) -> Result<(), AppError> {
+pub fn resolve_jwt(raw: &RawConfig) -> Result<Hs256JwtAccessTokenCodec, AppError> {
     if raw.auth.jwt.issuer.is_empty() {
         return Err(AppError::Config("auth.jwt.issuer must not be empty".into()));
     }
@@ -198,13 +211,91 @@ pub fn resolve_jwt(raw: &RawConfig) -> Result<(), AppError> {
         })?,
         (None, None) => return Err(AppError::Config("JWT signing secret is required".into())),
     };
-    Hs256SigningSecret::new(bytes).map_err(|error| AppError::Config(error.to_string()))?;
-    Ok(())
+    let secret =
+        Hs256SigningSecret::new(bytes).map_err(|error| AppError::Config(error.to_string()))?;
+    Ok(Hs256JwtAccessTokenCodec::new(
+        secret,
+        raw.auth.jwt.issuer.clone(),
+    ))
 }
 
 pub fn resolve_full(raw: &RawConfig, paths: &ResolvedPaths) -> Result<(), AppError> {
     resolve_sqlite(raw, paths)?;
     resolve_registration(raw)?;
     resolve_session(raw)?;
-    resolve_jwt(raw)
+    let _jwt = resolve_jwt(raw)?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use super::*;
+    use windwatcher::{AccessTokenClaims, AccessTokenCodec, AccessTokenError, SessionId, UserId};
+
+    #[test]
+    fn jwt_secret_sources_are_exclusive_and_missing_secrets_are_rejected() {
+        let raw = RawConfig::default();
+        assert!(resolve_jwt(&raw).is_err());
+
+        let mut raw = RawConfig::default();
+        raw.auth.jwt.secret = Some("x".repeat(32));
+        raw.auth.jwt.secret_file = Some(PathBuf::from("unused"));
+        assert!(resolve_jwt(&raw).is_err());
+
+        let mut raw = RawConfig::default();
+        raw.auth.jwt.secret = Some("short".into());
+        assert!(resolve_jwt(&raw).is_err());
+
+        let mut raw = RawConfig::default();
+        raw.auth.jwt.secret_file = Some(PathBuf::from("missing-jwt-secret"));
+        assert!(resolve_jwt(&raw).is_err());
+    }
+
+    #[test]
+    fn jwt_secret_files_preserve_exact_bytes() {
+        let directory = tempfile::TempDir::new().unwrap();
+        let path = directory.path().join("jwt.key");
+        fs::write(&path, format!("{}\n", "x".repeat(32))).unwrap();
+        let mut raw = RawConfig::default();
+        raw.auth.jwt.secret_file = Some(path);
+        let codec = resolve_jwt(&raw).unwrap();
+        let now = time::OffsetDateTime::from_unix_timestamp(1).unwrap();
+        let claims = AccessTokenClaims::new(
+            UserId::new(),
+            SessionId::new(),
+            now,
+            now + time::Duration::seconds(1),
+        )
+        .unwrap();
+        let token = codec.issue(&claims).unwrap();
+        let without_newline = Hs256JwtAccessTokenCodec::new(
+            Hs256SigningSecret::new(vec![b'x'; 32]).unwrap(),
+            "windwatcher".into(),
+        );
+        assert!(matches!(
+            without_newline.verify(&token, now),
+            Err(AccessTokenError::InvalidToken)
+        ));
+    }
+
+    #[test]
+    fn jwt_debug_output_never_contains_a_direct_secret() {
+        let mut raw = RawConfig::default();
+        raw.auth.jwt.secret = Some("super-secret-value".into());
+        assert!(!format!("{raw:?}").contains("super-secret-value"));
+    }
+
+    #[test]
+    fn semantic_auth_errors_are_separate_from_storage_resolution() {
+        let mut raw = RawConfig::default();
+        raw.auth.session.access_token_ttl = DurationValue("500ms".into());
+        let paths = ResolvedPaths {
+            config_file: PathBuf::from("unused"),
+            data_dir: PathBuf::from("unused"),
+        };
+        assert!(resolve_sqlite(&raw, &paths).is_ok());
+        assert!(resolve_session(&raw).is_err());
+    }
 }

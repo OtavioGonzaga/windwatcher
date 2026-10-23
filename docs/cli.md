@@ -17,3 +17,6 @@ creates only a user and local credential, not a session or tokens.
 `--password-stdin` or `--password-file`; their exact UTF-8 bytes are preserved and
 bounded to 1024 bytes. `--password` is supported but emits a warning because
 process arguments can expose it. Password sources are mutually exclusive.
+
+Duplicate usernames return a concise operator error. Passwords, hashes, tokens,
+and JWT secrets are never included in command output or tracing fields.

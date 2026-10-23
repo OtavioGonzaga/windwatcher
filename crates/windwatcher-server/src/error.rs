@@ -20,6 +20,8 @@ pub enum AppError {
     Migration(#[source] Box<dyn Error + Send + Sync>),
     #[error("database schema is not current")]
     SchemaPending,
+    #[error("username {username:?} is already taken")]
+    UsernameTaken { username: String },
     #[error("password input error: {0}")]
     PasswordInput(String),
     #[error("user creation failed: {0}")]
