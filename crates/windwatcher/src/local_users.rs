@@ -38,6 +38,79 @@ pub enum RegisterLocalUserError {
     Storage(#[source] IdentityStoreError),
 }
 
+/// Failures specific to trusted local-user provisioning.
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum CreateLocalUserError {
+    /// Username validation failed.
+    #[error("invalid username")]
+    InvalidUsername(#[source] UsernameError),
+    /// The password does not satisfy new-password policy.
+    #[error("invalid new password")]
+    InvalidPassword(#[source] PasswordPolicyError),
+    /// Atomic creation found a conflicting canonical username.
+    #[error("username is already taken")]
+    UsernameTaken,
+    /// Password hashing failed before persistence.
+    #[error("password hashing failed")]
+    PasswordHashing(#[source] PasswordHashError),
+    /// An operational persistence failure occurred.
+    #[error("user creation storage failed")]
+    Storage(#[source] IdentityStoreError),
+}
+
+async fn create_local_user<S: IdentityStore, H: PasswordHasher>(
+    store: &S,
+    hasher: &H,
+    username: &str,
+    password: &SecretPassword,
+    now: OffsetDateTime,
+) -> Result<User, CreateLocalUserError> {
+    let username = username
+        .parse()
+        .map_err(CreateLocalUserError::InvalidUsername)?;
+    password
+        .validate_new_password()
+        .map_err(CreateLocalUserError::InvalidPassword)?;
+    let user = User::new(UserId::new(), username, now);
+    let hash = hasher
+        .hash(password)
+        .await
+        .map_err(CreateLocalUserError::PasswordHashing)?;
+    store
+        .create_local_user(&user, &hash)
+        .await
+        .map_err(|error| match error {
+            IdentityStoreError::UsernameConflict => CreateLocalUserError::UsernameTaken,
+            other => CreateLocalUserError::Storage(other),
+        })?;
+    Ok(user)
+}
+
+/// Trusted operator capability to provision a local user; it does not consult
+/// self-registration policy or create a session.
+pub struct CreateLocalUser<'a, S, H> {
+    store: &'a S,
+    hasher: &'a H,
+}
+
+impl<'a, S: IdentityStore, H: PasswordHasher> CreateLocalUser<'a, S, H> {
+    /// Wires persistence and password hashing for trusted provisioning.
+    pub fn new(store: &'a S, hasher: &'a H) -> Self {
+        Self { store, hasher }
+    }
+
+    /// Creates an enabled user at the supplied instant without creating a session.
+    pub async fn execute(
+        &self,
+        username: &str,
+        password: &SecretPassword,
+        now: OffsetDateTime,
+    ) -> Result<User, CreateLocalUserError> {
+        create_local_user(self.store, self.hasher, username, password, now).await
+    }
+}
+
 /// Policy-controlled self-registration using atomic identity persistence.
 pub struct RegisterLocalUser<'a, S, H> {
     store: &'a S,
@@ -65,18 +138,15 @@ impl<'a, S: IdentityStore, H: PasswordHasher> RegisterLocalUser<'a, S, H> {
         if self.policy == RegistrationPolicy::Closed {
             return Err(RegistrationClosed);
         }
-        let username = username.parse().map_err(InvalidUsername)?;
-        password.validate_new_password().map_err(InvalidPassword)?;
-        let user = User::new(UserId::new(), username, now);
-        let hash = self.hasher.hash(password).await.map_err(PasswordHashing)?;
-        self.store
-            .create_local_user(&user, &hash)
+        create_local_user(self.store, self.hasher, username, password, now)
             .await
-            .map_err(|e| match e {
-                IdentityStoreError::UsernameConflict => UsernameTaken,
-                other => Storage(other),
-            })?;
-        Ok(user)
+            .map_err(|error| match error {
+                CreateLocalUserError::InvalidUsername(error) => InvalidUsername(error),
+                CreateLocalUserError::InvalidPassword(error) => InvalidPassword(error),
+                CreateLocalUserError::UsernameTaken => UsernameTaken,
+                CreateLocalUserError::PasswordHashing(error) => PasswordHashing(error),
+                CreateLocalUserError::Storage(error) => Storage(error),
+            })
     }
 }
 

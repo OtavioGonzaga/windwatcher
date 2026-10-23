@@ -22,6 +22,10 @@ windwatcher-server
 
 The library must not depend on server-specific concerns.
 
+The server is the application composition root: CLI parsing, runtime paths,
+configuration, secret resolution, tracing, adapter selection, and operator
+workflows belong there rather than in the reusable crate.
+
 ## Architectural principles
 
 - Design library-first.

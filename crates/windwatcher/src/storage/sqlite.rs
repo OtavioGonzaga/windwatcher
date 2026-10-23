@@ -55,6 +55,44 @@ impl SqliteStorageOptions {
         self.busy_timeout = busy_timeout;
         self
     }
+
+    /// Validates URL/path and pool settings without opening a database connection.
+    pub fn validate(&self) -> Result<(), SqliteStorageError> {
+        self.connect_options().map(|_| ())
+    }
+
+    fn connect_options(&self) -> Result<(SqliteConnectOptions, bool), SqliteStorageError> {
+        if self.max_connections == 0 {
+            return Err(SqliteStorageError::Configuration(
+                "max_connections must be greater than zero".into(),
+            ));
+        }
+        if self.busy_timeout.is_zero() {
+            return Err(SqliteStorageError::Configuration(
+                "busy_timeout must be greater than zero".into(),
+            ));
+        }
+        let is_memory = matches!(self.database_url.as_str(), ":memory:" | "sqlite::memory:")
+            || self.database_url.contains("mode=memory");
+        let connect_options =
+            if self.database_url.starts_with("sqlite:") || self.database_url.starts_with("file:") {
+                SqliteConnectOptions::from_str(&self.database_url)
+                    .map_err(|error| SqliteStorageError::Configuration(error.to_string()))?
+            } else if self.database_url == ":memory:" {
+                SqliteConnectOptions::new().in_memory(true)
+            } else {
+                SqliteConnectOptions::new().filename(&self.database_url)
+            }
+            .create_if_missing(self.create_if_missing)
+            .foreign_keys(true)
+            .busy_timeout(self.busy_timeout);
+        let connect_options = if is_memory {
+            connect_options
+        } else {
+            connect_options.journal_mode(SqliteJournalMode::Wal)
+        };
+        Ok((connect_options, is_memory))
+    }
 }
 
 /// Failures while constructing or operating SQLite storage infrastructure.
@@ -118,38 +156,7 @@ pub struct SqliteStorage {
 impl SqliteStorage {
     /// Opens a pool and configures each connection, without applying migrations.
     pub async fn connect(options: SqliteStorageOptions) -> Result<Self, SqliteStorageError> {
-        if options.max_connections == 0 {
-            return Err(SqliteStorageError::Configuration(
-                "max_connections must be greater than zero".into(),
-            ));
-        }
-        if options.busy_timeout.is_zero() {
-            return Err(SqliteStorageError::Configuration(
-                "busy_timeout must be greater than zero".into(),
-            ));
-        }
-        let is_memory = matches!(
-            options.database_url.as_str(),
-            ":memory:" | "sqlite::memory:"
-        ) || options.database_url.contains("mode=memory");
-        let connect_options = if options.database_url.starts_with("sqlite:")
-            || options.database_url.starts_with("file:")
-        {
-            SqliteConnectOptions::from_str(&options.database_url)
-                .map_err(|error| SqliteStorageError::Configuration(error.to_string()))?
-        } else if options.database_url == ":memory:" {
-            SqliteConnectOptions::new().in_memory(true)
-        } else {
-            SqliteConnectOptions::new().filename(&options.database_url)
-        }
-        .create_if_missing(options.create_if_missing)
-        .foreign_keys(true)
-        .busy_timeout(options.busy_timeout);
-        let connect_options = if is_memory {
-            connect_options
-        } else {
-            connect_options.journal_mode(SqliteJournalMode::Wal)
-        };
+        let (connect_options, is_memory) = options.connect_options()?;
         let max_connections = if is_memory {
             1
         } else {
@@ -510,7 +517,7 @@ impl SessionStore for SqliteStorage {
 
 #[cfg(test)]
 mod tests {
-    use super::sqlite_primary_code;
+    use super::{SqliteStorageOptions, sqlite_primary_code};
 
     #[test]
     fn sqlite_primary_code_normalizes_extended_busy_and_locked_codes() {
@@ -518,5 +525,19 @@ mod tests {
         assert_eq!(sqlite_primary_code("517"), Some(5));
         assert_eq!(sqlite_primary_code("262"), Some(6));
         assert_eq!(sqlite_primary_code("not-a-code"), None);
+    }
+
+    #[test]
+    fn options_validate_without_opening_a_database() {
+        assert!(
+            SqliteStorageOptions::new("sqlite:missing.db")
+                .validate()
+                .is_ok()
+        );
+        assert!(
+            SqliteStorageOptions::new("sqlite://windwatcher.db?mode=invalid")
+                .validate()
+                .is_err()
+        );
     }
 }
