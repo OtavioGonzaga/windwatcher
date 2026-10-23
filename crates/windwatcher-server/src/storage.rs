@@ -1,8 +1,10 @@
 use time::OffsetDateTime;
 use windwatcher::{
-    IdentityStore, IdentityStoreError, LocalAuthentication, MigrationStatus, PasswordHash,
-    RefreshRotationResult, RefreshTokenHash, Session, SessionId, SessionStore, SessionStoreError,
-    SqliteStorage, SqliteStorageError, SqliteStorageOptions, User, UserId, Username,
+    AddMemberStoreOutcome, ChangeStoreOutcome, Conversation, ConversationId, ConversationMember,
+    ConversationStore, ConversationStoreError, GroupRole, IdentityStore, IdentityStoreError,
+    LeaveStoreOutcome, LocalAuthentication, MigrationStatus, PasswordHash, RefreshRotationResult,
+    RefreshTokenHash, Session, SessionId, SessionStore, SessionStoreError, SqliteStorage,
+    SqliteStorageError, SqliteStorageOptions, StartDirectStoreOutcome, User, UserId, Username,
 };
 
 #[derive(Clone, Debug)]
@@ -26,6 +28,111 @@ impl Storage {
     pub fn backend_name(&self) -> &'static str {
         match self {
             Self::Sqlite(_) => "SQLite",
+        }
+    }
+}
+impl ConversationStore for Storage {
+    async fn get_or_create_direct(
+        &self,
+        c: &Conversation,
+        a: UserId,
+        b: UserId,
+    ) -> Result<StartDirectStoreOutcome, ConversationStoreError> {
+        match self {
+            Self::Sqlite(s) => s.get_or_create_direct(c, a, b).await,
+        }
+    }
+    async fn create_group(
+        &self,
+        c: &Conversation,
+        owner: UserId,
+        members: &[UserId],
+    ) -> Result<(), ConversationStoreError> {
+        match self {
+            Self::Sqlite(s) => s.create_group(c, owner, members).await,
+        }
+    }
+    async fn find_conversation(
+        &self,
+        id: ConversationId,
+    ) -> Result<Option<Conversation>, ConversationStoreError> {
+        match self {
+            Self::Sqlite(s) => s.find_conversation(id).await,
+        }
+    }
+    async fn find_member(
+        &self,
+        c: ConversationId,
+        u: UserId,
+    ) -> Result<Option<ConversationMember>, ConversationStoreError> {
+        match self {
+            Self::Sqlite(s) => s.find_member(c, u).await,
+        }
+    }
+    async fn add_group_member(
+        &self,
+        c: ConversationId,
+        a: UserId,
+        m: UserId,
+        n: OffsetDateTime,
+    ) -> Result<AddMemberStoreOutcome, ConversationStoreError> {
+        match self {
+            Self::Sqlite(s) => s.add_group_member(c, a, m, n).await,
+        }
+    }
+    async fn remove_group_member(
+        &self,
+        c: ConversationId,
+        a: UserId,
+        m: UserId,
+        n: OffsetDateTime,
+    ) -> Result<ChangeStoreOutcome, ConversationStoreError> {
+        match self {
+            Self::Sqlite(s) => s.remove_group_member(c, a, m, n).await,
+        }
+    }
+    async fn set_group_member_role(
+        &self,
+        c: ConversationId,
+        a: UserId,
+        m: UserId,
+        r: GroupRole,
+        n: OffsetDateTime,
+    ) -> Result<ChangeStoreOutcome, ConversationStoreError> {
+        match self {
+            Self::Sqlite(s) => s.set_group_member_role(c, a, m, r, n).await,
+        }
+    }
+    async fn transfer_group_ownership(
+        &self,
+        c: ConversationId,
+        a: UserId,
+        t: UserId,
+        n: OffsetDateTime,
+    ) -> Result<ChangeStoreOutcome, ConversationStoreError> {
+        match self {
+            Self::Sqlite(s) => s.transfer_group_ownership(c, a, t, n).await,
+        }
+    }
+    async fn leave_group(
+        &self,
+        c: ConversationId,
+        a: UserId,
+        n: OffsetDateTime,
+    ) -> Result<LeaveStoreOutcome, ConversationStoreError> {
+        match self {
+            Self::Sqlite(s) => s.leave_group(c, a, n).await,
+        }
+    }
+    async fn rename_group(
+        &self,
+        c: ConversationId,
+        a: UserId,
+        t: &str,
+        n: OffsetDateTime,
+    ) -> Result<ChangeStoreOutcome, ConversationStoreError> {
+        match self {
+            Self::Sqlite(s) => s.rename_group(c, a, t, n).await,
         }
     }
 }

@@ -3,6 +3,9 @@
 //! Embeddable messaging engine for Rust applications.
 
 mod authentication;
+mod conversation;
+mod conversation_store;
+mod conversations;
 mod id;
 mod identity;
 mod identity_store;
@@ -13,6 +16,19 @@ mod session;
 mod storage;
 
 pub use authentication::{AuthenticateLocalUser, AuthenticateLocalUserError};
+pub use conversation::{
+    Conversation, ConversationError, ConversationKind, ConversationMember, GroupRole, GroupTitle,
+    GroupTitleError, MembershipRole,
+};
+pub use conversation_store::{
+    AddMemberStoreOutcome, ChangeStoreOutcome, ConversationStore, ConversationStoreError,
+    LeaveStoreOutcome, StartDirectStoreOutcome,
+};
+pub use conversations::{
+    AddGroupMember, ConversationOperationError, CreateGroupConversation, GetConversation,
+    LeaveGroupConversation, RemoveGroupMember, RenameGroupConversation, SetGroupMemberRole,
+    StartDirectConversation, TransferGroupOwnership,
+};
 pub use identity_store::{IdentityStore, IdentityStoreError, LocalAuthentication};
 pub use local_users::{
     CreateLocalUser, CreateLocalUserError, DisableUser, EnableUser, ManageUserError,

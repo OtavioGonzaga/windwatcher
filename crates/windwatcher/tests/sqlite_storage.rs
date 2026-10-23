@@ -6,9 +6,12 @@ use sqlx::{Connection, Executor, Row, SqliteConnection};
 use tempfile::TempDir;
 use time::{Duration, OffsetDateTime};
 use windwatcher::{
-    IdentityStore, IdentityStoreError, OsRefreshTokenProvider, PasswordHash, RefreshRotationResult,
-    RefreshToken, RefreshTokenProvider, Session, SessionId, SessionStore, SqliteStorage,
-    SqliteStorageError, SqliteStorageOptions, User, UserId,
+    AddGroupMember, ChangeStoreOutcome, ConversationStore, CreateGroupConversation, GroupRole,
+    IdentityStore, IdentityStoreError, LeaveGroupConversation, LeaveStoreOutcome,
+    OsRefreshTokenProvider, PasswordHash, RefreshRotationResult, RefreshToken,
+    RefreshTokenProvider, Session, SessionId, SessionStore, SetGroupMemberRole, SqliteStorage,
+    SqliteStorageError, SqliteStorageOptions, StartDirectConversation, StartDirectStoreOutcome,
+    TransferGroupOwnership, User, UserId,
 };
 
 mod support;
@@ -63,8 +66,8 @@ async fn migration_is_explicit_idempotent_and_reports_status() {
 
     let status = storage.migration_status().await.unwrap();
     assert_eq!(status.current_version(), None);
-    assert_eq!(status.latest_version(), Some(1));
-    assert_eq!(status.pending(), 1);
+    assert_eq!(status.latest_version(), Some(2));
+    assert_eq!(status.pending(), 2);
     assert!(!status.is_current());
     let inspector = sqlx::SqlitePool::connect(&url).await.unwrap();
     let tables: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sqlite_master WHERE name = 'users'")
@@ -76,7 +79,7 @@ async fn migration_is_explicit_idempotent_and_reports_status() {
     storage.migrate().await.unwrap();
     storage.migrate().await.unwrap();
     let status = storage.check_schema().await.unwrap();
-    assert_eq!(status.current_version(), Some(1));
+    assert_eq!(status.current_version(), Some(2));
     assert!(status.is_current());
 
     assert!(matches!(
@@ -86,6 +89,132 @@ async fn migration_is_explicit_idempotent_and_reports_status() {
         .await,
         Err(SqliteStorageError::Configuration(_))
     ));
+}
+
+#[tokio::test]
+async fn conversation_store_supports_directs_groups_and_owner_lifecycle() {
+    let (_directory, storage) = store().await;
+    let now = timestamp(100);
+    let alice = persisted_user(&storage, "alice").await;
+    let bob = persisted_user(&storage, "bob").await;
+    let direct = StartDirectConversation::new(&storage, &storage)
+        .execute(alice.id(), bob.id(), now)
+        .await
+        .unwrap();
+    let direct_id = match direct {
+        StartDirectStoreOutcome::Created(c) | StartDirectStoreOutcome::Existing(c) => c.id(),
+    };
+    let reverse = StartDirectConversation::new(&storage, &storage)
+        .execute(bob.id(), alice.id(), now)
+        .await
+        .unwrap();
+    assert_eq!(
+        match reverse {
+            StartDirectStoreOutcome::Created(c) | StartDirectStoreOutcome::Existing(c) => c.id(),
+        },
+        direct_id
+    );
+    let self_direct = StartDirectConversation::new(&storage, &storage)
+        .execute(alice.id(), alice.id(), now)
+        .await
+        .unwrap();
+    let self_id = match self_direct {
+        StartDirectStoreOutcome::Created(c) | StartDirectStoreOutcome::Existing(c) => c.id(),
+    };
+    assert!(
+        storage
+            .find_member(self_id, alice.id())
+            .await
+            .unwrap()
+            .is_some()
+    );
+
+    let group = CreateGroupConversation::new(&storage, &storage)
+        .execute(alice.id(), "team", &[bob.id(), bob.id()], now)
+        .await
+        .unwrap();
+    assert_eq!(
+        storage
+            .find_member(group.id(), alice.id())
+            .await
+            .unwrap()
+            .unwrap()
+            .role(),
+        windwatcher::MembershipRole::Group(GroupRole::Owner)
+    );
+    AddGroupMember::new(&storage, &storage)
+        .execute(alice.id(), group.id(), bob.id(), now)
+        .await
+        .unwrap();
+    assert_eq!(
+        SetGroupMemberRole::new(&storage)
+            .execute(
+                alice.id(),
+                group.id(),
+                bob.id(),
+                GroupRole::Admin,
+                timestamp(101)
+            )
+            .await
+            .unwrap(),
+        ChangeStoreOutcome::Changed
+    );
+    assert_eq!(
+        TransferGroupOwnership::new(&storage)
+            .execute(alice.id(), group.id(), bob.id(), timestamp(102))
+            .await
+            .unwrap(),
+        ChangeStoreOutcome::Changed
+    );
+    assert_eq!(
+        LeaveGroupConversation::new(&storage)
+            .execute(alice.id(), group.id(), timestamp(103))
+            .await
+            .unwrap(),
+        LeaveStoreOutcome::Left
+    );
+    assert_eq!(
+        LeaveGroupConversation::new(&storage)
+            .execute(bob.id(), group.id(), timestamp(104))
+            .await
+            .unwrap(),
+        LeaveStoreOutcome::ConversationDeleted
+    );
+    assert!(
+        storage
+            .find_conversation(group.id())
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn concurrent_direct_creation_converges_for_peer_and_self_pairs() {
+    let (_directory, storage) = store().await;
+    let storage = Arc::new(storage);
+    let alice = persisted_user(&storage, "alice").await;
+    let bob = persisted_user(&storage, "bob").await;
+    for (first, second) in [(alice.id(), bob.id()), (alice.id(), alice.id())] {
+        let barrier = Arc::new(tokio::sync::Barrier::new(2));
+        let tasks = [(), ()].map(|_| {
+            let store = Arc::clone(&storage);
+            let barrier = Arc::clone(&barrier);
+            tokio::spawn(async move {
+                barrier.wait().await;
+                StartDirectConversation::new(&*store, &*store)
+                    .execute(first, second, timestamp(200))
+                    .await
+                    .unwrap()
+            })
+        });
+        let [left, right] = tasks;
+        let id = |outcome: StartDirectStoreOutcome| match outcome {
+            StartDirectStoreOutcome::Created(conversation)
+            | StartDirectStoreOutcome::Existing(conversation) => conversation.id(),
+        };
+        assert_eq!(id(left.await.unwrap()), id(right.await.unwrap()));
+    }
 }
 
 #[tokio::test]

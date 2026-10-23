@@ -8,8 +8,11 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::{
-    IdentityStore, IdentityStoreError, LocalAuthentication, PasswordHash, RefreshRotationResult,
-    RefreshTokenHash, Session, SessionId, SessionStore, SessionStoreError, User, UserId, Username,
+    AddMemberStoreOutcome, ChangeStoreOutcome, Conversation, ConversationId, ConversationKind,
+    ConversationMember, ConversationStore, ConversationStoreError, GroupRole, GroupTitle,
+    IdentityStore, IdentityStoreError, LeaveStoreOutcome, LocalAuthentication, MembershipRole,
+    PasswordHash, RefreshRotationResult, RefreshTokenHash, Session, SessionId, SessionStore,
+    SessionStoreError, StartDirectStoreOutcome, User, UserId, Username,
 };
 
 static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations/sqlite");
@@ -301,6 +304,19 @@ fn session_error(error: sqlx::Error) -> SessionStoreError {
         SessionStoreError::Unexpected(Box::new(error))
     }
 }
+fn conversation_error(error: sqlx::Error) -> ConversationStoreError {
+    if unavailable(&error) {
+        ConversationStoreError::Unavailable(Box::new(error))
+    } else if matches!(&error, sqlx::Error::Database(database) if database.is_unique_violation() || database.is_foreign_key_violation())
+    {
+        ConversationStoreError::Conflict
+    } else {
+        ConversationStoreError::Unexpected(Box::new(error))
+    }
+}
+fn unexpected_conversation(message: &'static str) -> ConversationStoreError {
+    ConversationStoreError::Unexpected(Box::new(Corrupt(message)))
+}
 fn id_bytes(id: impl Into<Uuid>) -> Vec<u8> {
     id.into().into_bytes().to_vec()
 }
@@ -316,6 +332,14 @@ fn read_session_id(bytes: Vec<u8>) -> Result<SessionId, SessionStoreError> {
         .map_err(|_| unexpected_session("invalid persisted session ID"))
         .and_then(|id| {
             SessionId::try_from(id).map_err(|_| unexpected_session("invalid persisted session ID"))
+        })
+}
+fn read_conversation_id(bytes: Vec<u8>) -> Result<ConversationId, ConversationStoreError> {
+    Uuid::from_slice(&bytes)
+        .map_err(|_| unexpected_conversation("invalid persisted conversation ID"))
+        .and_then(|id| {
+            ConversationId::try_from(id)
+                .map_err(|_| unexpected_conversation("invalid persisted conversation ID"))
         })
 }
 fn to_micros(time: OffsetDateTime) -> Result<i64, &'static str> {
@@ -371,6 +395,67 @@ fn read_session(row: &SqliteRow) -> Result<Session, SessionStoreError> {
         .transpose()?;
     Session::restore(id, user_id, created_at, expires_at, revoked_at)
         .map_err(|_| unexpected_session("invalid persisted session"))
+}
+fn read_conversation(row: &SqliteRow) -> Result<Conversation, ConversationStoreError> {
+    let id = read_conversation_id(row.try_get("id").map_err(conversation_error)?)?;
+    let kind = match row
+        .try_get::<String, _>("kind")
+        .map_err(conversation_error)?
+        .as_str()
+    {
+        "direct" => ConversationKind::Direct,
+        "group" => ConversationKind::Group,
+        _ => {
+            return Err(unexpected_conversation(
+                "invalid persisted conversation kind",
+            ));
+        }
+    };
+    let title = row
+        .try_get::<Option<String>, _>("title")
+        .map_err(conversation_error)?
+        .map(GroupTitle::new)
+        .transpose()
+        .map_err(|_| unexpected_conversation("invalid persisted group title"))?;
+    let created_at = from_micros(row.try_get("created_at").map_err(conversation_error)?)
+        .map_err(unexpected_conversation)?;
+    let updated_at = from_micros(row.try_get("updated_at").map_err(conversation_error)?)
+        .map_err(unexpected_conversation)?;
+    Conversation::restore(id, kind, title, created_at, updated_at)
+        .map_err(|_| unexpected_conversation("invalid persisted conversation"))
+}
+fn read_member(row: &SqliteRow) -> Result<ConversationMember, ConversationStoreError> {
+    let conversation_id =
+        read_conversation_id(row.try_get("conversation_id").map_err(conversation_error)?)?;
+    let user_id = read_user_id(row.try_get("user_id").map_err(conversation_error)?)
+        .map_err(|_| unexpected_conversation("invalid persisted user ID"))?;
+    let role = match row
+        .try_get::<String, _>("role")
+        .map_err(conversation_error)?
+        .as_str()
+    {
+        "direct" => MembershipRole::Direct,
+        "owner" => MembershipRole::Group(GroupRole::Owner),
+        "admin" => MembershipRole::Group(GroupRole::Admin),
+        "member" => MembershipRole::Group(GroupRole::Member),
+        _ => return Err(unexpected_conversation("invalid persisted membership role")),
+    };
+    let joined_at = from_micros(row.try_get("joined_at").map_err(conversation_error)?)
+        .map_err(unexpected_conversation)?;
+    Ok(ConversationMember::new(
+        conversation_id,
+        user_id,
+        role,
+        joined_at,
+    ))
+}
+fn direct_key(first: UserId, second: UserId) -> Vec<u8> {
+    let mut a = first.as_uuid().into_bytes();
+    let mut b = second.as_uuid().into_bytes();
+    if a > b {
+        std::mem::swap(&mut a, &mut b);
+    }
+    [a.as_slice(), b.as_slice()].concat()
 }
 
 impl IdentityStore for SqliteStorage {
@@ -512,6 +597,285 @@ impl SessionStore for SqliteStorage {
             .await
             .map_err(session_error)?;
         Ok(())
+    }
+}
+
+impl ConversationStore for SqliteStorage {
+    async fn get_or_create_direct(
+        &self,
+        conversation: &Conversation,
+        first: UserId,
+        second: UserId,
+    ) -> Result<StartDirectStoreOutcome, ConversationStoreError> {
+        let key = direct_key(first, second);
+        let mut transaction = self.pool.begin().await.map_err(conversation_error)?;
+        let inserted = sqlx::query("INSERT INTO conversations (id, kind, title, direct_key, created_at, updated_at) VALUES (?, 'direct', NULL, ?, ?, ?) ON CONFLICT(direct_key) DO NOTHING")
+            .bind(id_bytes(conversation.id())).bind(&key)
+            .bind(to_micros(conversation.created_at()).map_err(unexpected_conversation)?)
+            .bind(to_micros(conversation.updated_at()).map_err(unexpected_conversation)?)
+            .execute(&mut *transaction).await.map_err(conversation_error)?;
+        if inserted.rows_affected() == 1 {
+            for user_id in [first, second] {
+                sqlx::query("INSERT INTO conversation_members (conversation_id, user_id, role, joined_at) VALUES (?, ?, 'direct', ?) ON CONFLICT(conversation_id, user_id) DO NOTHING")
+                    .bind(id_bytes(conversation.id())).bind(id_bytes(user_id))
+                    .bind(to_micros(conversation.created_at()).map_err(unexpected_conversation)?)
+                    .execute(&mut *transaction).await.map_err(conversation_error)?;
+            }
+            transaction.commit().await.map_err(conversation_error)?;
+            Ok(StartDirectStoreOutcome::Created(conversation.clone()))
+        } else {
+            let row = sqlx::query("SELECT id, kind, title, created_at, updated_at FROM conversations WHERE direct_key = ?")
+                .bind(key).fetch_one(&mut *transaction).await.map_err(conversation_error)?;
+            let existing = read_conversation(&row)?;
+            transaction.commit().await.map_err(conversation_error)?;
+            Ok(StartDirectStoreOutcome::Existing(existing))
+        }
+    }
+
+    async fn create_group(
+        &self,
+        conversation: &Conversation,
+        owner: UserId,
+        participants: &[UserId],
+    ) -> Result<(), ConversationStoreError> {
+        let mut transaction = self.pool.begin().await.map_err(conversation_error)?;
+        sqlx::query("INSERT INTO conversations (id, kind, title, direct_key, created_at, updated_at) VALUES (?, 'group', ?, NULL, ?, ?)")
+            .bind(id_bytes(conversation.id())).bind(conversation.title().expect("group constructor has title").as_str())
+            .bind(to_micros(conversation.created_at()).map_err(unexpected_conversation)?)
+            .bind(to_micros(conversation.updated_at()).map_err(unexpected_conversation)?)
+            .execute(&mut *transaction).await.map_err(conversation_error)?;
+        sqlx::query("INSERT INTO conversation_members (conversation_id, user_id, role, joined_at) VALUES (?, ?, 'owner', ?)")
+            .bind(id_bytes(conversation.id())).bind(id_bytes(owner)).bind(to_micros(conversation.created_at()).map_err(unexpected_conversation)?)
+            .execute(&mut *transaction).await.map_err(conversation_error)?;
+        for user_id in participants {
+            if *user_id != owner {
+                sqlx::query("INSERT INTO conversation_members (conversation_id, user_id, role, joined_at) VALUES (?, ?, 'member', ?) ON CONFLICT(conversation_id, user_id) DO NOTHING")
+                    .bind(id_bytes(conversation.id())).bind(id_bytes(*user_id)).bind(to_micros(conversation.created_at()).map_err(unexpected_conversation)?)
+                    .execute(&mut *transaction).await.map_err(conversation_error)?;
+            }
+        }
+        transaction.commit().await.map_err(conversation_error)
+    }
+
+    async fn find_conversation(
+        &self,
+        id: ConversationId,
+    ) -> Result<Option<Conversation>, ConversationStoreError> {
+        sqlx::query(
+            "SELECT id, kind, title, created_at, updated_at FROM conversations WHERE id = ?",
+        )
+        .bind(id_bytes(id))
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(conversation_error)?
+        .map(|row| read_conversation(&row))
+        .transpose()
+    }
+    async fn find_member(
+        &self,
+        conversation_id: ConversationId,
+        user_id: UserId,
+    ) -> Result<Option<ConversationMember>, ConversationStoreError> {
+        sqlx::query("SELECT m.conversation_id, m.user_id, m.role, m.joined_at, c.kind FROM conversation_members m JOIN conversations c ON c.id = m.conversation_id WHERE m.conversation_id = ? AND m.user_id = ?")
+            .bind(id_bytes(conversation_id)).bind(id_bytes(user_id)).fetch_optional(&self.pool).await.map_err(conversation_error)?
+            .map(|row| {
+                let member = read_member(&row)?;
+                let kind: String = row.try_get("kind").map_err(conversation_error)?;
+                match (kind.as_str(), member.role()) {
+                    ("direct", MembershipRole::Direct) | ("group", MembershipRole::Group(_)) => Ok(member),
+                    _ => Err(unexpected_conversation("incompatible persisted conversation membership role")),
+                }
+            }).transpose()
+    }
+    async fn add_group_member(
+        &self,
+        id: ConversationId,
+        actor: UserId,
+        member: UserId,
+        now: OffsetDateTime,
+    ) -> Result<AddMemberStoreOutcome, ConversationStoreError> {
+        let mut transaction = self.pool.begin().await.map_err(conversation_error)?;
+        let can_manage: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM conversations c JOIN conversation_members m ON m.conversation_id = c.id WHERE c.id = ? AND c.kind = 'group' AND m.user_id = ? AND m.role IN ('owner', 'admin')").bind(id_bytes(id)).bind(id_bytes(actor)).fetch_one(&mut *transaction).await.map_err(conversation_error)?;
+        if can_manage == 0 {
+            return Ok(AddMemberStoreOutcome::AlreadyMember);
+        }
+        let inserted = sqlx::query("INSERT INTO conversation_members (conversation_id, user_id, role, joined_at) VALUES (?, ?, 'member', ?) ON CONFLICT(conversation_id, user_id) DO NOTHING").bind(id_bytes(id)).bind(id_bytes(member)).bind(to_micros(now).map_err(unexpected_conversation)?).execute(&mut *transaction).await.map_err(conversation_error)?;
+        if inserted.rows_affected() == 1 {
+            sqlx::query("UPDATE conversations SET updated_at = ? WHERE id = ?")
+                .bind(to_micros(now).map_err(unexpected_conversation)?)
+                .bind(id_bytes(id))
+                .execute(&mut *transaction)
+                .await
+                .map_err(conversation_error)?;
+        }
+        transaction.commit().await.map_err(conversation_error)?;
+        Ok(if inserted.rows_affected() == 1 {
+            AddMemberStoreOutcome::Added
+        } else {
+            AddMemberStoreOutcome::AlreadyMember
+        })
+    }
+    async fn remove_group_member(
+        &self,
+        id: ConversationId,
+        actor: UserId,
+        member: UserId,
+        now: OffsetDateTime,
+    ) -> Result<ChangeStoreOutcome, ConversationStoreError> {
+        let mut tx = self.pool.begin().await.map_err(conversation_error)?;
+        let result = sqlx::query("DELETE FROM conversation_members WHERE conversation_id = ? AND user_id = ? AND role IN ('admin', 'member') AND EXISTS (SELECT 1 FROM conversation_members a WHERE a.conversation_id = ? AND a.user_id = ? AND a.role IN ('owner', 'admin'))").bind(id_bytes(id)).bind(id_bytes(member)).bind(id_bytes(id)).bind(id_bytes(actor)).execute(&mut *tx).await.map_err(conversation_error)?;
+        if result.rows_affected() == 1 {
+            sqlx::query("UPDATE conversations SET updated_at = ? WHERE id = ? AND kind = 'group'")
+                .bind(to_micros(now).map_err(unexpected_conversation)?)
+                .bind(id_bytes(id))
+                .execute(&mut *tx)
+                .await
+                .map_err(conversation_error)?;
+        }
+        tx.commit().await.map_err(conversation_error)?;
+        Ok(if result.rows_affected() == 1 {
+            ChangeStoreOutcome::Changed
+        } else {
+            ChangeStoreOutcome::Unchanged
+        })
+    }
+    async fn set_group_member_role(
+        &self,
+        id: ConversationId,
+        actor: UserId,
+        member: UserId,
+        role: GroupRole,
+        now: OffsetDateTime,
+    ) -> Result<ChangeStoreOutcome, ConversationStoreError> {
+        let value = match role {
+            GroupRole::Admin => "admin",
+            GroupRole::Member => "member",
+            GroupRole::Owner => return Ok(ChangeStoreOutcome::Unchanged),
+        };
+        let mut tx = self.pool.begin().await.map_err(conversation_error)?;
+        let result = sqlx::query("UPDATE conversation_members SET role = ? WHERE conversation_id = ? AND user_id = ? AND role IN ('admin', 'member') AND role <> ? AND EXISTS (SELECT 1 FROM conversation_members a WHERE a.conversation_id = ? AND a.user_id = ? AND a.role IN ('owner', 'admin'))").bind(value).bind(id_bytes(id)).bind(id_bytes(member)).bind(value).bind(id_bytes(id)).bind(id_bytes(actor)).execute(&mut *tx).await.map_err(conversation_error)?;
+        if result.rows_affected() == 1 {
+            sqlx::query("UPDATE conversations SET updated_at = ? WHERE id = ?")
+                .bind(to_micros(now).map_err(unexpected_conversation)?)
+                .bind(id_bytes(id))
+                .execute(&mut *tx)
+                .await
+                .map_err(conversation_error)?;
+        }
+        tx.commit().await.map_err(conversation_error)?;
+        Ok(if result.rows_affected() == 1 {
+            ChangeStoreOutcome::Changed
+        } else {
+            ChangeStoreOutcome::Unchanged
+        })
+    }
+    async fn transfer_group_ownership(
+        &self,
+        id: ConversationId,
+        actor: UserId,
+        target: UserId,
+        now: OffsetDateTime,
+    ) -> Result<ChangeStoreOutcome, ConversationStoreError> {
+        if actor == target {
+            return Ok(ChangeStoreOutcome::Unchanged);
+        }
+        let mut tx = self.pool.begin().await.map_err(conversation_error)?;
+        let demoted = sqlx::query("UPDATE conversation_members SET role = 'admin' WHERE conversation_id = ? AND user_id = ? AND role = 'owner'").bind(id_bytes(id)).bind(id_bytes(actor)).execute(&mut *tx).await.map_err(conversation_error)?;
+        if demoted.rows_affected() == 0 {
+            tx.rollback().await.map_err(conversation_error)?;
+            return Ok(ChangeStoreOutcome::Unchanged);
+        }
+        let promoted = sqlx::query("UPDATE conversation_members SET role = 'owner' WHERE conversation_id = ? AND user_id = ? AND role IN ('admin', 'member')").bind(id_bytes(id)).bind(id_bytes(target)).execute(&mut *tx).await.map_err(conversation_error)?;
+        if promoted.rows_affected() == 0 {
+            tx.rollback().await.map_err(conversation_error)?;
+            return Ok(ChangeStoreOutcome::Unchanged);
+        }
+        sqlx::query("UPDATE conversations SET updated_at = ? WHERE id = ? AND kind = 'group'")
+            .bind(to_micros(now).map_err(unexpected_conversation)?)
+            .bind(id_bytes(id))
+            .execute(&mut *tx)
+            .await
+            .map_err(conversation_error)?;
+        tx.commit().await.map_err(conversation_error)?;
+        Ok(ChangeStoreOutcome::Changed)
+    }
+    async fn leave_group(
+        &self,
+        id: ConversationId,
+        actor: UserId,
+        now: OffsetDateTime,
+    ) -> Result<LeaveStoreOutcome, ConversationStoreError> {
+        let mut tx = self.pool.begin().await.map_err(conversation_error)?;
+        let kind: Option<String> =
+            sqlx::query_scalar("SELECT kind FROM conversations WHERE id = ?")
+                .bind(id_bytes(id))
+                .fetch_optional(&mut *tx)
+                .await
+                .map_err(conversation_error)?;
+        if kind.as_deref() == Some("direct") {
+            tx.rollback().await.map_err(conversation_error)?;
+            return Ok(LeaveStoreOutcome::Direct);
+        }
+        let role: Option<String> = sqlx::query_scalar(
+            "SELECT role FROM conversation_members WHERE conversation_id = ? AND user_id = ?",
+        )
+        .bind(id_bytes(id))
+        .bind(id_bytes(actor))
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(conversation_error)?;
+        let Some(role) = role else {
+            tx.rollback().await.map_err(conversation_error)?;
+            return Ok(LeaveStoreOutcome::NotMember);
+        };
+        if role == "owner" {
+            let count: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM conversation_members WHERE conversation_id = ?",
+            )
+            .bind(id_bytes(id))
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(conversation_error)?;
+            if count != 1 {
+                tx.rollback().await.map_err(conversation_error)?;
+                return Ok(LeaveStoreOutcome::OwnershipTransferRequired);
+            }
+            sqlx::query("DELETE FROM conversations WHERE id = ?")
+                .bind(id_bytes(id))
+                .execute(&mut *tx)
+                .await
+                .map_err(conversation_error)?;
+            tx.commit().await.map_err(conversation_error)?;
+            return Ok(LeaveStoreOutcome::ConversationDeleted);
+        }
+        sqlx::query("DELETE FROM conversation_members WHERE conversation_id = ? AND user_id = ?")
+            .bind(id_bytes(id))
+            .bind(id_bytes(actor))
+            .execute(&mut *tx)
+            .await
+            .map_err(conversation_error)?;
+        sqlx::query("UPDATE conversations SET updated_at = ? WHERE id = ?")
+            .bind(to_micros(now).map_err(unexpected_conversation)?)
+            .bind(id_bytes(id))
+            .execute(&mut *tx)
+            .await
+            .map_err(conversation_error)?;
+        tx.commit().await.map_err(conversation_error)?;
+        Ok(LeaveStoreOutcome::Left)
+    }
+    async fn rename_group(
+        &self,
+        id: ConversationId,
+        actor: UserId,
+        title: &str,
+        now: OffsetDateTime,
+    ) -> Result<ChangeStoreOutcome, ConversationStoreError> {
+        let result = sqlx::query("UPDATE conversations SET title = ?, updated_at = ? WHERE id = ? AND kind = 'group' AND title <> ? AND EXISTS (SELECT 1 FROM conversation_members m WHERE m.conversation_id = conversations.id AND m.user_id = ? AND m.role IN ('owner', 'admin'))").bind(title).bind(to_micros(now).map_err(unexpected_conversation)?).bind(id_bytes(id)).bind(title).bind(id_bytes(actor)).execute(&self.pool).await.map_err(conversation_error)?;
+        Ok(if result.rows_affected() == 1 {
+            ChangeStoreOutcome::Changed
+        } else {
+            ChangeStoreOutcome::Unchanged
+        })
     }
 }
 
