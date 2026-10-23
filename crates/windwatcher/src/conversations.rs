@@ -7,104 +7,136 @@ use crate::{
     StartDirectStoreOutcome, UserId,
 };
 
-async fn participant<I: IdentityStore>(
-    identities: &I,
-    id: UserId,
-) -> Result<(), ConversationOperationError> {
+#[derive(Debug)]
+enum ParticipantError {
+    NotFound(UserId),
+    Identity(IdentityStoreError),
+}
+
+async fn participant<I: IdentityStore>(identities: &I, id: UserId) -> Result<(), ParticipantError> {
     if identities
         .find_user(id)
         .await
-        .map_err(ConversationOperationError::Identity)?
+        .map_err(ParticipantError::Identity)?
         .is_some()
     {
         Ok(())
     } else {
-        Err(ConversationOperationError::ParticipantNotFound(id))
+        Err(ParticipantError::NotFound(id))
     }
 }
 
-/// Shared semantic causes retained as sources by focused use-case errors.
-#[doc(hidden)]
-#[derive(Debug, thiserror::Error)]
-#[non_exhaustive]
-pub enum ConversationOperationError {
-    /// A referenced user does not exist.
-    #[error("conversation participant does not exist")]
-    ParticipantNotFound(UserId),
-    /// The conversation does not exist.
-    #[error("conversation not found")]
-    ConversationNotFound,
-    /// The actor is not a conversation member.
-    #[error("actor is not a conversation member")]
-    NotMember,
-    /// The actor lacks the required Group permission.
-    #[error("insufficient group permissions")]
-    InsufficientPermissions,
-    /// The operation is not meaningful for Direct conversations.
-    #[error("operation is not supported for Direct conversations")]
-    DirectOperationNotSupported,
-    /// The Group Owner is protected from this operation.
-    #[error("group owner is protected")]
-    OwnerProtected,
-    /// Ownership must move before the Owner can leave.
-    #[error("ownership transfer is required before the owner leaves")]
-    OwnershipTransferRequired,
-    /// The target is not a Group member.
-    #[error("target is not a group member")]
-    TargetNotMember,
-    /// Generic role assignment cannot assign the Owner role.
-    #[error("owner role must be changed through ownership transfer")]
-    OwnerRoleNotAssignable,
-    /// The requested title was invalid.
-    #[error("invalid group title")]
-    InvalidTitle(#[source] GroupTitleError),
-    /// Identity lookup failed.
-    #[error("identity lookup failed")]
-    Identity(#[source] IdentityStoreError),
-    /// Conversation persistence failed.
-    #[error("conversation storage failed")]
-    Storage(#[source] ConversationStoreError),
+/// Whether starting a Direct created it or found its existing semantic pair.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum StartDirectConversationOutcome {
+    /// A new Direct was created.
+    Created(Conversation),
+    /// The Direct already existed.
+    Existing(Conversation),
 }
 
-macro_rules! use_case_error {
-    ($name:ident, $documentation:literal) => {
-        #[doc = $documentation]
+/// Result of adding a Group member.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AddGroupMemberOutcome {
+    /// A new member was added.
+    Added,
+    /// The user was already a member.
+    AlreadyMember,
+}
+
+/// Result of an idempotent Group mutation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MutationOutcome {
+    /// A meaningful mutation was persisted.
+    Changed,
+    /// The requested state already existed.
+    Unchanged,
+}
+
+/// Result of leaving a Group.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LeaveGroupOutcome {
+    /// The member left the Group.
+    Left,
+    /// The owner-only Group was deleted.
+    ConversationDeleted,
+}
+
+macro_rules! application_error {
+    ($name:ident { $($variants:tt)* }) => {
+        #[allow(missing_docs)]
         #[derive(Debug, thiserror::Error)]
         #[non_exhaustive]
-        pub enum $name {
-            /// The operation failed for a semantic, identity, or persistence reason.
-            #[error(transparent)]
-            Operation(#[from] ConversationOperationError),
-        }
+        pub enum $name { $($variants)* }
     };
 }
-use_case_error!(
-    StartDirectConversationError,
-    "Failures starting a Direct conversation."
-);
-use_case_error!(
-    CreateGroupConversationError,
-    "Failures creating a Group conversation."
-);
-use_case_error!(GetConversationError, "Failures loading a conversation.");
-use_case_error!(AddGroupMemberError, "Failures adding a Group member.");
-use_case_error!(RemoveGroupMemberError, "Failures removing a Group member.");
-use_case_error!(
-    SetGroupMemberRoleError,
-    "Failures changing a Group member role."
-);
-use_case_error!(
-    TransferGroupOwnershipError,
-    "Failures transferring Group ownership."
-);
-use_case_error!(
-    LeaveGroupConversationError,
-    "Failures leaving a Group conversation."
-);
-use_case_error!(
-    RenameGroupConversationError,
-    "Failures renaming a Group conversation."
-);
+application_error!(StartDirectConversationError {
+    #[error("conversation participant does not exist")] ParticipantNotFound(UserId),
+    #[error("identity lookup failed")] Identity(#[source] IdentityStoreError),
+    #[error("conversation storage failed")] Storage(#[source] ConversationStoreError),
+});
+application_error!(CreateGroupConversationError {
+    #[error("conversation participant does not exist")] ParticipantNotFound(UserId),
+    #[error("invalid group title")] InvalidTitle(#[source] GroupTitleError),
+    #[error("identity lookup failed")] Identity(#[source] IdentityStoreError),
+    #[error("conversation storage failed")] Storage(#[source] ConversationStoreError),
+});
+application_error!(GetConversationError {
+    #[error("conversation not found")] ConversationNotFound,
+    #[error("actor is not a conversation member")] NotMember,
+    #[error("conversation storage failed")] Storage(#[source] ConversationStoreError),
+});
+application_error!(AddGroupMemberError {
+    #[error("conversation not found")] ConversationNotFound,
+    #[error("actor is not a conversation member")] NotMember,
+    #[error("insufficient group permissions")] InsufficientPermissions,
+    #[error("operation is not supported for Direct conversations")] DirectOperationNotSupported,
+    #[error("conversation participant does not exist")] ParticipantNotFound(UserId),
+    #[error("identity lookup failed")] Identity(#[source] IdentityStoreError),
+    #[error("conversation storage failed")] Storage(#[source] ConversationStoreError),
+});
+application_error!(RemoveGroupMemberError {
+    #[error("conversation not found")] ConversationNotFound,
+    #[error("actor is not a conversation member")] NotMember,
+    #[error("insufficient group permissions")] InsufficientPermissions,
+    #[error("operation is not supported for Direct conversations")] DirectOperationNotSupported,
+    #[error("group owner is protected")] OwnerProtected,
+    #[error("target is not a group member")] TargetNotMember,
+    #[error("conversation storage failed")] Storage(#[source] ConversationStoreError),
+});
+application_error!(SetGroupMemberRoleError {
+    #[error("conversation not found")] ConversationNotFound,
+    #[error("actor is not a conversation member")] NotMember,
+    #[error("insufficient group permissions")] InsufficientPermissions,
+    #[error("operation is not supported for Direct conversations")] DirectOperationNotSupported,
+    #[error("group owner is protected")] OwnerProtected,
+    #[error("target is not a group member")] TargetNotMember,
+    #[error("owner role must be changed through ownership transfer")] OwnerRoleNotAssignable,
+    #[error("conversation storage failed")] Storage(#[source] ConversationStoreError),
+});
+application_error!(TransferGroupOwnershipError {
+    #[error("conversation not found")] ConversationNotFound,
+    #[error("actor is not a conversation member")] NotMember,
+    #[error("insufficient group permissions")] InsufficientPermissions,
+    #[error("operation is not supported for Direct conversations")] DirectOperationNotSupported,
+    #[error("target is not a group member")] TargetNotMember,
+    #[error("conversation storage failed")] Storage(#[source] ConversationStoreError),
+});
+application_error!(LeaveGroupConversationError {
+    #[error("conversation not found")] ConversationNotFound,
+    #[error("actor is not a conversation member")] NotMember,
+    #[error("operation is not supported for Direct conversations")] DirectOperationNotSupported,
+    #[error("ownership transfer is required before the owner leaves")] OwnershipTransferRequired,
+    #[error("conversation storage failed")] Storage(#[source] ConversationStoreError),
+});
+application_error!(RenameGroupConversationError {
+    #[error("conversation not found")] ConversationNotFound,
+    #[error("actor is not a conversation member")] NotMember,
+    #[error("insufficient group permissions")] InsufficientPermissions,
+    #[error("operation is not supported for Direct conversations")] DirectOperationNotSupported,
+    #[error("invalid group title")] InvalidTitle(#[source] GroupTitleError),
+    #[error("conversation storage failed")] Storage(#[source] ConversationStoreError),
+});
 
 /// Starts or finds an immutable Direct conversation.
 pub struct StartDirectConversation<'a, I, S> {
@@ -122,12 +154,28 @@ impl<'a, I: IdentityStore, S: ConversationStore> StartDirectConversation<'a, I, 
         actor: UserId,
         participant_id: UserId,
         now: OffsetDateTime,
-    ) -> Result<StartDirectStoreOutcome, StartDirectConversationError> {
-        participant(self.identities, actor).await?;
+    ) -> Result<StartDirectConversationOutcome, StartDirectConversationError> {
+        participant(self.identities, actor)
+            .await
+            .map_err(|error| match error {
+                ParticipantError::NotFound(id) => {
+                    StartDirectConversationError::ParticipantNotFound(id)
+                }
+                ParticipantError::Identity(error) => StartDirectConversationError::Identity(error),
+            })?;
         if participant_id != actor {
-            participant(self.identities, participant_id).await?;
+            participant(self.identities, participant_id)
+                .await
+                .map_err(|error| match error {
+                    ParticipantError::NotFound(id) => {
+                        StartDirectConversationError::ParticipantNotFound(id)
+                    }
+                    ParticipantError::Identity(error) => {
+                        StartDirectConversationError::Identity(error)
+                    }
+                })?;
         }
-        Ok(self
+        match self
             .store
             .get_or_create_direct(
                 &Conversation::new_direct(ConversationId::new(), now),
@@ -135,7 +183,15 @@ impl<'a, I: IdentityStore, S: ConversationStore> StartDirectConversation<'a, I, 
                 participant_id,
             )
             .await
-            .map_err(ConversationOperationError::Storage)?)
+            .map_err(StartDirectConversationError::Storage)?
+        {
+            StartDirectStoreOutcome::Created(conversation) => {
+                Ok(StartDirectConversationOutcome::Created(conversation))
+            }
+            StartDirectStoreOutcome::Existing(conversation) => {
+                Ok(StartDirectConversationOutcome::Existing(conversation))
+            }
+        }
     }
 }
 
@@ -157,12 +213,28 @@ impl<'a, I: IdentityStore, S: ConversationStore> CreateGroupConversation<'a, I, 
         participants: &[UserId],
         now: OffsetDateTime,
     ) -> Result<Conversation, CreateGroupConversationError> {
-        participant(self.identities, actor).await?;
-        let title = GroupTitle::new(title).map_err(ConversationOperationError::InvalidTitle)?;
+        participant(self.identities, actor)
+            .await
+            .map_err(|error| match error {
+                ParticipantError::NotFound(id) => {
+                    CreateGroupConversationError::ParticipantNotFound(id)
+                }
+                ParticipantError::Identity(error) => CreateGroupConversationError::Identity(error),
+            })?;
+        let title = GroupTitle::new(title).map_err(CreateGroupConversationError::InvalidTitle)?;
         let mut unique = Vec::new();
         for id in participants {
             if *id != actor && !unique.contains(id) {
-                participant(self.identities, *id).await?;
+                participant(self.identities, *id)
+                    .await
+                    .map_err(|error| match error {
+                        ParticipantError::NotFound(id) => {
+                            CreateGroupConversationError::ParticipantNotFound(id)
+                        }
+                        ParticipantError::Identity(error) => {
+                            CreateGroupConversationError::Identity(error)
+                        }
+                    })?;
                 unique.push(*id);
             }
         }
@@ -170,7 +242,7 @@ impl<'a, I: IdentityStore, S: ConversationStore> CreateGroupConversation<'a, I, 
         self.store
             .create_group(&conversation, actor, &unique)
             .await
-            .map_err(ConversationOperationError::Storage)?;
+            .map_err(CreateGroupConversationError::Storage)?;
         Ok(conversation)
     }
 }
@@ -194,42 +266,58 @@ impl<'a, S: ConversationStore> GetConversation<'a, S> {
             .store
             .find_conversation(id)
             .await
-            .map_err(ConversationOperationError::Storage)?
-            .ok_or(ConversationOperationError::ConversationNotFound)?;
+            .map_err(GetConversationError::Storage)?
+            .ok_or(GetConversationError::ConversationNotFound)?;
         self.store
             .find_member(id, actor)
             .await
-            .map_err(ConversationOperationError::Storage)?
-            .ok_or(ConversationOperationError::NotMember)?;
+            .map_err(GetConversationError::Storage)?
+            .ok_or(GetConversationError::NotMember)?;
         Ok(conversation)
     }
 }
 
+#[derive(Debug)]
+enum GroupActorError {
+    ConversationNotFound,
+    NotMember,
+    DirectOperationNotSupported,
+    Storage(ConversationStoreError),
+}
 async fn group_actor<S: ConversationStore>(
     store: &S,
     id: ConversationId,
     actor: UserId,
-) -> Result<(Conversation, ConversationMember), ConversationOperationError> {
+) -> Result<ConversationMember, GroupActorError> {
     let conversation = store
         .find_conversation(id)
         .await
-        .map_err(ConversationOperationError::Storage)?
-        .ok_or(ConversationOperationError::ConversationNotFound)?;
+        .map_err(GroupActorError::Storage)?
+        .ok_or(GroupActorError::ConversationNotFound)?;
     if conversation.kind() == ConversationKind::Direct {
-        return Err(ConversationOperationError::DirectOperationNotSupported);
+        return Err(GroupActorError::DirectOperationNotSupported);
     }
-    let member = store
+    store
         .find_member(id, actor)
         .await
-        .map_err(ConversationOperationError::Storage)?
-        .ok_or(ConversationOperationError::NotMember)?;
-    Ok((conversation, member))
+        .map_err(GroupActorError::Storage)?
+        .ok_or(GroupActorError::NotMember)
 }
 fn manager(member: &ConversationMember) -> bool {
     matches!(
         member.role(),
         MembershipRole::Group(GroupRole::Owner | GroupRole::Admin)
     )
+}
+macro_rules! group_error {
+    ($error:expr, $name:ident) => {
+        $error.map_err(|error| match error {
+            GroupActorError::ConversationNotFound => $name::ConversationNotFound,
+            GroupActorError::NotMember => $name::NotMember,
+            GroupActorError::DirectOperationNotSupported => $name::DirectOperationNotSupported,
+            GroupActorError::Storage(error) => $name::Storage(error),
+        })
+    };
 }
 
 /// Adds a Group Member.
@@ -249,22 +337,31 @@ impl<'a, I: IdentityStore, S: ConversationStore> AddGroupMember<'a, I, S> {
         id: ConversationId,
         target: UserId,
         now: OffsetDateTime,
-    ) -> Result<AddMemberStoreOutcome, AddGroupMemberError> {
-        let (_, member) = group_actor(self.store, id, actor).await?;
+    ) -> Result<AddGroupMemberOutcome, AddGroupMemberError> {
+        let member = group_error!(
+            group_actor(self.store, id, actor).await,
+            AddGroupMemberError
+        )?;
         if !manager(&member) {
-            return Err(ConversationOperationError::InsufficientPermissions.into());
+            return Err(AddGroupMemberError::InsufficientPermissions);
         }
-        participant(self.identities, target).await?;
+        participant(self.identities, target)
+            .await
+            .map_err(|error| match error {
+                ParticipantError::NotFound(id) => AddGroupMemberError::ParticipantNotFound(id),
+                ParticipantError::Identity(error) => AddGroupMemberError::Identity(error),
+            })?;
         match self
             .store
             .add_group_member(id, actor, target, now)
             .await
-            .map_err(ConversationOperationError::Storage)?
+            .map_err(AddGroupMemberError::Storage)?
         {
+            AddMemberStoreOutcome::Added => Ok(AddGroupMemberOutcome::Added),
+            AddMemberStoreOutcome::AlreadyMember => Ok(AddGroupMemberOutcome::AlreadyMember),
             AddMemberStoreOutcome::NotAuthorized => {
-                Err(ConversationOperationError::InsufficientPermissions.into())
+                Err(AddGroupMemberError::InsufficientPermissions)
             }
-            outcome => Ok(outcome),
         }
     }
 }
@@ -285,33 +382,37 @@ impl<'a, S: ConversationStore> RemoveGroupMember<'a, S> {
         id: ConversationId,
         target: UserId,
         now: OffsetDateTime,
-    ) -> Result<ChangeStoreOutcome, RemoveGroupMemberError> {
+    ) -> Result<MutationOutcome, RemoveGroupMemberError> {
         if actor == target {
-            return Err(ConversationOperationError::InsufficientPermissions.into());
+            return Err(RemoveGroupMemberError::InsufficientPermissions);
         }
-        let (_, member) = group_actor(self.store, id, actor).await?;
+        let member = group_error!(
+            group_actor(self.store, id, actor).await,
+            RemoveGroupMemberError
+        )?;
         if !manager(&member) {
-            return Err(ConversationOperationError::InsufficientPermissions.into());
+            return Err(RemoveGroupMemberError::InsufficientPermissions);
         }
         let target_member = self
             .store
             .find_member(id, target)
             .await
-            .map_err(ConversationOperationError::Storage)?
-            .ok_or(ConversationOperationError::TargetNotMember)?;
+            .map_err(RemoveGroupMemberError::Storage)?
+            .ok_or(RemoveGroupMemberError::TargetNotMember)?;
         if target_member.role() == MembershipRole::Group(GroupRole::Owner) {
-            return Err(ConversationOperationError::OwnerProtected.into());
+            return Err(RemoveGroupMemberError::OwnerProtected);
         }
         match self
             .store
             .remove_group_member(id, actor, target, now)
             .await
-            .map_err(ConversationOperationError::Storage)?
+            .map_err(RemoveGroupMemberError::Storage)?
         {
+            ChangeStoreOutcome::Changed => Ok(MutationOutcome::Changed),
+            ChangeStoreOutcome::Unchanged => Ok(MutationOutcome::Unchanged),
             ChangeStoreOutcome::NotAuthorized => {
-                Err(ConversationOperationError::InsufficientPermissions.into())
+                Err(RemoveGroupMemberError::InsufficientPermissions)
             }
-            outcome => Ok(outcome),
         }
     }
 }
@@ -333,33 +434,37 @@ impl<'a, S: ConversationStore> SetGroupMemberRole<'a, S> {
         target: UserId,
         role: GroupRole,
         now: OffsetDateTime,
-    ) -> Result<ChangeStoreOutcome, SetGroupMemberRoleError> {
+    ) -> Result<MutationOutcome, SetGroupMemberRoleError> {
         if role == GroupRole::Owner {
-            return Err(ConversationOperationError::OwnerRoleNotAssignable.into());
+            return Err(SetGroupMemberRoleError::OwnerRoleNotAssignable);
         }
-        let (_, member) = group_actor(self.store, id, actor).await?;
+        let member = group_error!(
+            group_actor(self.store, id, actor).await,
+            SetGroupMemberRoleError
+        )?;
         if !manager(&member) {
-            return Err(ConversationOperationError::InsufficientPermissions.into());
+            return Err(SetGroupMemberRoleError::InsufficientPermissions);
         }
         let target_member = self
             .store
             .find_member(id, target)
             .await
-            .map_err(ConversationOperationError::Storage)?
-            .ok_or(ConversationOperationError::TargetNotMember)?;
+            .map_err(SetGroupMemberRoleError::Storage)?
+            .ok_or(SetGroupMemberRoleError::TargetNotMember)?;
         if target_member.role() == MembershipRole::Group(GroupRole::Owner) {
-            return Err(ConversationOperationError::OwnerProtected.into());
+            return Err(SetGroupMemberRoleError::OwnerProtected);
         }
         match self
             .store
             .set_group_member_role(id, actor, target, role, now)
             .await
-            .map_err(ConversationOperationError::Storage)?
+            .map_err(SetGroupMemberRoleError::Storage)?
         {
+            ChangeStoreOutcome::Changed => Ok(MutationOutcome::Changed),
+            ChangeStoreOutcome::Unchanged => Ok(MutationOutcome::Unchanged),
             ChangeStoreOutcome::NotAuthorized => {
-                Err(ConversationOperationError::InsufficientPermissions.into())
+                Err(SetGroupMemberRoleError::InsufficientPermissions)
             }
-            outcome => Ok(outcome),
         }
     }
 }
@@ -380,30 +485,34 @@ impl<'a, S: ConversationStore> TransferGroupOwnership<'a, S> {
         id: ConversationId,
         target: UserId,
         now: OffsetDateTime,
-    ) -> Result<ChangeStoreOutcome, TransferGroupOwnershipError> {
-        let (_, member) = group_actor(self.store, id, actor).await?;
+    ) -> Result<MutationOutcome, TransferGroupOwnershipError> {
+        let member = group_error!(
+            group_actor(self.store, id, actor).await,
+            TransferGroupOwnershipError
+        )?;
         if member.role() != MembershipRole::Group(GroupRole::Owner) {
-            return Err(ConversationOperationError::InsufficientPermissions.into());
+            return Err(TransferGroupOwnershipError::InsufficientPermissions);
         }
         if self
             .store
             .find_member(id, target)
             .await
-            .map_err(ConversationOperationError::Storage)?
+            .map_err(TransferGroupOwnershipError::Storage)?
             .is_none()
         {
-            return Err(ConversationOperationError::TargetNotMember.into());
+            return Err(TransferGroupOwnershipError::TargetNotMember);
         }
         match self
             .store
             .transfer_group_ownership(id, actor, target, now)
             .await
-            .map_err(ConversationOperationError::Storage)?
+            .map_err(TransferGroupOwnershipError::Storage)?
         {
+            ChangeStoreOutcome::Changed => Ok(MutationOutcome::Changed),
+            ChangeStoreOutcome::Unchanged => Ok(MutationOutcome::Unchanged),
             ChangeStoreOutcome::NotAuthorized => {
-                Err(ConversationOperationError::InsufficientPermissions.into())
+                Err(TransferGroupOwnershipError::InsufficientPermissions)
             }
-            outcome => Ok(outcome),
         }
     }
 }
@@ -423,22 +532,26 @@ impl<'a, S: ConversationStore> LeaveGroupConversation<'a, S> {
         actor: UserId,
         id: ConversationId,
         now: OffsetDateTime,
-    ) -> Result<LeaveStoreOutcome, LeaveGroupConversationError> {
-        group_actor(self.store, id, actor).await?;
+    ) -> Result<LeaveGroupOutcome, LeaveGroupConversationError> {
+        group_error!(
+            group_actor(self.store, id, actor).await,
+            LeaveGroupConversationError
+        )?;
         match self
             .store
             .leave_group(id, actor, now)
             .await
-            .map_err(ConversationOperationError::Storage)?
+            .map_err(LeaveGroupConversationError::Storage)?
         {
+            LeaveStoreOutcome::Left => Ok(LeaveGroupOutcome::Left),
+            LeaveStoreOutcome::ConversationDeleted => Ok(LeaveGroupOutcome::ConversationDeleted),
             LeaveStoreOutcome::OwnershipTransferRequired => {
-                Err(ConversationOperationError::OwnershipTransferRequired.into())
+                Err(LeaveGroupConversationError::OwnershipTransferRequired)
             }
-            LeaveStoreOutcome::NotMember => Err(ConversationOperationError::NotMember.into()),
+            LeaveStoreOutcome::NotMember => Err(LeaveGroupConversationError::NotMember),
             LeaveStoreOutcome::Direct => {
-                Err(ConversationOperationError::DirectOperationNotSupported.into())
+                Err(LeaveGroupConversationError::DirectOperationNotSupported)
             }
-            value => Ok(value),
         }
     }
 }
@@ -459,22 +572,26 @@ impl<'a, S: ConversationStore> RenameGroupConversation<'a, S> {
         id: ConversationId,
         title: impl Into<String>,
         now: OffsetDateTime,
-    ) -> Result<ChangeStoreOutcome, RenameGroupConversationError> {
-        let (_, member) = group_actor(self.store, id, actor).await?;
+    ) -> Result<MutationOutcome, RenameGroupConversationError> {
+        let member = group_error!(
+            group_actor(self.store, id, actor).await,
+            RenameGroupConversationError
+        )?;
         if !manager(&member) {
-            return Err(ConversationOperationError::InsufficientPermissions.into());
+            return Err(RenameGroupConversationError::InsufficientPermissions);
         }
-        let title = GroupTitle::new(title).map_err(ConversationOperationError::InvalidTitle)?;
+        let title = GroupTitle::new(title).map_err(RenameGroupConversationError::InvalidTitle)?;
         match self
             .store
-            .rename_group(id, actor, title.as_str(), now)
+            .rename_group(id, actor, &title, now)
             .await
-            .map_err(ConversationOperationError::Storage)?
+            .map_err(RenameGroupConversationError::Storage)?
         {
+            ChangeStoreOutcome::Changed => Ok(MutationOutcome::Changed),
+            ChangeStoreOutcome::Unchanged => Ok(MutationOutcome::Unchanged),
             ChangeStoreOutcome::NotAuthorized => {
-                Err(ConversationOperationError::InsufficientPermissions.into())
+                Err(RenameGroupConversationError::InsufficientPermissions)
             }
-            outcome => Ok(outcome),
         }
     }
 }

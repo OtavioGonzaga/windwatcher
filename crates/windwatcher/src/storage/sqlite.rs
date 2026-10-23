@@ -607,6 +607,12 @@ impl ConversationStore for SqliteStorage {
         first: UserId,
         second: UserId,
     ) -> Result<StartDirectStoreOutcome, ConversationStoreError> {
+        if conversation.kind() != ConversationKind::Direct {
+            return Err(ConversationStoreError::InvalidConversationKind {
+                expected: ConversationKind::Direct,
+                actual: conversation.kind(),
+            });
+        }
         let key = direct_key(first, second);
         let mut transaction = self.pool.begin().await.map_err(conversation_error)?;
         let inserted = sqlx::query("INSERT INTO conversations (id, kind, title, direct_key, created_at, updated_at) VALUES (?, 'direct', NULL, ?, ?, ?) ON CONFLICT(direct_key) DO NOTHING")
@@ -638,9 +644,22 @@ impl ConversationStore for SqliteStorage {
         owner: UserId,
         participants: &[UserId],
     ) -> Result<(), ConversationStoreError> {
+        if conversation.kind() != ConversationKind::Group {
+            return Err(ConversationStoreError::InvalidConversationKind {
+                expected: ConversationKind::Group,
+                actual: conversation.kind(),
+            });
+        }
+        let title =
+            conversation
+                .title()
+                .ok_or(ConversationStoreError::InvalidConversationKind {
+                    expected: ConversationKind::Group,
+                    actual: ConversationKind::Direct,
+                })?;
         let mut transaction = self.pool.begin().await.map_err(conversation_error)?;
         sqlx::query("INSERT INTO conversations (id, kind, title, direct_key, created_at, updated_at) VALUES (?, 'group', ?, NULL, ?, ?)")
-            .bind(id_bytes(conversation.id())).bind(conversation.title().expect("group constructor has title").as_str())
+            .bind(id_bytes(conversation.id())).bind(title.as_str())
             .bind(to_micros(conversation.created_at()).map_err(unexpected_conversation)?)
             .bind(to_micros(conversation.updated_at()).map_err(unexpected_conversation)?)
             .execute(&mut *transaction).await.map_err(conversation_error)?;
@@ -883,10 +902,10 @@ impl ConversationStore for SqliteStorage {
         &self,
         id: ConversationId,
         actor: UserId,
-        title: &str,
+        title: &GroupTitle,
         now: OffsetDateTime,
     ) -> Result<ChangeStoreOutcome, ConversationStoreError> {
-        let result = sqlx::query("UPDATE conversations SET title = ?, updated_at = ? WHERE id = ? AND kind = 'group' AND title <> ? AND EXISTS (SELECT 1 FROM conversation_members m WHERE m.conversation_id = conversations.id AND m.user_id = ? AND m.role IN ('owner', 'admin'))").bind(title).bind(to_micros(now).map_err(unexpected_conversation)?).bind(id_bytes(id)).bind(title).bind(id_bytes(actor)).execute(&self.pool).await.map_err(conversation_error)?;
+        let result = sqlx::query("UPDATE conversations SET title = ?, updated_at = ? WHERE id = ? AND kind = 'group' AND title <> ? AND EXISTS (SELECT 1 FROM conversation_members m WHERE m.conversation_id = conversations.id AND m.user_id = ? AND m.role IN ('owner', 'admin'))").bind(title.as_str()).bind(to_micros(now).map_err(unexpected_conversation)?).bind(id_bytes(id)).bind(title.as_str()).bind(id_bytes(actor)).execute(&self.pool).await.map_err(conversation_error)?;
         if result.rows_affected() == 1 {
             return Ok(ChangeStoreOutcome::Changed);
         }

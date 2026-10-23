@@ -6,13 +6,13 @@ use sqlx::{Connection, Executor, Row, SqliteConnection};
 use tempfile::TempDir;
 use time::{Duration, OffsetDateTime};
 use windwatcher::{
-    AddGroupMember, ChangeStoreOutcome, ConversationStore, ConversationStoreError,
-    CreateGroupConversation, GetConversation, GroupRole, IdentityStore, IdentityStoreError,
-    LeaveGroupConversation, LeaveStoreOutcome, OsRefreshTokenProvider, PasswordHash,
+    AddGroupMember, ConversationStore, ConversationStoreError, CreateGroupConversation,
+    GetConversation, GroupRole, IdentityStore, IdentityStoreError, LeaveGroupConversation,
+    LeaveGroupOutcome, MutationOutcome, OsRefreshTokenProvider, PasswordHash,
     RefreshRotationResult, RefreshToken, RefreshTokenProvider, RenameGroupConversation, Session,
     SessionId, SessionStore, SetGroupMemberRole, SqliteStorage, SqliteStorageError,
-    SqliteStorageOptions, StartDirectConversation, StartDirectStoreOutcome, TransferGroupOwnership,
-    User, UserId,
+    SqliteStorageOptions, StartDirectConversation, StartDirectConversationOutcome,
+    TransferGroupOwnership, User, UserId,
 };
 
 mod support;
@@ -103,7 +103,8 @@ async fn conversation_store_supports_directs_groups_and_owner_lifecycle() {
         .await
         .unwrap();
     let direct_id = match direct {
-        StartDirectStoreOutcome::Created(c) | StartDirectStoreOutcome::Existing(c) => c.id(),
+        StartDirectConversationOutcome::Created(c)
+        | StartDirectConversationOutcome::Existing(c) => c.id(),
     };
     let reverse = StartDirectConversation::new(&storage, &storage)
         .execute(bob.id(), alice.id(), now)
@@ -111,7 +112,8 @@ async fn conversation_store_supports_directs_groups_and_owner_lifecycle() {
         .unwrap();
     assert_eq!(
         match reverse {
-            StartDirectStoreOutcome::Created(c) | StartDirectStoreOutcome::Existing(c) => c.id(),
+            StartDirectConversationOutcome::Created(c)
+            | StartDirectConversationOutcome::Existing(c) => c.id(),
         },
         direct_id
     );
@@ -120,7 +122,8 @@ async fn conversation_store_supports_directs_groups_and_owner_lifecycle() {
         .await
         .unwrap();
     let self_id = match self_direct {
-        StartDirectStoreOutcome::Created(c) | StartDirectStoreOutcome::Existing(c) => c.id(),
+        StartDirectConversationOutcome::Created(c)
+        | StartDirectConversationOutcome::Existing(c) => c.id(),
     };
     assert!(
         storage
@@ -158,28 +161,28 @@ async fn conversation_store_supports_directs_groups_and_owner_lifecycle() {
             )
             .await
             .unwrap(),
-        ChangeStoreOutcome::Changed
+        MutationOutcome::Changed
     );
     assert_eq!(
         TransferGroupOwnership::new(&storage)
             .execute(alice.id(), group.id(), bob.id(), timestamp(102))
             .await
             .unwrap(),
-        ChangeStoreOutcome::Changed
+        MutationOutcome::Changed
     );
     assert_eq!(
         LeaveGroupConversation::new(&storage)
             .execute(alice.id(), group.id(), timestamp(103))
             .await
             .unwrap(),
-        LeaveStoreOutcome::Left
+        LeaveGroupOutcome::Left
     );
     assert_eq!(
         LeaveGroupConversation::new(&storage)
             .execute(bob.id(), group.id(), timestamp(104))
             .await
             .unwrap(),
-        LeaveStoreOutcome::ConversationDeleted
+        LeaveGroupOutcome::ConversationDeleted
     );
     assert!(
         storage
@@ -214,9 +217,12 @@ async fn concurrent_direct_creation_converges_for_peer_and_self_pairs() {
     let alice = persisted_user(&storage, "alice").await;
     let bob = persisted_user(&storage, "bob").await;
     let mut direct_ids = Vec::new();
-    for (first, second) in [(alice.id(), bob.id()), (alice.id(), alice.id())] {
+    for [(first, second), (other_first, other_second)] in [
+        [(alice.id(), bob.id()), (bob.id(), alice.id())],
+        [(alice.id(), alice.id()), (alice.id(), alice.id())],
+    ] {
         let barrier = Arc::new(tokio::sync::Barrier::new(2));
-        let tasks = [(), ()].map(|_| {
+        let tasks = [(first, second), (other_first, other_second)].map(|(first, second)| {
             let store = Arc::clone(&storage);
             let barrier = Arc::clone(&barrier);
             tokio::spawn(async move {
@@ -228,9 +234,9 @@ async fn concurrent_direct_creation_converges_for_peer_and_self_pairs() {
             })
         });
         let [left, right] = tasks;
-        let id = |outcome: StartDirectStoreOutcome| match outcome {
-            StartDirectStoreOutcome::Created(conversation)
-            | StartDirectStoreOutcome::Existing(conversation) => conversation.id(),
+        let id = |outcome: StartDirectConversationOutcome| match outcome {
+            StartDirectConversationOutcome::Created(conversation)
+            | StartDirectConversationOutcome::Existing(conversation) => conversation.id(),
         };
         let conversation_id = id(left.await.unwrap());
         assert_eq!(conversation_id, id(right.await.unwrap()));
@@ -281,38 +287,38 @@ async fn group_permissions_no_ops_and_direct_rejections_are_enforced() {
             )
             .await
             .unwrap(),
-        ChangeStoreOutcome::Changed
+        MutationOutcome::Changed
     );
     assert!(matches!(
         AddGroupMember::new(&storage, &storage)
             .execute(member.id(), group.id(), outsider.id(), timestamp(302))
             .await,
-        Err(windwatcher::AddGroupMemberError::Operation(_))
+        Err(windwatcher::AddGroupMemberError::InsufficientPermissions)
     ));
     assert_eq!(
         AddGroupMember::new(&storage, &storage)
             .execute(admin.id(), group.id(), outsider.id(), timestamp(302))
             .await
             .unwrap(),
-        windwatcher::AddMemberStoreOutcome::Added
+        windwatcher::AddGroupMemberOutcome::Added
     );
     assert!(matches!(
         GetConversation::new(&storage)
             .execute(UserId::new(), group.id())
             .await,
-        Err(windwatcher::GetConversationError::Operation(_))
+        Err(windwatcher::GetConversationError::NotMember)
     ));
     assert!(matches!(
         AddGroupMember::new(&storage, &storage)
             .execute(owner.id(), group.id(), UserId::new(), timestamp(302))
             .await,
-        Err(windwatcher::AddGroupMemberError::Operation(_))
+        Err(windwatcher::AddGroupMemberError::ParticipantNotFound(_))
     ));
     assert!(matches!(
         TransferGroupOwnership::new(&storage)
             .execute(admin.id(), group.id(), owner.id(), timestamp(303))
             .await,
-        Err(windwatcher::TransferGroupOwnershipError::Operation(_))
+        Err(windwatcher::TransferGroupOwnershipError::InsufficientPermissions)
     ));
     assert!(matches!(
         SetGroupMemberRole::new(&storage)
@@ -324,7 +330,7 @@ async fn group_permissions_no_ops_and_direct_rejections_are_enforced() {
                 timestamp(303)
             )
             .await,
-        Err(windwatcher::SetGroupMemberRoleError::Operation(_))
+        Err(windwatcher::SetGroupMemberRoleError::OwnerProtected)
     ));
     let before = storage
         .find_conversation(group.id())
@@ -337,7 +343,7 @@ async fn group_permissions_no_ops_and_direct_rejections_are_enforced() {
             .execute(admin.id(), group.id(), "Group", timestamp(304))
             .await
             .unwrap(),
-        ChangeStoreOutcome::Unchanged
+        MutationOutcome::Unchanged
     );
     assert_eq!(
         storage
@@ -352,32 +358,33 @@ async fn group_permissions_no_ops_and_direct_rejections_are_enforced() {
         RenameGroupConversation::new(&storage)
             .execute(member.id(), group.id(), "new", timestamp(304))
             .await,
-        Err(windwatcher::RenameGroupConversationError::Operation(_))
+        Err(windwatcher::RenameGroupConversationError::InsufficientPermissions)
     ));
     assert!(matches!(
         RenameGroupConversation::new(&storage)
             .execute(owner.id(), group.id(), "  ", timestamp(304))
             .await,
-        Err(windwatcher::RenameGroupConversationError::Operation(_))
+        Err(windwatcher::RenameGroupConversationError::InvalidTitle(_))
     ));
     let direct = StartDirectConversation::new(&storage, &storage)
         .execute(owner.id(), member.id(), now)
         .await
         .unwrap();
     let direct_id = match direct {
-        StartDirectStoreOutcome::Created(c) | StartDirectStoreOutcome::Existing(c) => c.id(),
+        StartDirectConversationOutcome::Created(c)
+        | StartDirectConversationOutcome::Existing(c) => c.id(),
     };
     assert!(matches!(
         RenameGroupConversation::new(&storage)
             .execute(owner.id(), direct_id, "x", now)
             .await,
-        Err(windwatcher::RenameGroupConversationError::Operation(_))
+        Err(windwatcher::RenameGroupConversationError::DirectOperationNotSupported)
     ));
     assert!(matches!(
         LeaveGroupConversation::new(&storage)
             .execute(owner.id(), direct_id, now)
             .await,
-        Err(windwatcher::LeaveGroupConversationError::Operation(_))
+        Err(windwatcher::LeaveGroupConversationError::DirectOperationNotSupported)
     ));
 }
 
@@ -396,7 +403,7 @@ async fn group_creation_and_ownership_transfer_roll_back_on_persistence_failure(
         CreateGroupConversation::new(&storage, &storage)
             .execute(owner.id(), "rollback", &[member.id()], timestamp(400))
             .await,
-        Err(windwatcher::CreateGroupConversationError::Operation(_))
+        Err(windwatcher::CreateGroupConversationError::Storage(_))
     ));
     let count: i64 =
         sqlx::query_scalar("SELECT COUNT(*) FROM conversations WHERE title = 'rollback'")
@@ -417,7 +424,7 @@ async fn group_creation_and_ownership_transfer_roll_back_on_persistence_failure(
         TransferGroupOwnership::new(&storage)
             .execute(owner.id(), group.id(), member.id(), timestamp(402))
             .await,
-        Err(windwatcher::TransferGroupOwnershipError::Operation(_))
+        Err(windwatcher::TransferGroupOwnershipError::Storage(_))
     ));
     assert_eq!(
         storage
@@ -466,7 +473,7 @@ async fn group_management_permission_matrix_and_owner_only_lifecycle_hold() {
             )
             .await
             .unwrap(),
-        ChangeStoreOutcome::Changed
+        MutationOutcome::Changed
     );
     assert_eq!(
         SetGroupMemberRole::new(&storage)
@@ -479,7 +486,7 @@ async fn group_management_permission_matrix_and_owner_only_lifecycle_hold() {
             )
             .await
             .unwrap(),
-        ChangeStoreOutcome::Changed
+        MutationOutcome::Changed
     );
     let before = storage
         .find_conversation(group.id())
@@ -498,7 +505,7 @@ async fn group_management_permission_matrix_and_owner_only_lifecycle_hold() {
             )
             .await
             .unwrap(),
-        ChangeStoreOutcome::Unchanged
+        MutationOutcome::Unchanged
     );
     assert_eq!(
         storage
@@ -514,33 +521,33 @@ async fn group_management_permission_matrix_and_owner_only_lifecycle_hold() {
             .execute(admin.id(), group.id(), target.id(), timestamp(604))
             .await
             .unwrap(),
-        ChangeStoreOutcome::Changed
+        MutationOutcome::Changed
     );
     assert!(matches!(
         windwatcher::RemoveGroupMember::new(&storage)
             .execute(member.id(), group.id(), admin.id(), timestamp(605))
             .await,
-        Err(windwatcher::RemoveGroupMemberError::Operation(_))
+        Err(windwatcher::RemoveGroupMemberError::InsufficientPermissions)
     ));
     assert_eq!(
         windwatcher::RemoveGroupMember::new(&storage)
             .execute(owner.id(), group.id(), admin.id(), timestamp(605))
             .await
             .unwrap(),
-        ChangeStoreOutcome::Changed
+        MutationOutcome::Changed
     );
     assert!(matches!(
         LeaveGroupConversation::new(&storage)
             .execute(owner.id(), group.id(), timestamp(606))
             .await,
-        Err(windwatcher::LeaveGroupConversationError::Operation(_))
+        Err(windwatcher::LeaveGroupConversationError::OwnershipTransferRequired)
     ));
     assert_eq!(
         LeaveGroupConversation::new(&storage)
             .execute(member.id(), group.id(), timestamp(607))
             .await
             .unwrap(),
-        LeaveStoreOutcome::Left
+        LeaveGroupOutcome::Left
     );
 
     let owner_only = CreateGroupConversation::new(&storage, &storage)
@@ -552,7 +559,7 @@ async fn group_management_permission_matrix_and_owner_only_lifecycle_hold() {
             .execute(owner.id(), owner_only.id(), timestamp(609))
             .await
             .unwrap(),
-        LeaveStoreOutcome::ConversationDeleted
+        LeaveGroupOutcome::ConversationDeleted
     );
 }
 
@@ -836,7 +843,8 @@ async fn conversation_schema_uses_strict_binary_keys_and_cascading_memberships()
         .await
         .unwrap();
     let direct_id = match direct {
-        StartDirectStoreOutcome::Created(c) | StartDirectStoreOutcome::Existing(c) => c.id(),
+        StartDirectConversationOutcome::Created(c)
+        | StartDirectConversationOutcome::Existing(c) => c.id(),
     };
     let url = format!(
         "sqlite://{}",
@@ -894,7 +902,8 @@ async fn malformed_persisted_conversation_memberships_are_rejected() {
         .await
         .unwrap();
     let direct_id = match direct {
-        StartDirectStoreOutcome::Created(c) | StartDirectStoreOutcome::Existing(c) => c.id(),
+        StartDirectConversationOutcome::Created(c)
+        | StartDirectConversationOutcome::Existing(c) => c.id(),
     };
     let url = format!(
         "sqlite://{}",

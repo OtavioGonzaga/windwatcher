@@ -1,4 +1,7 @@
-use crate::{Conversation, ConversationId, ConversationMember, GroupRole, UserId};
+use crate::{
+    Conversation, ConversationId, ConversationKind, ConversationMember, GroupRole, GroupTitle,
+    UserId,
+};
 use std::{error::Error, future::Future};
 use time::OffsetDateTime;
 
@@ -9,6 +12,14 @@ pub enum ConversationStoreError {
     /// A uniqueness or integrity constraint prevented the operation.
     #[error("conversation storage conflict")]
     Conflict,
+    /// A conversation did not match the required kind for this operation.
+    #[error("conversation kind is invalid for this storage operation")]
+    InvalidConversationKind {
+        /// The kind required by the operation.
+        expected: ConversationKind,
+        /// The kind supplied to the operation.
+        actual: ConversationKind,
+    },
     /// Storage is temporarily unavailable.
     #[error("conversation storage unavailable")]
     Unavailable(#[source] Box<dyn Error + Send + Sync>),
@@ -132,7 +143,7 @@ pub trait ConversationStore: Sync {
         &self,
         conversation_id: ConversationId,
         actor: UserId,
-        title: &str,
+        title: &GroupTitle,
         now: OffsetDateTime,
     ) -> impl Future<Output = Result<ChangeStoreOutcome, ConversationStoreError>> + Send;
 }

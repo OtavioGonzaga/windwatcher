@@ -1,10 +1,11 @@
 use time::OffsetDateTime;
 use windwatcher::{
     AddMemberStoreOutcome, ChangeStoreOutcome, Conversation, ConversationId, ConversationMember,
-    ConversationStore, ConversationStoreError, GroupRole, IdentityStore, IdentityStoreError,
-    LeaveStoreOutcome, LocalAuthentication, MigrationStatus, PasswordHash, RefreshRotationResult,
-    RefreshTokenHash, Session, SessionId, SessionStore, SessionStoreError, SqliteStorage,
-    SqliteStorageError, SqliteStorageOptions, StartDirectStoreOutcome, User, UserId, Username,
+    ConversationStore, ConversationStoreError, GroupRole, GroupTitle, IdentityStore,
+    IdentityStoreError, LeaveStoreOutcome, LocalAuthentication, MigrationStatus, PasswordHash,
+    RefreshRotationResult, RefreshTokenHash, Session, SessionId, SessionStore, SessionStoreError,
+    SqliteStorage, SqliteStorageError, SqliteStorageOptions, StartDirectStoreOutcome, User, UserId,
+    Username,
 };
 
 #[derive(Clone, Debug)]
@@ -128,7 +129,7 @@ impl ConversationStore for Storage {
         &self,
         c: ConversationId,
         a: UserId,
-        t: &str,
+        t: &GroupTitle,
         n: OffsetDateTime,
     ) -> Result<ChangeStoreOutcome, ConversationStoreError> {
         match self {

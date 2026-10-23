@@ -1,8 +1,8 @@
 use time::OffsetDateTime;
 use windwatcher::{
     AddMemberStoreOutcome, ChangeStoreOutcome, Conversation, ConversationId, ConversationMember,
-    ConversationStore, ConversationStoreError, CreateGroupConversation, GroupRole, IdentityStore,
-    IdentityStoreError, LeaveStoreOutcome, LocalAuthentication, PasswordHash,
+    ConversationStore, ConversationStoreError, CreateGroupConversation, GroupRole, GroupTitle,
+    IdentityStore, IdentityStoreError, LeaveStoreOutcome, LocalAuthentication, PasswordHash,
     StartDirectConversation, StartDirectStoreOutcome, User, UserId, Username,
 };
 
@@ -111,7 +111,7 @@ impl ConversationStore for ConversationDouble {
         &self,
         _: ConversationId,
         _: UserId,
-        _: &str,
+        _: &GroupTitle,
         _: OffsetDateTime,
     ) -> Result<ChangeStoreOutcome, ConversationStoreError> {
         unreachable!()
@@ -127,7 +127,7 @@ async fn creation_validation_uses_ports_before_persistence() {
         StartDirectConversation::new(&missing, &store)
             .execute(UserId::new(), UserId::new(), now)
             .await,
-        Err(windwatcher::StartDirectConversationError::Operation(_))
+        Err(windwatcher::StartDirectConversationError::ParticipantNotFound(_))
     ));
 
     let id = UserId::new();
@@ -138,6 +138,6 @@ async fn creation_validation_uses_ports_before_persistence() {
         CreateGroupConversation::new(&identity, &store)
             .execute(id, " \t", &[], now)
             .await,
-        Err(windwatcher::CreateGroupConversationError::Operation(_))
+        Err(windwatcher::CreateGroupConversationError::InvalidTitle(_))
     ));
 }

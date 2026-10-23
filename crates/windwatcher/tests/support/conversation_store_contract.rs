@@ -1,7 +1,8 @@
 use time::OffsetDateTime;
 use windwatcher::{
     AddMemberStoreOutcome, ChangeStoreOutcome, Conversation, ConversationId, ConversationStore,
-    GroupRole, GroupTitle, LeaveStoreOutcome, MembershipRole, StartDirectStoreOutcome, UserId,
+    ConversationStoreError, GroupRole, GroupTitle, LeaveStoreOutcome, MembershipRole,
+    StartDirectStoreOutcome, UserId,
 };
 
 /// Exercises adapter-independent conversation persistence semantics.
@@ -13,6 +14,22 @@ pub async fn run<S: ConversationStore>(
     outsider: UserId,
 ) {
     let now = OffsetDateTime::UNIX_EPOCH;
+    let invalid_direct = Conversation::new_direct(ConversationId::new(), now);
+    assert!(matches!(
+        store.create_group(&invalid_direct, owner, &[]).await,
+        Err(ConversationStoreError::InvalidConversationKind { .. })
+    ));
+    let invalid_group = Conversation::new_group(
+        ConversationId::new(),
+        GroupTitle::new("not a Direct").unwrap(),
+        now,
+    );
+    assert!(matches!(
+        store
+            .get_or_create_direct(&invalid_group, owner, member)
+            .await,
+        Err(ConversationStoreError::InvalidConversationKind { .. })
+    ));
     let direct = Conversation::new_direct(ConversationId::new(), now);
     let direct_id = match store
         .get_or_create_direct(&direct, owner, member)
@@ -156,6 +173,24 @@ pub async fn run<S: ConversationStore>(
             .await
             .unwrap(),
         ChangeStoreOutcome::Changed
+    );
+    assert_eq!(
+        store
+            .find_member(group.id(), admin)
+            .await
+            .unwrap()
+            .unwrap()
+            .role(),
+        MembershipRole::Group(GroupRole::Owner)
+    );
+    assert_eq!(
+        store
+            .find_member(group.id(), owner)
+            .await
+            .unwrap()
+            .unwrap()
+            .role(),
+        MembershipRole::Group(GroupRole::Admin)
     );
     assert_eq!(
         store.leave_group(group.id(), member, now).await.unwrap(),
