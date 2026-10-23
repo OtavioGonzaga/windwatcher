@@ -2,7 +2,7 @@
 
 ## Ports and adapters
 
-`IdentityStore` and `SessionStore` are application-owned semantic contracts.
+`IdentityStore`, `SessionStore`, and `ConversationStore` are application-owned semantic contracts.
 Official adapters may use different physical representations, but must preserve
 their atomic creation, uniqueness, refresh-token rotation, and revocation
 semantics. The ports remain independent of SQLx and of any async runtime.
@@ -32,12 +32,20 @@ non-mutating inspection operations.
 ## Schema and representations
 
 The embedded, forward-only SQLite migrations create `users`,
-`local_credentials`, and `sessions`. SQLite-specific representations are:
+`local_credentials`, `sessions`, `conversations`, and `conversation_members`.
+Migration `0002_conversations.sql` adds Direct canonical keys, membership roles,
+and Group ownership constraints. SQLite-specific representations are:
 
 - Windwatcher UUIDv7 identifiers: 16-byte BLOBs;
 - refresh-token SHA-256 fingerprints: 32-byte BLOBs;
 - timestamps: signed Unix microseconds in INTEGER columns;
 - password hashes: encoded PHC TEXT.
+
+Direct keys are 32-byte BLOBs made from sorted 16-byte participant IDs.
+Memberships use a `(conversation_id, user_id)` primary key, a user lookup index,
+and a partial unique Owner index. Conversation deletion cascades memberships;
+user deletion is restricted. Group creation, ownership transfer, and leaving are
+transactional semantic operations.
 
 All three tables use SQLite `STRICT` mode, so these declared storage classes are
 enforced in addition to the identifier and fingerprint length checks.
@@ -57,7 +65,7 @@ or checksum-mismatched applied migrations.
 
 ## Error normalization and contracts
 
-SQLx and SQLite remain adapter details. `IdentityStore` and `SessionStore`
+SQLx and SQLite remain adapter details. `IdentityStore`, `SessionStore`, and `ConversationStore`
 return their normalized application errors, while `SqliteStorageError` describes
 connection and migration infrastructure failures. Contract tests exercise the
 storage behavior independently from physical table names, and SQLite-specific

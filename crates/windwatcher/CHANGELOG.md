@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Direct (including self Direct) and Group conversations, membership roles,
+  Group administration and ownership lifecycle use cases.
+- SQLite conversation persistence with transactional Direct uniqueness,
+  membership, and Group ownership invariants.
+
 - `CreateLocalUser`, a trusted local-user provisioning use case independent of
   self-registration policy.
 
