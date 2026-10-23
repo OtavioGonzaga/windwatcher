@@ -9,6 +9,8 @@ mod identity_store;
 mod local_users;
 mod password;
 mod session;
+#[cfg(feature = "sqlite")]
+mod storage;
 
 pub use authentication::{AuthenticateLocalUser, AuthenticateLocalUserError};
 pub use identity_store::{IdentityStore, IdentityStoreError, LocalAuthentication};
@@ -32,3 +34,5 @@ pub use session::{Hs256JwtAccessTokenCodec, Hs256SigningSecret, Hs256SigningSecr
 
 pub use id::{ConversationId, IdentifierError, MessageId, SessionId, UserId};
 pub use identity::{User, Username, UsernameError};
+#[cfg(feature = "sqlite")]
+pub use storage::{MigrationStatus, SqliteStorage, SqliteStorageError, SqliteStorageOptions};
