@@ -1,9 +1,9 @@
 use time::OffsetDateTime;
 use windwatcher::{
     AddMemberStoreOutcome, ChangeStoreOutcome, Conversation, ConversationId, ConversationMember,
-    ConversationOperationError, ConversationStore, ConversationStoreError, CreateGroupConversation,
-    GroupRole, IdentityStore, IdentityStoreError, LeaveStoreOutcome, LocalAuthentication,
-    PasswordHash, StartDirectConversation, StartDirectStoreOutcome, User, UserId, Username,
+    ConversationStore, ConversationStoreError, CreateGroupConversation, GroupRole, IdentityStore,
+    IdentityStoreError, LeaveStoreOutcome, LocalAuthentication, PasswordHash,
+    StartDirectConversation, StartDirectStoreOutcome, User, UserId, Username,
 };
 
 struct IdentityDouble {
@@ -127,9 +127,7 @@ async fn creation_validation_uses_ports_before_persistence() {
         StartDirectConversation::new(&missing, &store)
             .execute(UserId::new(), UserId::new(), now)
             .await,
-        Err(windwatcher::StartDirectConversationError::Operation(
-            ConversationOperationError::ParticipantNotFound(_)
-        ))
+        Err(windwatcher::StartDirectConversationError::Operation(_))
     ));
 
     let id = UserId::new();
@@ -140,8 +138,6 @@ async fn creation_validation_uses_ports_before_persistence() {
         CreateGroupConversation::new(&identity, &store)
             .execute(id, " \t", &[], now)
             .await,
-        Err(windwatcher::CreateGroupConversationError::Operation(
-            ConversationOperationError::InvalidTitle(_)
-        ))
+        Err(windwatcher::CreateGroupConversationError::Operation(_))
     ));
 }

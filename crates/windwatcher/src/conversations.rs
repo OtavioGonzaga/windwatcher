@@ -24,6 +24,7 @@ async fn participant<I: IdentityStore>(
 }
 
 /// Shared semantic causes retained as sources by focused use-case errors.
+#[doc(hidden)]
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum ConversationOperationError {

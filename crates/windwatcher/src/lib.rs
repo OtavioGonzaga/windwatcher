@@ -25,12 +25,12 @@ pub use conversation_store::{
     LeaveStoreOutcome, StartDirectStoreOutcome,
 };
 pub use conversations::{
-    AddGroupMember, AddGroupMemberError, ConversationOperationError, CreateGroupConversation,
-    CreateGroupConversationError, GetConversation, GetConversationError, LeaveGroupConversation,
-    LeaveGroupConversationError, RemoveGroupMember, RemoveGroupMemberError,
-    RenameGroupConversation, RenameGroupConversationError, SetGroupMemberRole,
-    SetGroupMemberRoleError, StartDirectConversation, StartDirectConversationError,
-    TransferGroupOwnership, TransferGroupOwnershipError,
+    AddGroupMember, AddGroupMemberError, CreateGroupConversation, CreateGroupConversationError,
+    GetConversation, GetConversationError, LeaveGroupConversation, LeaveGroupConversationError,
+    RemoveGroupMember, RemoveGroupMemberError, RenameGroupConversation,
+    RenameGroupConversationError, SetGroupMemberRole, SetGroupMemberRoleError,
+    StartDirectConversation, StartDirectConversationError, TransferGroupOwnership,
+    TransferGroupOwnershipError,
 };
 pub use identity_store::{IdentityStore, IdentityStoreError, LocalAuthentication};
 pub use local_users::{

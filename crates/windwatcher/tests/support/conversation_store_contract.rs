@@ -5,7 +5,13 @@ use windwatcher::{
 };
 
 /// Exercises adapter-independent conversation persistence semantics.
-pub async fn run<S: ConversationStore>(store: &S, owner: UserId, member: UserId) {
+pub async fn run<S: ConversationStore>(
+    store: &S,
+    owner: UserId,
+    admin: UserId,
+    member: UserId,
+    outsider: UserId,
+) {
     let now = OffsetDateTime::UNIX_EPOCH;
     let direct = Conversation::new_direct(ConversationId::new(), now);
     let direct_id = match store
@@ -63,7 +69,7 @@ pub async fn run<S: ConversationStore>(store: &S, owner: UserId, member: UserId)
         now,
     );
     store
-        .create_group(&group, owner, &[member, member])
+        .create_group(&group, owner, &[admin, member, member])
         .await
         .unwrap();
     assert_eq!(
@@ -86,6 +92,41 @@ pub async fn run<S: ConversationStore>(store: &S, owner: UserId, member: UserId)
     );
     assert_eq!(
         store
+            .set_group_member_role(group.id(), owner, admin, GroupRole::Admin, now)
+            .await
+            .unwrap(),
+        ChangeStoreOutcome::Changed
+    );
+    assert_eq!(
+        store
+            .add_group_member(group.id(), member, outsider, now)
+            .await
+            .unwrap(),
+        AddMemberStoreOutcome::NotAuthorized
+    );
+    assert_eq!(
+        store
+            .add_group_member(group.id(), admin, outsider, now)
+            .await
+            .unwrap(),
+        AddMemberStoreOutcome::Added
+    );
+    assert_eq!(
+        store
+            .remove_group_member(group.id(), member, outsider, now)
+            .await
+            .unwrap(),
+        ChangeStoreOutcome::NotAuthorized
+    );
+    assert_eq!(
+        store
+            .remove_group_member(group.id(), admin, outsider, now)
+            .await
+            .unwrap(),
+        ChangeStoreOutcome::Changed
+    );
+    assert_eq!(
+        store
             .add_group_member(group.id(), owner, member, now)
             .await
             .unwrap(),
@@ -93,24 +134,39 @@ pub async fn run<S: ConversationStore>(store: &S, owner: UserId, member: UserId)
     );
     assert_eq!(
         store
-            .set_group_member_role(group.id(), owner, member, GroupRole::Admin, now)
+            .set_group_member_role(group.id(), admin, member, GroupRole::Admin, now)
             .await
             .unwrap(),
         ChangeStoreOutcome::Changed
     );
     assert_eq!(
         store
-            .transfer_group_ownership(group.id(), owner, member, now)
+            .transfer_group_ownership(group.id(), admin, member, now)
+            .await
+            .unwrap(),
+        ChangeStoreOutcome::NotAuthorized
+    );
+    assert_eq!(
+        store.leave_group(group.id(), owner, now).await.unwrap(),
+        LeaveStoreOutcome::OwnershipTransferRequired
+    );
+    assert_eq!(
+        store
+            .transfer_group_ownership(group.id(), owner, admin, now)
             .await
             .unwrap(),
         ChangeStoreOutcome::Changed
+    );
+    assert_eq!(
+        store.leave_group(group.id(), member, now).await.unwrap(),
+        LeaveStoreOutcome::Left
     );
     assert_eq!(
         store.leave_group(group.id(), owner, now).await.unwrap(),
         LeaveStoreOutcome::Left
     );
     assert_eq!(
-        store.leave_group(group.id(), member, now).await.unwrap(),
+        store.leave_group(group.id(), admin, now).await.unwrap(),
         LeaveStoreOutcome::ConversationDeleted
     );
     assert!(store.find_conversation(group.id()).await.unwrap().is_none());
