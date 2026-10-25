@@ -41,13 +41,15 @@ workflows belong there rather than in the reusable crate.
 ## Current state
 
 The reusable `windwatcher` crate contains UUIDv7 identifiers, the user identity
-model, local identity application services, and session lifecycle use cases.
+model, conversation and membership application services, local identity
+application services, and session lifecycle use cases.
 Registration, authentication, and user state depend on `IdentityStore` and
 `PasswordHasher`; session creation, refresh, and revocation depend on
 `SessionStore`, `RefreshTokenProvider`, and `AccessTokenCodec`. The optional
 HS256 JWT adapter implements the access-token port, but JWT is not required by
 embedding applications. The optional `sqlite` feature provides the first
-official persistence adapter: `SqliteStorage` implements both storage ports
+official persistence adapter: `SqliteStorage` implements identity, session, and
+conversation storage ports
 while keeping SQLx and its Tokio runtime requirement at the infrastructure
 boundary.
 

@@ -6,9 +6,13 @@ use sqlx::{Connection, Executor, Row, SqliteConnection};
 use tempfile::TempDir;
 use time::{Duration, OffsetDateTime};
 use windwatcher::{
-    IdentityStore, IdentityStoreError, OsRefreshTokenProvider, PasswordHash, RefreshRotationResult,
-    RefreshToken, RefreshTokenProvider, Session, SessionId, SessionStore, SqliteStorage,
-    SqliteStorageError, SqliteStorageOptions, User, UserId,
+    AddGroupMember, ConversationStore, ConversationStoreError, CreateGroupConversation,
+    GetConversation, GroupRole, IdentityStore, IdentityStoreError, LeaveGroupConversation,
+    LeaveGroupOutcome, MutationOutcome, OsRefreshTokenProvider, PasswordHash,
+    RefreshRotationResult, RefreshToken, RefreshTokenProvider, RenameGroupConversation, Session,
+    SessionId, SessionStore, SetGroupMemberRole, SqliteStorage, SqliteStorageError,
+    SqliteStorageOptions, StartDirectConversation, StartDirectConversationOutcome,
+    TransferGroupOwnership, User, UserId,
 };
 
 mod support;
@@ -63,8 +67,8 @@ async fn migration_is_explicit_idempotent_and_reports_status() {
 
     let status = storage.migration_status().await.unwrap();
     assert_eq!(status.current_version(), None);
-    assert_eq!(status.latest_version(), Some(1));
-    assert_eq!(status.pending(), 1);
+    assert_eq!(status.latest_version(), Some(2));
+    assert_eq!(status.pending(), 2);
     assert!(!status.is_current());
     let inspector = sqlx::SqlitePool::connect(&url).await.unwrap();
     let tables: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sqlite_master WHERE name = 'users'")
@@ -76,7 +80,7 @@ async fn migration_is_explicit_idempotent_and_reports_status() {
     storage.migrate().await.unwrap();
     storage.migrate().await.unwrap();
     let status = storage.check_schema().await.unwrap();
-    assert_eq!(status.current_version(), Some(1));
+    assert_eq!(status.current_version(), Some(2));
     assert!(status.is_current());
 
     assert!(matches!(
@@ -86,6 +90,477 @@ async fn migration_is_explicit_idempotent_and_reports_status() {
         .await,
         Err(SqliteStorageError::Configuration(_))
     ));
+}
+
+#[tokio::test]
+async fn conversation_store_supports_directs_groups_and_owner_lifecycle() {
+    let (_directory, storage) = store().await;
+    let now = timestamp(100);
+    let alice = persisted_user(&storage, "alice").await;
+    let bob = persisted_user(&storage, "bob").await;
+    let direct = StartDirectConversation::new(&storage, &storage)
+        .execute(alice.id(), bob.id(), now)
+        .await
+        .unwrap();
+    let direct_id = match direct {
+        StartDirectConversationOutcome::Created(c)
+        | StartDirectConversationOutcome::Existing(c) => c.id(),
+    };
+    let reverse = StartDirectConversation::new(&storage, &storage)
+        .execute(bob.id(), alice.id(), now)
+        .await
+        .unwrap();
+    assert_eq!(
+        match reverse {
+            StartDirectConversationOutcome::Created(c)
+            | StartDirectConversationOutcome::Existing(c) => c.id(),
+        },
+        direct_id
+    );
+    let self_direct = StartDirectConversation::new(&storage, &storage)
+        .execute(alice.id(), alice.id(), now)
+        .await
+        .unwrap();
+    let self_id = match self_direct {
+        StartDirectConversationOutcome::Created(c)
+        | StartDirectConversationOutcome::Existing(c) => c.id(),
+    };
+    assert!(
+        storage
+            .find_member(self_id, alice.id())
+            .await
+            .unwrap()
+            .is_some()
+    );
+
+    let group = CreateGroupConversation::new(&storage, &storage)
+        .execute(alice.id(), "team", &[bob.id(), bob.id()], now)
+        .await
+        .unwrap();
+    assert_eq!(
+        storage
+            .find_member(group.id(), alice.id())
+            .await
+            .unwrap()
+            .unwrap()
+            .role(),
+        windwatcher::MembershipRole::Group(GroupRole::Owner)
+    );
+    AddGroupMember::new(&storage, &storage)
+        .execute(alice.id(), group.id(), bob.id(), now)
+        .await
+        .unwrap();
+    assert_eq!(
+        SetGroupMemberRole::new(&storage)
+            .execute(
+                alice.id(),
+                group.id(),
+                bob.id(),
+                GroupRole::Admin,
+                timestamp(101)
+            )
+            .await
+            .unwrap(),
+        MutationOutcome::Changed
+    );
+    assert_eq!(
+        TransferGroupOwnership::new(&storage)
+            .execute(alice.id(), group.id(), bob.id(), timestamp(102))
+            .await
+            .unwrap(),
+        MutationOutcome::Changed
+    );
+    assert_eq!(
+        LeaveGroupConversation::new(&storage)
+            .execute(alice.id(), group.id(), timestamp(103))
+            .await
+            .unwrap(),
+        LeaveGroupOutcome::Left
+    );
+    assert_eq!(
+        LeaveGroupConversation::new(&storage)
+            .execute(bob.id(), group.id(), timestamp(104))
+            .await
+            .unwrap(),
+        LeaveGroupOutcome::ConversationDeleted
+    );
+    assert!(
+        storage
+            .find_conversation(group.id())
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn conversation_store_contract_preserves_lifecycle_semantics() {
+    let (_directory, storage) = store().await;
+    let owner = persisted_user(&storage, "contract_owner").await;
+    let admin = persisted_user(&storage, "contract_admin").await;
+    let member = persisted_user(&storage, "contract_member").await;
+    let outsider = persisted_user(&storage, "contract_outsider").await;
+    support::conversation_store_contract::run(
+        &storage,
+        owner.id(),
+        admin.id(),
+        member.id(),
+        outsider.id(),
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn concurrent_direct_creation_converges_for_peer_and_self_pairs() {
+    let (directory, storage) = store().await;
+    let storage = Arc::new(storage);
+    let alice = persisted_user(&storage, "alice").await;
+    let bob = persisted_user(&storage, "bob").await;
+    let mut direct_ids = Vec::new();
+    for [(first, second), (other_first, other_second)] in [
+        [(alice.id(), bob.id()), (bob.id(), alice.id())],
+        [(alice.id(), alice.id()), (alice.id(), alice.id())],
+    ] {
+        let barrier = Arc::new(tokio::sync::Barrier::new(2));
+        let tasks = [(first, second), (other_first, other_second)].map(|(first, second)| {
+            let store = Arc::clone(&storage);
+            let barrier = Arc::clone(&barrier);
+            tokio::spawn(async move {
+                barrier.wait().await;
+                StartDirectConversation::new(&*store, &*store)
+                    .execute(first, second, timestamp(200))
+                    .await
+                    .unwrap()
+            })
+        });
+        let [left, right] = tasks;
+        let id = |outcome: StartDirectConversationOutcome| match outcome {
+            StartDirectConversationOutcome::Created(conversation)
+            | StartDirectConversationOutcome::Existing(conversation) => conversation.id(),
+        };
+        let conversation_id = id(left.await.unwrap());
+        assert_eq!(conversation_id, id(right.await.unwrap()));
+        direct_ids.push(conversation_id);
+    }
+    let url = format!(
+        "sqlite://{}",
+        directory.path().join("windwatcher.db").display()
+    );
+    let inspector = sqlx::SqlitePool::connect(&url).await.unwrap();
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM conversations WHERE kind = 'direct'")
+        .fetch_one(&inspector)
+        .await
+        .unwrap();
+    assert_eq!(count, 2);
+    for (id, member_count) in [(direct_ids[0], 2_i64), (direct_ids[1], 1_i64)] {
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM conversation_members WHERE conversation_id = ?",
+        )
+        .bind(id.as_uuid().into_bytes().to_vec())
+        .fetch_one(&inspector)
+        .await
+        .unwrap();
+        assert_eq!(count, member_count);
+    }
+}
+
+#[tokio::test]
+async fn group_permissions_no_ops_and_direct_rejections_are_enforced() {
+    let (_directory, storage) = store().await;
+    let now = timestamp(300);
+    let owner = persisted_user(&storage, "owner").await;
+    let admin = persisted_user(&storage, "admin").await;
+    let member = persisted_user(&storage, "member").await;
+    let outsider = persisted_user(&storage, "outsider").await;
+    let group = CreateGroupConversation::new(&storage, &storage)
+        .execute(owner.id(), "Group", &[admin.id(), member.id()], now)
+        .await
+        .unwrap();
+    assert_eq!(
+        SetGroupMemberRole::new(&storage)
+            .execute(
+                owner.id(),
+                group.id(),
+                admin.id(),
+                GroupRole::Admin,
+                timestamp(301)
+            )
+            .await
+            .unwrap(),
+        MutationOutcome::Changed
+    );
+    assert!(matches!(
+        AddGroupMember::new(&storage, &storage)
+            .execute(member.id(), group.id(), outsider.id(), timestamp(302))
+            .await,
+        Err(windwatcher::AddGroupMemberError::InsufficientPermissions)
+    ));
+    assert_eq!(
+        AddGroupMember::new(&storage, &storage)
+            .execute(admin.id(), group.id(), outsider.id(), timestamp(302))
+            .await
+            .unwrap(),
+        windwatcher::AddGroupMemberOutcome::Added
+    );
+    assert!(matches!(
+        GetConversation::new(&storage)
+            .execute(UserId::new(), group.id())
+            .await,
+        Err(windwatcher::GetConversationError::NotMember)
+    ));
+    assert!(matches!(
+        AddGroupMember::new(&storage, &storage)
+            .execute(owner.id(), group.id(), UserId::new(), timestamp(302))
+            .await,
+        Err(windwatcher::AddGroupMemberError::ParticipantNotFound(_))
+    ));
+    assert!(matches!(
+        TransferGroupOwnership::new(&storage)
+            .execute(admin.id(), group.id(), owner.id(), timestamp(303))
+            .await,
+        Err(windwatcher::TransferGroupOwnershipError::InsufficientPermissions)
+    ));
+    assert!(matches!(
+        SetGroupMemberRole::new(&storage)
+            .execute(
+                admin.id(),
+                group.id(),
+                owner.id(),
+                GroupRole::Member,
+                timestamp(303)
+            )
+            .await,
+        Err(windwatcher::SetGroupMemberRoleError::OwnerProtected)
+    ));
+    let before = storage
+        .find_conversation(group.id())
+        .await
+        .unwrap()
+        .unwrap()
+        .updated_at();
+    assert_eq!(
+        RenameGroupConversation::new(&storage)
+            .execute(admin.id(), group.id(), "Group", timestamp(304))
+            .await
+            .unwrap(),
+        MutationOutcome::Unchanged
+    );
+    assert_eq!(
+        storage
+            .find_conversation(group.id())
+            .await
+            .unwrap()
+            .unwrap()
+            .updated_at(),
+        before
+    );
+    assert!(matches!(
+        RenameGroupConversation::new(&storage)
+            .execute(member.id(), group.id(), "new", timestamp(304))
+            .await,
+        Err(windwatcher::RenameGroupConversationError::InsufficientPermissions)
+    ));
+    assert!(matches!(
+        RenameGroupConversation::new(&storage)
+            .execute(owner.id(), group.id(), "  ", timestamp(304))
+            .await,
+        Err(windwatcher::RenameGroupConversationError::InvalidTitle(_))
+    ));
+    let direct = StartDirectConversation::new(&storage, &storage)
+        .execute(owner.id(), member.id(), now)
+        .await
+        .unwrap();
+    let direct_id = match direct {
+        StartDirectConversationOutcome::Created(c)
+        | StartDirectConversationOutcome::Existing(c) => c.id(),
+    };
+    assert!(matches!(
+        RenameGroupConversation::new(&storage)
+            .execute(owner.id(), direct_id, "x", now)
+            .await,
+        Err(windwatcher::RenameGroupConversationError::DirectOperationNotSupported)
+    ));
+    assert!(matches!(
+        LeaveGroupConversation::new(&storage)
+            .execute(owner.id(), direct_id, now)
+            .await,
+        Err(windwatcher::LeaveGroupConversationError::DirectOperationNotSupported)
+    ));
+}
+
+#[tokio::test]
+async fn group_creation_and_ownership_transfer_roll_back_on_persistence_failure() {
+    let (directory, storage) = store().await;
+    let owner = persisted_user(&storage, "owner").await;
+    let member = persisted_user(&storage, "member").await;
+    let url = format!(
+        "sqlite://{}",
+        directory.path().join("windwatcher.db").display()
+    );
+    let inspector = sqlx::SqlitePool::connect(&url).await.unwrap();
+    inspector.execute("CREATE TRIGGER reject_member_insert BEFORE INSERT ON conversation_members WHEN NEW.role = 'member' BEGIN SELECT RAISE(ABORT, 'test failure'); END").await.unwrap();
+    assert!(matches!(
+        CreateGroupConversation::new(&storage, &storage)
+            .execute(owner.id(), "rollback", &[member.id()], timestamp(400))
+            .await,
+        Err(windwatcher::CreateGroupConversationError::Storage(_))
+    ));
+    let count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM conversations WHERE title = 'rollback'")
+            .fetch_one(&inspector)
+            .await
+            .unwrap();
+    assert_eq!(count, 0);
+    inspector
+        .execute("DROP TRIGGER reject_member_insert")
+        .await
+        .unwrap();
+    let group = CreateGroupConversation::new(&storage, &storage)
+        .execute(owner.id(), "transfer", &[member.id()], timestamp(401))
+        .await
+        .unwrap();
+    inspector.execute("CREATE TRIGGER reject_owner_transfer BEFORE UPDATE OF role ON conversation_members WHEN NEW.role = 'owner' BEGIN SELECT RAISE(ABORT, 'test failure'); END").await.unwrap();
+    assert!(matches!(
+        TransferGroupOwnership::new(&storage)
+            .execute(owner.id(), group.id(), member.id(), timestamp(402))
+            .await,
+        Err(windwatcher::TransferGroupOwnershipError::Storage(_))
+    ));
+    assert_eq!(
+        storage
+            .find_member(group.id(), owner.id())
+            .await
+            .unwrap()
+            .unwrap()
+            .role(),
+        windwatcher::MembershipRole::Group(GroupRole::Owner)
+    );
+    assert_eq!(
+        storage
+            .find_member(group.id(), member.id())
+            .await
+            .unwrap()
+            .unwrap()
+            .role(),
+        windwatcher::MembershipRole::Group(GroupRole::Member)
+    );
+}
+
+#[tokio::test]
+async fn group_management_permission_matrix_and_owner_only_lifecycle_hold() {
+    let (_directory, storage) = store().await;
+    let owner = persisted_user(&storage, "matrix_owner").await;
+    let admin = persisted_user(&storage, "matrix_admin").await;
+    let member = persisted_user(&storage, "matrix_member").await;
+    let target = persisted_user(&storage, "matrix_target").await;
+    let group = CreateGroupConversation::new(&storage, &storage)
+        .execute(
+            owner.id(),
+            "matrix",
+            &[admin.id(), member.id(), target.id()],
+            timestamp(600),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        SetGroupMemberRole::new(&storage)
+            .execute(
+                owner.id(),
+                group.id(),
+                admin.id(),
+                GroupRole::Admin,
+                timestamp(601)
+            )
+            .await
+            .unwrap(),
+        MutationOutcome::Changed
+    );
+    assert_eq!(
+        SetGroupMemberRole::new(&storage)
+            .execute(
+                admin.id(),
+                group.id(),
+                target.id(),
+                GroupRole::Admin,
+                timestamp(602)
+            )
+            .await
+            .unwrap(),
+        MutationOutcome::Changed
+    );
+    let before = storage
+        .find_conversation(group.id())
+        .await
+        .unwrap()
+        .unwrap()
+        .updated_at();
+    assert_eq!(
+        SetGroupMemberRole::new(&storage)
+            .execute(
+                admin.id(),
+                group.id(),
+                target.id(),
+                GroupRole::Admin,
+                timestamp(603)
+            )
+            .await
+            .unwrap(),
+        MutationOutcome::Unchanged
+    );
+    assert_eq!(
+        storage
+            .find_conversation(group.id())
+            .await
+            .unwrap()
+            .unwrap()
+            .updated_at(),
+        before
+    );
+    assert_eq!(
+        windwatcher::RemoveGroupMember::new(&storage)
+            .execute(admin.id(), group.id(), target.id(), timestamp(604))
+            .await
+            .unwrap(),
+        MutationOutcome::Changed
+    );
+    assert!(matches!(
+        windwatcher::RemoveGroupMember::new(&storage)
+            .execute(member.id(), group.id(), admin.id(), timestamp(605))
+            .await,
+        Err(windwatcher::RemoveGroupMemberError::InsufficientPermissions)
+    ));
+    assert_eq!(
+        windwatcher::RemoveGroupMember::new(&storage)
+            .execute(owner.id(), group.id(), admin.id(), timestamp(605))
+            .await
+            .unwrap(),
+        MutationOutcome::Changed
+    );
+    assert!(matches!(
+        LeaveGroupConversation::new(&storage)
+            .execute(owner.id(), group.id(), timestamp(606))
+            .await,
+        Err(windwatcher::LeaveGroupConversationError::OwnershipTransferRequired)
+    ));
+    assert_eq!(
+        LeaveGroupConversation::new(&storage)
+            .execute(member.id(), group.id(), timestamp(607))
+            .await
+            .unwrap(),
+        LeaveGroupOutcome::Left
+    );
+
+    let owner_only = CreateGroupConversation::new(&storage, &storage)
+        .execute(owner.id(), "owner only", &[], timestamp(608))
+        .await
+        .unwrap();
+    assert_eq!(
+        LeaveGroupConversation::new(&storage)
+            .execute(owner.id(), owner_only.id(), timestamp(609))
+            .await
+            .unwrap(),
+        LeaveGroupOutcome::ConversationDeleted
+    );
 }
 
 #[tokio::test]
@@ -356,6 +831,114 @@ async fn strict_tables_reject_incorrect_storage_classes_and_lengths() {
             .await
             .is_err()
     );
+}
+
+#[tokio::test]
+async fn conversation_schema_uses_strict_binary_keys_and_cascading_memberships() {
+    let (directory, storage) = store().await;
+    let alice = persisted_user(&storage, "schema_alice").await;
+    let bob = persisted_user(&storage, "schema_bob").await;
+    let direct = StartDirectConversation::new(&storage, &storage)
+        .execute(alice.id(), bob.id(), timestamp(500))
+        .await
+        .unwrap();
+    let direct_id = match direct {
+        StartDirectConversationOutcome::Created(c)
+        | StartDirectConversationOutcome::Existing(c) => c.id(),
+    };
+    let url = format!(
+        "sqlite://{}",
+        directory.path().join("windwatcher.db").display()
+    );
+    let inspector = sqlx::SqlitePool::connect(&url).await.unwrap();
+    for table in ["conversations", "conversation_members"] {
+        let sql: String =
+            sqlx::query_scalar("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?")
+                .bind(table)
+                .fetch_one(&inspector)
+                .await
+                .unwrap();
+        assert!(sql.ends_with(" STRICT"));
+    }
+    let owner_index: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'conversation_members_one_owner'",
+    )
+    .fetch_one(&inspector)
+    .await
+    .unwrap();
+    assert_eq!(owner_index, 1);
+    let row = sqlx::query("SELECT id, direct_key, created_at FROM conversations WHERE id = ?")
+        .bind(direct_id.as_uuid().into_bytes().to_vec())
+        .fetch_one(&inspector)
+        .await
+        .unwrap();
+    assert_eq!(row.try_get::<Vec<u8>, _>("id").unwrap().len(), 16);
+    assert_eq!(row.try_get::<Vec<u8>, _>("direct_key").unwrap().len(), 32);
+    assert_eq!(row.try_get::<i64, _>("created_at").unwrap(), 500_000_000);
+    assert!(sqlx::query("INSERT INTO conversations (id, kind, title, direct_key, created_at, updated_at) VALUES (?, 'direct', 'invalid', ?, 0, 0)")
+        .bind(windwatcher::ConversationId::new().as_uuid().into_bytes().to_vec())
+        .bind(vec![0_u8; 32]).execute(&inspector).await.is_err());
+    sqlx::query("DELETE FROM conversations WHERE id = ?")
+        .bind(direct_id.as_uuid().into_bytes().to_vec())
+        .execute(&inspector)
+        .await
+        .unwrap();
+    let members: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM conversation_members WHERE conversation_id = ?")
+            .bind(direct_id.as_uuid().into_bytes().to_vec())
+            .fetch_one(&inspector)
+            .await
+            .unwrap();
+    assert_eq!(members, 0);
+}
+
+#[tokio::test]
+async fn malformed_persisted_conversation_memberships_are_rejected() {
+    let (directory, storage) = store().await;
+    let alice = persisted_user(&storage, "corrupt_alice").await;
+    let bob = persisted_user(&storage, "corrupt_bob").await;
+    let direct = StartDirectConversation::new(&storage, &storage)
+        .execute(alice.id(), bob.id(), timestamp(550))
+        .await
+        .unwrap();
+    let direct_id = match direct {
+        StartDirectConversationOutcome::Created(c)
+        | StartDirectConversationOutcome::Existing(c) => c.id(),
+    };
+    let url = format!(
+        "sqlite://{}",
+        directory.path().join("windwatcher.db").display()
+    );
+    let inspector = sqlx::SqlitePool::connect(&url).await.unwrap();
+    sqlx::query(
+        "UPDATE conversation_members SET role = 'owner' WHERE conversation_id = ? AND user_id = ?",
+    )
+    .bind(direct_id.as_uuid().into_bytes().to_vec())
+    .bind(alice.id().as_uuid().into_bytes().to_vec())
+    .execute(&inspector)
+    .await
+    .unwrap();
+    assert!(matches!(
+        storage.find_member(direct_id, alice.id()).await,
+        Err(ConversationStoreError::Unexpected(_))
+    ));
+
+    let group = CreateGroupConversation::new(&storage, &storage)
+        .execute(alice.id(), "corrupt group", &[bob.id()], timestamp(551))
+        .await
+        .unwrap();
+    sqlx::query(
+        "UPDATE conversation_members SET role = 'direct' WHERE conversation_id = ? AND user_id = ?",
+    )
+    .bind(group.id().as_uuid().into_bytes().to_vec())
+    .bind(bob.id().as_uuid().into_bytes().to_vec())
+    .execute(&inspector)
+    .await
+    .unwrap();
+    assert!(matches!(
+        storage.find_member(group.id(), bob.id()).await,
+        Err(ConversationStoreError::Unexpected(_))
+    ));
 }
 
 #[tokio::test]
