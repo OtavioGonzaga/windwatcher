@@ -273,7 +273,7 @@ pub async fn run<S: ConversationStore>(
     let renamed = GroupTitle::new("renamed group").unwrap();
     assert_eq!(
         store
-            .rename_group(group.id(), owner, &renamed, later)
+            .rename_group(group.id(), admin, &renamed, later)
             .await
             .unwrap(),
         ChangeStoreOutcome::Changed
@@ -287,7 +287,7 @@ pub async fn run<S: ConversationStore>(
     assert!(after_rename > before_rename);
     assert_eq!(
         store
-            .rename_group(group.id(), owner, &renamed, later)
+            .rename_group(group.id(), admin, &renamed, later)
             .await
             .unwrap(),
         ChangeStoreOutcome::Unchanged
@@ -303,7 +303,7 @@ pub async fn run<S: ConversationStore>(
     );
     assert_eq!(
         store
-            .set_group_member_role(group.id(), owner, member, GroupRole::Admin, now)
+            .set_group_member_role(group.id(), admin, member, GroupRole::Admin, now)
             .await
             .unwrap(),
         ChangeStoreOutcome::Changed
