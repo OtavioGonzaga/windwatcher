@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Text message model and exact portable content, with configurable new-write
+  `MessagePolicy` (128 KiB default measured in UTF-8 bytes).
+- Send, single-message retrieval, lightweight replies, author editing and
+  author/Group-moderator deletion with content-free structural tombstones.
+- Explicit monotonic membership read markers, derived unread counts excluding
+  own/deleted messages, and atomic historical-read initialization on Group join.
+- Semantic `MessageStore` port, SQLite message/read-state migration and adapter,
+  and portable lifecycle contracts plus SQLite integrity/concurrency tests.
+
 - Direct (including self Direct) and Group conversations, membership roles,
   Group administration and ownership lifecycle use cases.
 - SQLite conversation persistence with transactional Direct uniqueness,

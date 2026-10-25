@@ -41,6 +41,52 @@ fn command(config: &Path) -> Command {
 }
 
 #[test]
+fn message_config_defaults_toml_environment_and_unknown_fields() {
+    let directory = TempDir::new().unwrap();
+    let path = complete_config(&directory, "warn");
+    command(&path).args(["config", "check"]).assert().success();
+    let base = fs::read_to_string(&path).unwrap();
+    for maximum in [0, 4, 131072] {
+        fs::write(
+            &path,
+            format!("{base}\n[messages]\nmax_content_bytes = {maximum}\n"),
+        )
+        .unwrap();
+        command(&path).args(["config", "check"]).assert().success();
+    }
+    fs::write(
+        &path,
+        format!("{base}\n[messages]\nmax_content_bytes = -1\n"),
+    )
+    .unwrap();
+    command(&path).args(["config", "check"]).assert().failure();
+    command(&path)
+        .env("WINDWATCHER__MESSAGES__MAX_CONTENT_BYTES", "0")
+        .args(["config", "check"])
+        .assert()
+        .success();
+    fs::write(&path, format!("{base}\n[messages]\nallow_blank = true\n")).unwrap();
+    command(&path)
+        .args(["config", "check"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("unknown field"));
+    fs::write(&path, &base).unwrap();
+    command(&path)
+        .env("WINDWATCHER__MESSAGES__MAX_CONTENT_BYTES", "invalid")
+        .args(["config", "check"])
+        .assert()
+        .failure();
+    command(&path)
+        .env("WINDWATCHER__MESSAGES__ALLOW_BLANK", "true")
+        .args(["config", "check"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("unknown field"));
+    assert!(!directory.path().join("windwatcher.db").exists());
+}
+
+#[test]
 fn migrations_are_explicit_and_user_provisioning_uses_current_schema() {
     let directory = TempDir::new().unwrap();
     let config = config(&directory);
@@ -56,7 +102,7 @@ fn migrations_are_explicit_and_user_provisioning_uses_current_schema() {
         .arg("migrate")
         .assert()
         .success()
-        .stdout(predicate::str::contains("Applied 2 migration(s)."));
+        .stdout(predicate::str::contains("Applied 3 migration(s)."));
     command(&config)
         .args(["migrate", "status"])
         .assert()

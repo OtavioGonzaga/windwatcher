@@ -7,6 +7,8 @@ use sqlx::{
 use time::OffsetDateTime;
 use uuid::Uuid;
 
+mod messages;
+
 use crate::{
     AddMemberStoreOutcome, ChangeStoreOutcome, Conversation, ConversationId, ConversationKind,
     ConversationMember, ConversationStore, ConversationStoreError, GroupRole, GroupTitle,
@@ -442,11 +444,22 @@ fn read_member(row: &SqliteRow) -> Result<ConversationMember, ConversationStoreE
     };
     let joined_at = from_micros(row.try_get("joined_at").map_err(conversation_error)?)
         .map_err(unexpected_conversation)?;
-    Ok(ConversationMember::new(
+    let marker = row
+        .try_get::<Option<Vec<u8>>, _>("last_read_message_id")
+        .map_err(conversation_error)?
+        .map(|bytes| {
+            Uuid::from_slice(&bytes)
+                .ok()
+                .and_then(|id| crate::MessageId::try_from(id).ok())
+                .ok_or_else(|| unexpected_conversation("invalid persisted read marker"))
+        })
+        .transpose()?;
+    Ok(ConversationMember::restore(
         conversation_id,
         user_id,
         role,
         joined_at,
+        marker,
     ))
 }
 fn direct_key(first: UserId, second: UserId) -> Vec<u8> {
@@ -695,7 +708,7 @@ impl ConversationStore for SqliteStorage {
         conversation_id: ConversationId,
         user_id: UserId,
     ) -> Result<Option<ConversationMember>, ConversationStoreError> {
-        sqlx::query("SELECT m.conversation_id, m.user_id, m.role, m.joined_at, c.kind FROM conversation_members m JOIN conversations c ON c.id = m.conversation_id WHERE m.conversation_id = ? AND m.user_id = ?")
+        sqlx::query("SELECT m.conversation_id, m.user_id, m.role, m.joined_at, m.last_read_message_id, c.kind FROM conversation_members m JOIN conversations c ON c.id = m.conversation_id WHERE m.conversation_id = ? AND m.user_id = ?")
             .bind(id_bytes(conversation_id)).bind(id_bytes(user_id)).fetch_optional(&self.pool).await.map_err(conversation_error)?
             .map(|row| {
                 let member = read_member(&row)?;
@@ -713,13 +726,17 @@ impl ConversationStore for SqliteStorage {
         member: UserId,
         now: OffsetDateTime,
     ) -> Result<AddMemberStoreOutcome, ConversationStoreError> {
-        let mut transaction = self.pool.begin().await.map_err(conversation_error)?;
+        let mut transaction = self
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .map_err(conversation_error)?;
         let can_manage: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM conversations c JOIN conversation_members m ON m.conversation_id = c.id WHERE c.id = ? AND c.kind = 'group' AND m.user_id = ? AND m.role IN ('owner', 'admin')").bind(id_bytes(id)).bind(id_bytes(actor)).fetch_one(&mut *transaction).await.map_err(conversation_error)?;
         if can_manage == 0 {
             transaction.rollback().await.map_err(conversation_error)?;
             return Ok(AddMemberStoreOutcome::NotAuthorized);
         }
-        let inserted = sqlx::query("INSERT INTO conversation_members (conversation_id, user_id, role, joined_at) VALUES (?, ?, 'member', ?) ON CONFLICT(conversation_id, user_id) DO NOTHING").bind(id_bytes(id)).bind(id_bytes(member)).bind(to_micros(now).map_err(unexpected_conversation)?).execute(&mut *transaction).await.map_err(conversation_error)?;
+        let inserted = sqlx::query("INSERT INTO conversation_members (conversation_id, user_id, role, joined_at, last_read_message_id) VALUES (?, ?, 'member', ?, (SELECT MAX(id) FROM messages WHERE conversation_id = ?)) ON CONFLICT(conversation_id, user_id) DO NOTHING").bind(id_bytes(id)).bind(id_bytes(member)).bind(to_micros(now).map_err(unexpected_conversation)?).bind(id_bytes(id)).execute(&mut *transaction).await.map_err(conversation_error)?;
         if inserted.rows_affected() == 1 {
             sqlx::query("UPDATE conversations SET updated_at = ? WHERE id = ?")
                 .bind(to_micros(now).map_err(unexpected_conversation)?)

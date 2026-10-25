@@ -125,7 +125,10 @@ domain_id!(
     ConversationId,
     "The UUIDv7 identifier of a future messaging conversation."
 );
-domain_id!(MessageId, "The UUIDv7 identifier of a future message.");
+domain_id!(
+    MessageId,
+    "The UUIDv7 identity and canonical ordering key of a [`crate::Message`]."
+);
 
 #[cfg(test)]
 mod tests {

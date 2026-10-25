@@ -19,6 +19,10 @@ issuer = "windwatcher"
 secret_file = "/etc/windwatcher/jwt.key"
 # secret = "replace-with-a-secret-at-least-32-bytes-long"
 
+[messages]
+# Inclusive UTF-8 byte limit for new sends/edits; 131072 bytes = 128 KiB.
+max_content_bytes = 131072
+
 [logging]
 filter = "info"
 format = "compact"

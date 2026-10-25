@@ -101,7 +101,10 @@ pub trait ConversationStore: Sync {
         conversation_id: ConversationId,
         user_id: UserId,
     ) -> impl Future<Output = Result<Option<ConversationMember>, ConversationStoreError>> + Send;
-    /// Adds a Group Member only when the actor is Owner or Admin.
+    /// Adds a Group Member only when the actor is Owner or Admin. Atomically
+    /// initializes a new membership's read marker to the maximum persisted
+    /// message ID (including tombstones), or None for empty history. An existing
+    /// member's marker is never reset; rejoining creates a fresh boundary.
     fn add_group_member(
         &self,
         conversation_id: ConversationId,

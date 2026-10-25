@@ -42,6 +42,22 @@ check` and future runtime commands, but does not block migration or provisioning
 Direct environment-secret values are read as exact UTF-8 text rather than Figment's
 structured-value syntax.
 
+## Messages
+
+```toml
+[messages]
+max_content_bytes = 131072
+```
+
+The default inclusive new-write limit is 131072 UTF-8 bytes (128 KiB), not a
+character count. Zero accepts only empty content. This resolves to the library's
+`MessagePolicy` for sends and edits; historical reads are not revalidated against
+the current size limit. Override it with
+`WINDWATCHER__MESSAGES__MAX_CONTENT_BYTES=131072`. Negative, non-integer and unknown
+message fields are rejected. `config check` resolves the policy without opening
+a database or creating files. No message runtime, message CLI commands or
+dedicated message-limit CLI flag are introduced.
+
 ## Logging
 
 `logging.filter` accepts `tracing_subscriber::EnvFilter` syntax and `logging.format`

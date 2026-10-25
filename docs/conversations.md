@@ -20,7 +20,15 @@ members initially have the Member role. Roles are Owner, Admin, and Member.
 Owners can manage all non-Owner members and transfer ownership. Admins can
 rename, add members, manage Members and Admins, but cannot act against the
 Owner. Members may leave. An Owner with other members must transfer ownership
-before leaving; a sole Owner leaving hard-deletes the Group and its memberships.
+before leaving; a sole Owner leaving hard-deletes the Group, its memberships and
+all messages, including messages connected by replies.
+
+Each membership exposes `last_read_message_id`, an optional monotonic UUIDv7
+read boundary. Initial memberships have no marker. Adding a new Group member
+atomically initializes it to the maximum persisted message ID (including
+tombstones), or None for empty history. Adding an existing member does not reset
+it. Leaving removes read state; rejoining takes a fresh history boundary.
+See [messages](messages.md) for explicit marking and unread semantics.
 
 ## Persistence invariants
 
@@ -31,5 +39,4 @@ membership.
 
 ## Current limitations
 
-There are no messages, read state, pagination, invitations, public groups, or
-network endpoints yet.
+There is no pagination, invitations, public groups, or network endpoints yet.

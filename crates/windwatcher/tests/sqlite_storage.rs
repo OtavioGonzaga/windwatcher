@@ -58,6 +58,23 @@ async fn persisted_user(storage: &SqliteStorage, name: &str) -> User {
 }
 
 #[tokio::test]
+async fn sqlite_satisfies_portable_message_contract() {
+    let (_directory, storage) = store().await;
+    let owner = persisted_user(&storage, "message_owner").await;
+    let admin = persisted_user(&storage, "message_admin").await;
+    let member = persisted_user(&storage, "message_member").await;
+    let outsider = persisted_user(&storage, "message_outsider").await;
+    support::message_store_contract::run(
+        &storage,
+        owner.id(),
+        admin.id(),
+        member.id(),
+        outsider.id(),
+    )
+    .await;
+}
+
+#[tokio::test]
 async fn migration_is_explicit_idempotent_and_reports_status() {
     let directory = TempDir::new().unwrap();
     let url = format!("sqlite://{}", directory.path().join("fresh.db").display());
@@ -67,8 +84,8 @@ async fn migration_is_explicit_idempotent_and_reports_status() {
 
     let status = storage.migration_status().await.unwrap();
     assert_eq!(status.current_version(), None);
-    assert_eq!(status.latest_version(), Some(2));
-    assert_eq!(status.pending(), 2);
+    assert_eq!(status.latest_version(), Some(3));
+    assert_eq!(status.pending(), 3);
     assert!(!status.is_current());
     let inspector = sqlx::SqlitePool::connect(&url).await.unwrap();
     let tables: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sqlite_master WHERE name = 'users'")
@@ -80,7 +97,7 @@ async fn migration_is_explicit_idempotent_and_reports_status() {
     storage.migrate().await.unwrap();
     storage.migrate().await.unwrap();
     let status = storage.check_schema().await.unwrap();
-    assert_eq!(status.current_version(), Some(2));
+    assert_eq!(status.current_version(), Some(3));
     assert!(status.is_current());
 
     assert!(matches!(
