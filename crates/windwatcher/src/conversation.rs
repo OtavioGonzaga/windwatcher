@@ -1,6 +1,6 @@
 use time::OffsetDateTime;
 
-use crate::{ConversationId, UserId};
+use crate::{ConversationId, MessageId, UserId};
 
 /// The two supported conversation lifecycles.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -155,6 +155,7 @@ pub struct ConversationMember {
     user_id: UserId,
     role: MembershipRole,
     joined_at: OffsetDateTime,
+    last_read_message_id: Option<MessageId>,
 }
 impl ConversationMember {
     /// Reconstructs a membership after adapter validation.
@@ -169,7 +170,28 @@ impl ConversationMember {
             user_id,
             role,
             joined_at,
+            last_read_message_id: None,
         }
+    }
+    /// Restores a membership and its persisted UUIDv7 read boundary.
+    pub fn restore(
+        conversation_id: ConversationId,
+        user_id: UserId,
+        role: MembershipRole,
+        joined_at: OffsetDateTime,
+        last_read_message_id: Option<MessageId>,
+    ) -> Self {
+        Self {
+            conversation_id,
+            user_id,
+            role,
+            joined_at,
+            last_read_message_id,
+        }
+    }
+    /// Returns the explicit monotonic read watermark, if any.
+    pub fn last_read_message_id(&self) -> Option<MessageId> {
+        self.last_read_message_id
     }
     /// Returns the conversation identifier.
     pub fn conversation_id(&self) -> ConversationId {

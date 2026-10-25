@@ -10,7 +10,7 @@ use figment::{
 };
 use serde::{Deserialize, Deserializer, Serialize};
 use windwatcher::{
-    Hs256JwtAccessTokenCodec, Hs256SigningSecret, RegistrationPolicy, SessionPolicy,
+    Hs256JwtAccessTokenCodec, Hs256SigningSecret, MessagePolicy, RegistrationPolicy, SessionPolicy,
     SqliteStorageOptions,
 };
 
@@ -37,12 +37,25 @@ impl<'de> Deserialize<'de> for DurationValue {
 pub struct RawConfig {
     pub storage: RawStorage,
     pub auth: RawAuth,
+    pub messages: RawMessages,
     pub logging: RawLogging,
 }
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct RawStorage {
     pub sqlite: Option<RawSqlite>,
+}
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct RawMessages {
+    pub max_content_bytes: usize,
+}
+impl Default for RawMessages {
+    fn default() -> Self {
+        Self {
+            max_content_bytes: MessagePolicy::default().max_content_bytes(),
+        }
+    }
 }
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
@@ -298,8 +311,13 @@ pub fn resolve_full(raw: &RawConfig, paths: &ResolvedPaths) -> Result<(), AppErr
     resolve_sqlite(raw, paths)?;
     resolve_registration(raw)?;
     resolve_session(raw)?;
+    let _messages = resolve_messages(raw);
     let _jwt = resolve_jwt(raw)?;
     Ok(())
+}
+
+pub fn resolve_messages(raw: &RawConfig) -> MessagePolicy {
+    MessagePolicy::new(raw.messages.max_content_bytes)
 }
 
 #[cfg(test)]
@@ -308,6 +326,44 @@ mod tests {
 
     use super::*;
     use windwatcher::{AccessTokenClaims, AccessTokenCodec, AccessTokenError, SessionId, UserId};
+
+    #[test]
+    fn message_config_resolves_library_policy_without_io_or_arbitrary_bounds() {
+        let raw = RawConfig::default();
+        assert_eq!(resolve_messages(&raw), MessagePolicy::default());
+        for maximum in [0, 4, 131_072, usize::MAX] {
+            let mut raw = RawConfig::default();
+            raw.messages.max_content_bytes = maximum;
+            assert_eq!(resolve_messages(&raw).max_content_bytes(), maximum);
+        }
+        let raw: RawConfig = Figment::from(Serialized::defaults(RawConfig::default()))
+            .merge(Toml::string("[messages]\nmax_content_bytes = 4"))
+            .extract()
+            .unwrap();
+        let policy = resolve_messages(&raw);
+        assert!(
+            policy
+                .validate(&windwatcher::MessageContent::new("😀").unwrap())
+                .is_ok()
+        );
+        assert!(
+            policy
+                .validate(&windwatcher::MessageContent::new("😀a").unwrap())
+                .is_err()
+        );
+        for invalid in [
+            "[messages]\nunknown = true",
+            "[messages]\nmax_content_bytes = -1",
+            "[messages]\nmax_content_bytes = 'four'",
+        ] {
+            assert!(
+                Figment::from(Serialized::defaults(RawConfig::default()))
+                    .merge(Toml::string(invalid))
+                    .extract::<RawConfig>()
+                    .is_err()
+            );
+        }
+    }
 
     #[test]
     fn jwt_secret_sources_are_exclusive_and_missing_secrets_are_rejected() {
