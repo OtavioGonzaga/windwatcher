@@ -2,7 +2,10 @@ use std::{error::Error, future::Future};
 
 use time::OffsetDateTime;
 
-use crate::{ConversationId, Message, MessageContent, MessageId, MessageView, PageLimit, UserId};
+use crate::{
+    ConversationId, ConversationReadState, Message, MessageContent, MessageId, MessageView,
+    PageLimit, UserId,
+};
 
 /// A bounded, strictly descending message slice, including tombstones.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -102,9 +105,9 @@ pub enum DeleteMessageStoreOutcome {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MarkReadStoreOutcome {
     /// The watermark advanced.
-    Changed,
+    Changed(ConversationReadState),
     /// An equal or later watermark already existed.
-    Unchanged,
+    Unchanged(ConversationReadState),
     /// The conversation does not exist.
     ConversationNotFound,
     /// The actor is not a current member.
@@ -172,6 +175,7 @@ pub trait MessageStore: Sync {
         now: OffsetDateTime,
     ) -> impl Future<Output = Result<DeleteMessageStoreOutcome, MessageStoreError>> + Send;
     /// Advances only to a greater existing same-conversation ID; tombstones qualify.
+    /// Returns the effective watermark and unread count in the same transaction.
     fn mark_read_through(
         &self,
         actor: UserId,

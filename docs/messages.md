@@ -93,6 +93,12 @@ watermark. `MarkConversationReadThrough` accepts an existing same-conversation
 message, including a tombstone. A greater target advances it; equal/older targets
 return `Unchanged`. Marking a missing or cross-conversation target fails.
 
+Both changed and unchanged outcomes carry `ConversationReadState`; `.state()`
+returns the authoritative effective marker and unread count from the same write
+transaction. An older target from another device never regresses the marker.
+These watermarks are not receipts: Group join initializes historical read state
+without the user explicitly reading that history.
+
 Sending does not mark intervening messages as read. Read markers advance only
 through explicit mark-read after membership initialization. Direct and initial
 Group memberships start with no marker. Adding a new Group member atomically

@@ -152,9 +152,18 @@ pub enum DeleteMessageOutcome {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MarkReadOutcome {
     /// The read boundary advanced.
-    Changed,
+    Changed(crate::ConversationReadState),
     /// An equal or greater boundary already existed.
-    Unchanged,
+    Unchanged(crate::ConversationReadState),
+}
+
+impl MarkReadOutcome {
+    /// Authoritative resulting state, including for an older/same target no-op.
+    pub fn state(self) -> crate::ConversationReadState {
+        match self {
+            Self::Changed(state) | Self::Unchanged(state) => state,
+        }
+    }
 }
 
 /// Synchronously sends exact portable text under an embedder's write policy.
@@ -323,8 +332,8 @@ impl<'a, S: MessageStore> MarkConversationReadThrough<'a, S> {
             .mark_read_through(actor, conversation, message)
             .await?
         {
-            Read::Changed => Ok(MarkReadOutcome::Changed),
-            Read::Unchanged => Ok(MarkReadOutcome::Unchanged),
+            Read::Changed(state) => Ok(MarkReadOutcome::Changed(state)),
+            Read::Unchanged(state) => Ok(MarkReadOutcome::Unchanged(state)),
             Read::ConversationNotFound => Err(MarkConversationReadError::ConversationNotFound),
             Read::NotMember => Err(MarkConversationReadError::NotMember),
             Read::MessageNotFound => Err(MarkConversationReadError::MessageNotFound),

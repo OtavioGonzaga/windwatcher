@@ -163,14 +163,20 @@ pub async fn run<S: MessageStore + ConversationStore>(
             .mark_read_through(member, c, first.id())
             .await
             .unwrap(),
-        MarkReadStoreOutcome::Changed
+        MarkReadStoreOutcome::Changed(ConversationReadState {
+            last_read_message_id: Some(first.id()),
+            unread_count: 1
+        })
     );
     assert_eq!(
         store
             .mark_read_through(member, c, first.id())
             .await
             .unwrap(),
-        MarkReadStoreOutcome::Unchanged
+        MarkReadStoreOutcome::Unchanged(ConversationReadState {
+            last_read_message_id: Some(first.id()),
+            unread_count: 1
+        })
     );
     assert_eq!(
         store.unread_count(member, c).await.unwrap(),
@@ -232,14 +238,20 @@ pub async fn run<S: MessageStore + ConversationStore>(
             .mark_read_through(member, c, second.id())
             .await
             .unwrap(),
-        MarkReadStoreOutcome::Changed
+        MarkReadStoreOutcome::Changed(ConversationReadState {
+            last_read_message_id: Some(second.id()),
+            unread_count: 0
+        })
     );
     assert_eq!(
         store
             .mark_read_through(member, c, first.id())
             .await
             .unwrap(),
-        MarkReadStoreOutcome::Unchanged
+        MarkReadStoreOutcome::Unchanged(ConversationReadState {
+            last_read_message_id: Some(second.id()),
+            unread_count: 0
+        })
     );
     assert_eq!(
         store
@@ -260,7 +272,10 @@ pub async fn run<S: MessageStore + ConversationStore>(
             .mark_read_through(member, c, newer.id())
             .await
             .unwrap(),
-        MarkReadStoreOutcome::Changed
+        MarkReadStoreOutcome::Changed(ConversationReadState {
+            last_read_message_id: Some(newer.id()),
+            unread_count: 0
+        })
     );
     assert_eq!(
         store.unread_count(member, c).await.unwrap(),

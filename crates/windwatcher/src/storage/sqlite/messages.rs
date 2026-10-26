@@ -385,11 +385,25 @@ impl MessageStore for SqliteStorage {
         let result = sqlx::query("UPDATE conversation_members SET last_read_message_id = ? WHERE conversation_id = ? AND user_id = ? AND (last_read_message_id IS NULL OR last_read_message_id < ?)")
             .bind(id_bytes(message)).bind(id_bytes(conversation)).bind(id_bytes(actor)).bind(id_bytes(message))
             .execute(&mut *tx).await.map_err(storage_error)?;
+        let row = sqlx::query("SELECT m.last_read_message_id, (SELECT COUNT(*) FROM messages msg WHERE msg.conversation_id = m.conversation_id AND msg.sender_id <> m.user_id AND msg.deleted_at IS NULL AND (m.last_read_message_id IS NULL OR msg.id > m.last_read_message_id)) AS unread_count FROM conversation_members m WHERE m.conversation_id = ? AND m.user_id = ?")
+            .bind(id_bytes(conversation)).bind(id_bytes(actor)).fetch_one(&mut *tx).await.map_err(storage_error)?;
+        let state = crate::ConversationReadState {
+            last_read_message_id: row
+                .try_get::<Option<Vec<u8>>, _>("last_read_message_id")
+                .map_err(storage_error)?
+                .map(identifier)
+                .transpose()?,
+            unread_count: u64::try_from(
+                row.try_get::<i64, _>("unread_count")
+                    .map_err(storage_error)?,
+            )
+            .map_err(|_| unexpected("invalid unread count"))?,
+        };
         tx.commit().await.map_err(storage_error)?;
         Ok(if result.rows_affected() == 1 {
-            Read::Changed
+            Read::Changed(state)
         } else {
-            Read::Unchanged
+            Read::Unchanged(state)
         })
     }
 

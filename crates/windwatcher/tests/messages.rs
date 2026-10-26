@@ -481,6 +481,10 @@ fn public_outcomes_are_application_types_and_historical_reads_ignore_policy() {
             .unwrap(),
         );
         for changed in [true, false] {
+            let state = ConversationReadState {
+                last_read_message_id: Some(message.id()),
+                unread_count: 2,
+            };
             let outcome = if changed {
                 EditMessageStoreOutcome::Changed(edited.clone())
             } else {
@@ -518,9 +522,9 @@ fn public_outcomes_are_application_types_and_historical_reads_ignore_policy() {
             );
             let result: MarkReadOutcome =
                 MarkConversationReadThrough::new(&Fake(Response::Read(if changed {
-                    MarkReadStoreOutcome::Changed
+                    MarkReadStoreOutcome::Changed(state)
                 } else {
-                    MarkReadStoreOutcome::Unchanged
+                    MarkReadStoreOutcome::Unchanged(state)
                 })))
                 .execute(actor, c, message.id())
                 .await
@@ -528,9 +532,9 @@ fn public_outcomes_are_application_types_and_historical_reads_ignore_policy() {
             assert_eq!(
                 result,
                 if changed {
-                    MarkReadOutcome::Changed
+                    MarkReadOutcome::Changed(state)
                 } else {
-                    MarkReadOutcome::Unchanged
+                    MarkReadOutcome::Unchanged(state)
                 }
             );
         }

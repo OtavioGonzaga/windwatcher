@@ -457,10 +457,10 @@ async fn reply_delete_edit_and_read_races_preserve_invariants() {
             f.store
                 .mark_read_through(f.peer, f.conversation, older.id()),
         );
-        assert!(matches!(a.unwrap(), MarkReadStoreOutcome::Changed));
+        assert!(matches!(a.unwrap(), MarkReadStoreOutcome::Changed(_)));
         assert!(matches!(
             b.unwrap(),
-            MarkReadStoreOutcome::Changed | MarkReadStoreOutcome::Unchanged
+            MarkReadStoreOutcome::Changed(_) | MarkReadStoreOutcome::Unchanged(_)
         ));
         assert_eq!(
             f.store
