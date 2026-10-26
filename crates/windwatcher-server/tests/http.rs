@@ -139,6 +139,129 @@ fn openapi_contract_has_exact_routes_security_schemas_and_statuses() {
 }
 
 #[tokio::test]
+async fn missing_peer_fails_closed_only_when_limiting_is_enabled() {
+    use tower::ServiceExt;
+    let mut cfg = config();
+    cfg.rate_limit.enabled = true;
+    let fixture = Fixture::new(cfg, RegistrationPolicy::Open, true).await;
+    let response = fixture
+        .router
+        .clone()
+        .oneshot(bearer("GET", "/v1/users/me", "invalid"))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let request_id = response.headers()["x-request-id"]
+        .to_str()
+        .unwrap()
+        .to_owned();
+    let body: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(response.into_body(), 8192)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(body["code"], "internal.error");
+    assert_eq!(body["request_id"], request_id);
+    let fixture = Fixture::open().await;
+    let response = fixture
+        .router
+        .clone()
+        .oneshot(bearer("GET", "/v1/users/me", "invalid"))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn expired_refresh_collapses_to_invalid_refresh_without_sleeping() {
+    let fixture = Fixture::open().await;
+    let user = fixture.user().await;
+    let grant = windwatcher::CreateSession::new(
+        &fixture.storage,
+        &windwatcher::OsRefreshTokenProvider,
+        &codec(),
+        windwatcher::SessionPolicy::default(),
+    )
+    .execute(
+        &user,
+        time::OffsetDateTime::now_utc() - time::Duration::days(31),
+    )
+    .await
+    .unwrap();
+    let (_, _, refresh) = grant.into_parts();
+    problem(
+        &send(
+            &fixture.router,
+            command(
+                "POST",
+                "/v1/sessions/refresh",
+                json!({"refresh_token":refresh.expose_secret()}),
+            ),
+        )
+        .await,
+        401,
+        "auth.invalid_refresh_token",
+    );
+}
+
+#[tokio::test]
+async fn tracing_correlates_requests_without_logging_secrets_or_query_strings() {
+    use std::{
+        io::Write,
+        sync::{Arc, Mutex},
+    };
+    #[derive(Clone)]
+    struct Buffer(Arc<Mutex<Vec<u8>>>);
+    impl Write for Buffer {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let fixture = Fixture::open().await;
+    fixture.user().await;
+    let output = Arc::new(Mutex::new(Vec::new()));
+    let writer = output.clone();
+    let subscriber = tracing_subscriber::fmt()
+        .json()
+        .with_ansi(false)
+        .with_max_level(tracing::Level::TRACE)
+        .with_writer(move || Buffer(writer.clone()))
+        .finish();
+    // One global collector avoids callsite-interest races with parallel requests
+    // in the rest of this integration-test binary.
+    tracing::subscriber::set_global_default(subscriber).unwrap();
+    let response = send(
+        &fixture.router,
+        command(
+            "POST",
+            "/v1/sessions?secret_query=do-not-log",
+            json!({"username":"alice", "password":"test password"}),
+        ),
+    )
+    .await;
+    assert_eq!(response.0, StatusCode::CREATED);
+    let logs = String::from_utf8(output.lock().unwrap().clone()).unwrap();
+    assert!(logs.contains(response.1["x-request-id"].to_str().unwrap()));
+    assert!(logs.contains("/v1/sessions"));
+    assert!(logs.contains("session_created"));
+    assert!(logs.contains("latency_ms"));
+    for secret in [
+        "test password",
+        "secret_query",
+        "do-not-log",
+        response.2["access_token"].as_str().unwrap(),
+        response.2["refresh_token"].as_str().unwrap(),
+    ] {
+        assert!(!logs.contains(secret));
+    }
+}
+
+#[tokio::test]
 async fn documentation_uses_generated_contract_and_local_assets_without_api_quotas() {
     use tower::ServiceExt;
     let mut cfg = config();

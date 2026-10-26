@@ -109,4 +109,35 @@ mod tests {
         drop(permit);
         assert!(adapter.permits.try_acquire().is_ok());
     }
+
+    #[test]
+    fn cancelling_a_request_keeps_queued_work_bounded_and_executor_responsive() {
+        use std::{future::Future, task::Poll};
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .max_blocking_threads(1)
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+            let (release_tx, release_rx) = std::sync::mpsc::channel();
+            let blocker = tokio::task::spawn_blocking(move || {
+                started_tx.send(()).unwrap();
+                release_rx.recv().unwrap();
+            });
+            started_rx.await.unwrap();
+            let adapter = TokioPasswordHasher::new(NonZeroUsize::new(1).unwrap());
+            let secret = SecretPassword::new("test password".into()).unwrap();
+            let mut hashing = Box::pin(adapter.hash(&secret));
+            std::future::poll_fn(|cx| {
+                assert!(hashing.as_mut().poll(cx).is_pending());
+                Poll::Ready(())
+            })
+            .await;
+            drop(hashing);
+            assert!(adapter.permits.try_acquire().is_err());
+            release_tx.send(()).unwrap();
+            blocker.await.unwrap();
+            let _permit = adapter.permit().await;
+        });
+    }
 }
