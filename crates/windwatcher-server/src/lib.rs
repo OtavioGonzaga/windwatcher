@@ -4,6 +4,7 @@ mod cli;
 mod commands;
 mod config;
 mod error;
+pub mod http;
 mod logging;
 mod password;
 mod paths;
