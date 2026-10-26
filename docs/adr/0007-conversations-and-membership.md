@@ -23,6 +23,12 @@ must transfer ownership first.
 or a Unit of Work. SQLite enforces Direct pair uniqueness and at-most-one Owner;
 transactions preserve creation, transfer, and leave lifecycle invariants.
 
+New memberships require existing enabled users atomically at persistence time,
+including the Group Owner. Identity preflights are not sufficient and are removed
+from create/add use cases. Missing and disabled participants share an unavailable
+semantic. Existing Directs and memberships are resolved before eligibility checks;
+later disabling does not invalidate existing membership or idempotent adds.
+
 ## Consequences
 
 Future adapters share domain and application contracts without inheriting SQL

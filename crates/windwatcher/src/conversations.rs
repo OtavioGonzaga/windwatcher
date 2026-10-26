@@ -3,28 +3,8 @@ use time::OffsetDateTime;
 use crate::{
     AddMemberStoreOutcome, ChangeStoreOutcome, Conversation, ConversationId, ConversationKind,
     ConversationMember, ConversationStore, ConversationStoreError, GroupRole, GroupTitle,
-    GroupTitleError, IdentityStore, IdentityStoreError, LeaveStoreOutcome, MembershipRole,
-    StartDirectStoreOutcome, UserId,
+    GroupTitleError, LeaveStoreOutcome, MembershipRole, StartDirectStoreOutcome, UserId,
 };
-
-#[derive(Debug)]
-enum ParticipantError {
-    NotFound(UserId),
-    Identity(IdentityStoreError),
-}
-
-async fn participant<I: IdentityStore>(identities: &I, id: UserId) -> Result<(), ParticipantError> {
-    if identities
-        .find_user(id)
-        .await
-        .map_err(ParticipantError::Identity)?
-        .is_some()
-    {
-        Ok(())
-    } else {
-        Err(ParticipantError::NotFound(id))
-    }
-}
 
 /// Whether starting a Direct created it or found its existing semantic pair.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -72,14 +52,12 @@ macro_rules! application_error {
     };
 }
 application_error!("Failures starting a Direct conversation.", StartDirectConversationError {
-    #[error("conversation participant does not exist")] ParticipantNotFound(UserId),
-    #[error("identity lookup failed")] Identity(#[source] IdentityStoreError),
+    #[error("conversation participant unavailable")] ParticipantUnavailable(UserId),
     #[error("conversation storage failed")] Storage(#[source] ConversationStoreError),
 });
 application_error!("Failures creating a Group conversation.", CreateGroupConversationError {
-    #[error("conversation participant does not exist")] ParticipantNotFound(UserId),
+    #[error("conversation participant unavailable")] ParticipantUnavailable(UserId),
     #[error("invalid group title")] InvalidTitle(#[source] GroupTitleError),
-    #[error("identity lookup failed")] Identity(#[source] IdentityStoreError),
     #[error("conversation storage failed")] Storage(#[source] ConversationStoreError),
 });
 application_error!("Failures loading a conversation.", GetConversationError {
@@ -92,8 +70,7 @@ application_error!("Failures adding a Group member.", AddGroupMemberError {
     #[error("actor is not a conversation member")] NotMember,
     #[error("insufficient group permissions")] InsufficientPermissions,
     #[error("operation is not supported for Direct conversations")] DirectOperationNotSupported,
-    #[error("conversation participant does not exist")] ParticipantNotFound(UserId),
-    #[error("identity lookup failed")] Identity(#[source] IdentityStoreError),
+    #[error("conversation participant unavailable")] ParticipantUnavailable(UserId),
     #[error("conversation storage failed")] Storage(#[source] ConversationStoreError),
 });
 application_error!("Failures removing a Group member.", RemoveGroupMemberError {
@@ -140,14 +117,13 @@ application_error!("Failures renaming a Group conversation.", RenameGroupConvers
 });
 
 /// Starts or finds an immutable Direct conversation.
-pub struct StartDirectConversation<'a, I, S> {
-    identities: &'a I,
+pub struct StartDirectConversation<'a, S> {
     store: &'a S,
 }
-impl<'a, I: IdentityStore, S: ConversationStore> StartDirectConversation<'a, I, S> {
-    /// Wires identity validation and persistence.
-    pub fn new(identities: &'a I, store: &'a S) -> Self {
-        Self { identities, store }
+impl<'a, S: ConversationStore> StartDirectConversation<'a, S> {
+    /// Uses semantic persistence, including atomic participant eligibility.
+    pub fn new(store: &'a S) -> Self {
+        Self { store }
     }
     /// Gets or creates the unordered actor/participant pair; self Directs are valid.
     pub async fn execute(
@@ -156,26 +132,6 @@ impl<'a, I: IdentityStore, S: ConversationStore> StartDirectConversation<'a, I, 
         participant_id: UserId,
         now: OffsetDateTime,
     ) -> Result<StartDirectConversationOutcome, StartDirectConversationError> {
-        participant(self.identities, actor)
-            .await
-            .map_err(|error| match error {
-                ParticipantError::NotFound(id) => {
-                    StartDirectConversationError::ParticipantNotFound(id)
-                }
-                ParticipantError::Identity(error) => StartDirectConversationError::Identity(error),
-            })?;
-        if participant_id != actor {
-            participant(self.identities, participant_id)
-                .await
-                .map_err(|error| match error {
-                    ParticipantError::NotFound(id) => {
-                        StartDirectConversationError::ParticipantNotFound(id)
-                    }
-                    ParticipantError::Identity(error) => {
-                        StartDirectConversationError::Identity(error)
-                    }
-                })?;
-        }
         match self
             .store
             .get_or_create_direct(
@@ -184,8 +140,12 @@ impl<'a, I: IdentityStore, S: ConversationStore> StartDirectConversation<'a, I, 
                 participant_id,
             )
             .await
-            .map_err(StartDirectConversationError::Storage)?
-        {
+            .map_err(|error| match error {
+                ConversationStoreError::ParticipantUnavailable(id) => {
+                    StartDirectConversationError::ParticipantUnavailable(id)
+                }
+                error => StartDirectConversationError::Storage(error),
+            })? {
             StartDirectStoreOutcome::Created(conversation) => {
                 Ok(StartDirectConversationOutcome::Created(conversation))
             }
@@ -197,14 +157,13 @@ impl<'a, I: IdentityStore, S: ConversationStore> StartDirectConversation<'a, I, 
 }
 
 /// Creates a Group with one Owner and zero or more initial Members.
-pub struct CreateGroupConversation<'a, I, S> {
-    identities: &'a I,
+pub struct CreateGroupConversation<'a, S> {
     store: &'a S,
 }
-impl<'a, I: IdentityStore, S: ConversationStore> CreateGroupConversation<'a, I, S> {
-    /// Wires identity validation and persistence.
-    pub fn new(identities: &'a I, store: &'a S) -> Self {
-        Self { identities, store }
+impl<'a, S: ConversationStore> CreateGroupConversation<'a, S> {
+    /// Uses semantic persistence, including atomic participant eligibility.
+    pub fn new(store: &'a S) -> Self {
+        Self { store }
     }
     /// Creates the Group atomically; duplicate participant IDs are a set.
     pub async fn execute(
@@ -214,28 +173,10 @@ impl<'a, I: IdentityStore, S: ConversationStore> CreateGroupConversation<'a, I, 
         participants: &[UserId],
         now: OffsetDateTime,
     ) -> Result<Conversation, CreateGroupConversationError> {
-        participant(self.identities, actor)
-            .await
-            .map_err(|error| match error {
-                ParticipantError::NotFound(id) => {
-                    CreateGroupConversationError::ParticipantNotFound(id)
-                }
-                ParticipantError::Identity(error) => CreateGroupConversationError::Identity(error),
-            })?;
         let title = GroupTitle::new(title).map_err(CreateGroupConversationError::InvalidTitle)?;
         let mut unique = Vec::new();
         for id in participants {
             if *id != actor && !unique.contains(id) {
-                participant(self.identities, *id)
-                    .await
-                    .map_err(|error| match error {
-                        ParticipantError::NotFound(id) => {
-                            CreateGroupConversationError::ParticipantNotFound(id)
-                        }
-                        ParticipantError::Identity(error) => {
-                            CreateGroupConversationError::Identity(error)
-                        }
-                    })?;
                 unique.push(*id);
             }
         }
@@ -243,7 +184,12 @@ impl<'a, I: IdentityStore, S: ConversationStore> CreateGroupConversation<'a, I, 
         self.store
             .create_group(&conversation, actor, &unique)
             .await
-            .map_err(CreateGroupConversationError::Storage)?;
+            .map_err(|error| match error {
+                ConversationStoreError::ParticipantUnavailable(id) => {
+                    CreateGroupConversationError::ParticipantUnavailable(id)
+                }
+                error => CreateGroupConversationError::Storage(error),
+            })?;
         Ok(conversation)
     }
 }
@@ -322,14 +268,13 @@ macro_rules! group_error {
 }
 
 /// Adds a Group Member.
-pub struct AddGroupMember<'a, I, S> {
-    identities: &'a I,
+pub struct AddGroupMember<'a, S> {
     store: &'a S,
 }
-impl<'a, I: IdentityStore, S: ConversationStore> AddGroupMember<'a, I, S> {
-    /// Wires identity validation and persistence.
-    pub fn new(identities: &'a I, store: &'a S) -> Self {
-        Self { identities, store }
+impl<'a, S: ConversationStore> AddGroupMember<'a, S> {
+    /// Uses semantic persistence, including atomic participant eligibility.
+    pub fn new(store: &'a S) -> Self {
+        Self { store }
     }
     /// Adds a participant as Member, or reports an existing membership.
     pub async fn execute(
@@ -346,18 +291,16 @@ impl<'a, I: IdentityStore, S: ConversationStore> AddGroupMember<'a, I, S> {
         if !manager(&member) {
             return Err(AddGroupMemberError::InsufficientPermissions);
         }
-        participant(self.identities, target)
-            .await
-            .map_err(|error| match error {
-                ParticipantError::NotFound(id) => AddGroupMemberError::ParticipantNotFound(id),
-                ParticipantError::Identity(error) => AddGroupMemberError::Identity(error),
-            })?;
         match self
             .store
             .add_group_member(id, actor, target, now)
             .await
-            .map_err(AddGroupMemberError::Storage)?
-        {
+            .map_err(|error| match error {
+                ConversationStoreError::ParticipantUnavailable(id) => {
+                    AddGroupMemberError::ParticipantUnavailable(id)
+                }
+                error => AddGroupMemberError::Storage(error),
+            })? {
             AddMemberStoreOutcome::Added => Ok(AddGroupMemberOutcome::Added),
             AddMemberStoreOutcome::AlreadyMember => Ok(AddGroupMemberOutcome::AlreadyMember),
             AddMemberStoreOutcome::NotAuthorized => {

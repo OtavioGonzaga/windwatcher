@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking:** Direct/Group creation and Group-member addition now depend only
+  on `ConversationStore`; unavailable participants are reported semantically.
+  Storage atomically rejects disabled/missing new members while preserving
+  existing Directs and memberships, including idempotent member additions.
+
 - **Breaking:** get/edit/delete message use cases and `MessageStore` item methods
   now accept globally unique `MessageId` without `ConversationId`. Item outcomes
   no longer include `ConversationNotFound`; parent deletion yields `MessageNotFound`.

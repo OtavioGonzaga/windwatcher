@@ -91,6 +91,49 @@ async fn session_creation_rejects_owner_disabled_after_authentication() {
     ));
 }
 
+#[tokio::test]
+async fn new_memberships_require_enabled_users_but_existing_state_survives() {
+    let (_directory, storage) = store().await;
+    let owner = persisted_user(&storage, "eligible_owner").await;
+    let peer = persisted_user(&storage, "eligible_peer").await;
+    let target = persisted_user(&storage, "disabled_target").await;
+    support::conversation_store_contract::disabled_memberships(&storage, owner, peer, target).await;
+}
+
+#[tokio::test]
+async fn direct_creation_observes_disable_committed_by_another_writer() {
+    let (directory, storage) = store().await;
+    let owner = persisted_user(&storage, "race_owner").await;
+    let peer = persisted_user(&storage, "race_peer").await;
+    let mut connection = SqliteConnection::connect(&format!(
+        "sqlite://{}",
+        directory.path().join("windwatcher.db").display()
+    ))
+    .await
+    .unwrap();
+    let mut tx = connection.begin_with("BEGIN IMMEDIATE").await.unwrap();
+    sqlx::query("UPDATE users SET disabled_at = 1 WHERE id = ?")
+        .bind(peer.id().as_uuid().as_bytes().to_vec())
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    let candidate = windwatcher::Conversation::new_direct(
+        windwatcher::ConversationId::new(),
+        timestamp(1_700_000_100),
+    );
+    let other = storage.clone();
+    let operation = tokio::spawn(async move {
+        other
+            .get_or_create_direct(&candidate, owner.id(), peer.id())
+            .await
+    });
+    tx.commit().await.unwrap();
+    assert!(matches!(
+        operation.await.unwrap(),
+        Err(ConversationStoreError::ParticipantUnavailable(_))
+    ));
+}
+
 #[cfg(feature = "jwt-hs256")]
 #[tokio::test]
 async fn session_creation_keeps_atomic_rejection_after_owner_is_reenabled() {
@@ -187,7 +230,7 @@ async fn conversation_store_supports_directs_groups_and_owner_lifecycle() {
     let now = timestamp(100);
     let alice = persisted_user(&storage, "alice").await;
     let bob = persisted_user(&storage, "bob").await;
-    let direct = StartDirectConversation::new(&storage, &storage)
+    let direct = StartDirectConversation::new(&storage)
         .execute(alice.id(), bob.id(), now)
         .await
         .unwrap();
@@ -195,7 +238,7 @@ async fn conversation_store_supports_directs_groups_and_owner_lifecycle() {
         StartDirectConversationOutcome::Created(c)
         | StartDirectConversationOutcome::Existing(c) => c.id(),
     };
-    let reverse = StartDirectConversation::new(&storage, &storage)
+    let reverse = StartDirectConversation::new(&storage)
         .execute(bob.id(), alice.id(), now)
         .await
         .unwrap();
@@ -206,7 +249,7 @@ async fn conversation_store_supports_directs_groups_and_owner_lifecycle() {
         },
         direct_id
     );
-    let self_direct = StartDirectConversation::new(&storage, &storage)
+    let self_direct = StartDirectConversation::new(&storage)
         .execute(alice.id(), alice.id(), now)
         .await
         .unwrap();
@@ -222,7 +265,7 @@ async fn conversation_store_supports_directs_groups_and_owner_lifecycle() {
             .is_some()
     );
 
-    let group = CreateGroupConversation::new(&storage, &storage)
+    let group = CreateGroupConversation::new(&storage)
         .execute(alice.id(), "team", &[bob.id(), bob.id()], now)
         .await
         .unwrap();
@@ -235,7 +278,7 @@ async fn conversation_store_supports_directs_groups_and_owner_lifecycle() {
             .role(),
         windwatcher::MembershipRole::Group(GroupRole::Owner)
     );
-    AddGroupMember::new(&storage, &storage)
+    AddGroupMember::new(&storage)
         .execute(alice.id(), group.id(), bob.id(), now)
         .await
         .unwrap();
@@ -316,7 +359,7 @@ async fn concurrent_direct_creation_converges_for_peer_and_self_pairs() {
             let barrier = Arc::clone(&barrier);
             tokio::spawn(async move {
                 barrier.wait().await;
-                StartDirectConversation::new(&*store, &*store)
+                StartDirectConversation::new(&*store)
                     .execute(first, second, timestamp(200))
                     .await
                     .unwrap()
@@ -361,7 +404,7 @@ async fn group_permissions_no_ops_and_direct_rejections_are_enforced() {
     let admin = persisted_user(&storage, "admin").await;
     let member = persisted_user(&storage, "member").await;
     let outsider = persisted_user(&storage, "outsider").await;
-    let group = CreateGroupConversation::new(&storage, &storage)
+    let group = CreateGroupConversation::new(&storage)
         .execute(owner.id(), "Group", &[admin.id(), member.id()], now)
         .await
         .unwrap();
@@ -379,13 +422,13 @@ async fn group_permissions_no_ops_and_direct_rejections_are_enforced() {
         MutationOutcome::Changed
     );
     assert!(matches!(
-        AddGroupMember::new(&storage, &storage)
+        AddGroupMember::new(&storage)
             .execute(member.id(), group.id(), outsider.id(), timestamp(302))
             .await,
         Err(windwatcher::AddGroupMemberError::InsufficientPermissions)
     ));
     assert_eq!(
-        AddGroupMember::new(&storage, &storage)
+        AddGroupMember::new(&storage)
             .execute(admin.id(), group.id(), outsider.id(), timestamp(302))
             .await
             .unwrap(),
@@ -398,10 +441,10 @@ async fn group_permissions_no_ops_and_direct_rejections_are_enforced() {
         Err(windwatcher::GetConversationError::NotMember)
     ));
     assert!(matches!(
-        AddGroupMember::new(&storage, &storage)
+        AddGroupMember::new(&storage)
             .execute(owner.id(), group.id(), UserId::new(), timestamp(302))
             .await,
-        Err(windwatcher::AddGroupMemberError::ParticipantNotFound(_))
+        Err(windwatcher::AddGroupMemberError::ParticipantUnavailable(_))
     ));
     assert!(matches!(
         TransferGroupOwnership::new(&storage)
@@ -455,7 +498,7 @@ async fn group_permissions_no_ops_and_direct_rejections_are_enforced() {
             .await,
         Err(windwatcher::RenameGroupConversationError::InvalidTitle(_))
     ));
-    let direct = StartDirectConversation::new(&storage, &storage)
+    let direct = StartDirectConversation::new(&storage)
         .execute(owner.id(), member.id(), now)
         .await
         .unwrap();
@@ -489,7 +532,7 @@ async fn group_creation_and_ownership_transfer_roll_back_on_persistence_failure(
     let inspector = sqlx::SqlitePool::connect(&url).await.unwrap();
     inspector.execute("CREATE TRIGGER reject_member_insert BEFORE INSERT ON conversation_members WHEN NEW.role = 'member' BEGIN SELECT RAISE(ABORT, 'test failure'); END").await.unwrap();
     assert!(matches!(
-        CreateGroupConversation::new(&storage, &storage)
+        CreateGroupConversation::new(&storage)
             .execute(owner.id(), "rollback", &[member.id()], timestamp(400))
             .await,
         Err(windwatcher::CreateGroupConversationError::Storage(_))
@@ -504,7 +547,7 @@ async fn group_creation_and_ownership_transfer_roll_back_on_persistence_failure(
         .execute("DROP TRIGGER reject_member_insert")
         .await
         .unwrap();
-    let group = CreateGroupConversation::new(&storage, &storage)
+    let group = CreateGroupConversation::new(&storage)
         .execute(owner.id(), "transfer", &[member.id()], timestamp(401))
         .await
         .unwrap();
@@ -542,7 +585,7 @@ async fn group_management_permission_matrix_and_owner_only_lifecycle_hold() {
     let admin = persisted_user(&storage, "matrix_admin").await;
     let member = persisted_user(&storage, "matrix_member").await;
     let target = persisted_user(&storage, "matrix_target").await;
-    let group = CreateGroupConversation::new(&storage, &storage)
+    let group = CreateGroupConversation::new(&storage)
         .execute(
             owner.id(),
             "matrix",
@@ -639,7 +682,7 @@ async fn group_management_permission_matrix_and_owner_only_lifecycle_hold() {
         LeaveGroupOutcome::Left
     );
 
-    let owner_only = CreateGroupConversation::new(&storage, &storage)
+    let owner_only = CreateGroupConversation::new(&storage)
         .execute(owner.id(), "owner only", &[], timestamp(608))
         .await
         .unwrap();
@@ -937,7 +980,7 @@ async fn conversation_schema_uses_strict_binary_keys_and_cascading_memberships()
     let (directory, storage) = store().await;
     let alice = persisted_user(&storage, "schema_alice").await;
     let bob = persisted_user(&storage, "schema_bob").await;
-    let direct = StartDirectConversation::new(&storage, &storage)
+    let direct = StartDirectConversation::new(&storage)
         .execute(alice.id(), bob.id(), timestamp(500))
         .await
         .unwrap();
@@ -996,7 +1039,7 @@ async fn malformed_persisted_conversation_memberships_are_rejected() {
     let (directory, storage) = store().await;
     let alice = persisted_user(&storage, "corrupt_alice").await;
     let bob = persisted_user(&storage, "corrupt_bob").await;
-    let direct = StartDirectConversation::new(&storage, &storage)
+    let direct = StartDirectConversation::new(&storage)
         .execute(alice.id(), bob.id(), timestamp(550))
         .await
         .unwrap();
@@ -1022,7 +1065,7 @@ async fn malformed_persisted_conversation_memberships_are_rejected() {
         Err(ConversationStoreError::Unexpected(_))
     ));
 
-    let group = CreateGroupConversation::new(&storage, &storage)
+    let group = CreateGroupConversation::new(&storage)
         .execute(alice.id(), "corrupt group", &[bob.id()], timestamp(551))
         .await
         .unwrap();

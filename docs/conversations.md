@@ -1,5 +1,17 @@
 # Conversations
 
+## Participant eligibility
+
+Creating a new membership requires an existing enabled user, including the Group
+creator and initial participants. Persistence checks eligibility atomically with
+insertion; the create/add use cases depend only on `ConversationStore`, not on
+an identity preflight. Missing and disabled participants are publicly represented
+as `ParticipantUnavailable`.
+
+Disabling a user does not erase existing membership or identity attribution.
+Opening an existing Direct or adding an existing Group member still succeeds,
+even when that peer/member is disabled, without resetting read state.
+
 ## Conversation kinds
 
 Windwatcher currently supports only `Direct` and `Group` conversations.

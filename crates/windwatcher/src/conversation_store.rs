@@ -9,6 +9,10 @@ use time::OffsetDateTime;
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum ConversationStoreError {
+    /// A new membership requires an existing enabled user. Existing Directs and
+    /// existing memberships must be returned before checking this eligibility.
+    #[error("conversation participant unavailable")]
+    ParticipantUnavailable(UserId),
     /// A uniqueness or integrity constraint prevented the operation.
     #[error("conversation storage conflict")]
     Conflict,
@@ -77,6 +81,9 @@ pub enum LeaveStoreOutcome {
 /// Application-driven persistence operations for conversation lifecycles.
 pub trait ConversationStore: Sync {
     /// Atomically gets or creates the unordered Direct participant pair.
+    /// An existing pair is returned even if a participant was later disabled.
+    /// New memberships require existing enabled users at persistence time;
+    /// otherwise return `ParticipantUnavailable` without persisting anything.
     fn get_or_create_direct(
         &self,
         conversation: &Conversation,
@@ -84,6 +91,8 @@ pub trait ConversationStore: Sync {
         second: UserId,
     ) -> impl Future<Output = Result<StartDirectStoreOutcome, ConversationStoreError>> + Send;
     /// Atomically creates a Group, its Owner, and all distinct initial Members.
+    /// All new members, including the Owner, must exist and be enabled in the
+    /// same transaction; otherwise return `ParticipantUnavailable` with no writes.
     fn create_group(
         &self,
         conversation: &Conversation,
@@ -105,6 +114,9 @@ pub trait ConversationStore: Sync {
     /// initializes a new membership's read marker to the maximum persisted
     /// message ID (including tombstones), or None for empty history. An existing
     /// member's marker is never reset; rejoining creates a fresh boundary.
+    /// An existing member remains `AlreadyMember` even when disabled. A new
+    /// member must exist and be enabled atomically or `ParticipantUnavailable`
+    /// is returned without mutation.
     fn add_group_member(
         &self,
         conversation_id: ConversationId,
