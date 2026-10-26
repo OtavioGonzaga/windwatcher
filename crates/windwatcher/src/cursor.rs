@@ -219,6 +219,9 @@ mod tests {
     const BOUNDARY: &str = "018f6f35-0000-7000-8000-000000000001";
     // Issued v1 compact JSON fixture: independent of the current encoder.
     const V1: &str = "eyJ2IjoxLCJraW5kIjoibWVzc2FnZXMiLCJjb252ZXJzYXRpb25faWQiOiIwMThmNmYzNC0wMDAwLTcwMDAtODAwMC0wMDAwMDAwMDAwMDAiLCJtZXNzYWdlX2lkIjoiMDE4ZjZmMzUtMDAwMC03MDAwLTgwMDAtMDAwMDAwMDAwMDAxIn0";
+    // Issued v1 compact JSON fixtures: independent of the current encoder.
+    const CONVERSATION_V1: &str = "eyJ2IjoxLCJraW5kIjoiY29udmVyc2F0aW9ucyIsInNjb3BlIjoiMDE4ZjZmMzQtMDAwMC03MDAwLTgwMDAtMDAwMDAwMDAwMDAwIiwiYXRfbmFub3MiOiIxMjM0NTY3ODkiLCJpZCI6IjAxOGY2ZjM1LTAwMDAtNzAwMC04MDAwLTAwMDAwMDAwMDAwMSJ9";
+    const MEMBER_V1: &str = "eyJ2IjoxLCJraW5kIjoibWVtYmVycyIsInNjb3BlIjoiMDE4ZjZmMzYtMDAwMC03MDAwLTgwMDAtMDAwMDAwMDAwMDAyIiwiYXRfbmFub3MiOiI5ODc2NTQzMjEiLCJpZCI6IjAxOGY2ZjM3LTAwMDAtNzAwMC04MDAwLTAwMDAwMDAwMDAwMyJ9";
 
     #[test]
     fn decodes_issued_v1_and_round_trips_url_safe_tokens() {
@@ -233,6 +236,29 @@ mod tests {
             assert!(!token.contains(['+', '/', '=']));
             assert_eq!(decode_message(&token, scope), Ok(boundary));
         }
+    }
+
+    #[test]
+    fn decodes_issued_conversation_and_member_v1_tokens() {
+        assert_eq!(
+            decode_conversation(CONVERSATION_V1, SCOPE.parse().unwrap()),
+            Ok(ConversationBoundary {
+                activity_at: time::OffsetDateTime::UNIX_EPOCH
+                    + time::Duration::nanoseconds(123_456_789),
+                conversation_id: BOUNDARY.parse().unwrap(),
+            })
+        );
+        assert_eq!(
+            decode_member(
+                MEMBER_V1,
+                "018f6f36-0000-7000-8000-000000000002".parse().unwrap()
+            ),
+            Ok(MemberBoundary {
+                joined_at: time::OffsetDateTime::UNIX_EPOCH
+                    + time::Duration::nanoseconds(987_654_321),
+                user_id: "018f6f37-0000-7000-8000-000000000003".parse().unwrap(),
+            })
+        );
     }
 
     #[test]

@@ -10,7 +10,9 @@ use super::dto::*;
 use crate::http::{
     HttpState,
     auth::AuthenticatedActor,
-    extract::{ApiJson, ApiPath, ApiQuery, CommandKey, PaginationQuery, identifier},
+    extract::{
+        ApiJson, ApiPath, ApiQuery, CommandKey, PaginationQuery, body_identifier, path_identifier,
+    },
     middleware::request_id::RequestContext,
     page::PageResponse,
     problem::{ApiProblem, ProblemDetails, ProblemKind},
@@ -27,7 +29,7 @@ pub(super) async fn list(
     ListMessages::new(&state.storage)
         .execute(
             actor.user_id,
-            identifier(&id, context)?,
+            path_identifier(&id, context)?,
             query.page(context)?,
         )
         .await
@@ -57,12 +59,12 @@ pub(super) async fn send(
     let reply = request
         .reply_to_message_id
         .as_deref()
-        .map(|s| identifier(s, context))
+        .map(|s| body_identifier(s, context))
         .transpose()?;
     let result = SendMessageCommand::new(&state.storage, &state.messages)
         .execute(
             actor.user_id,
-            identifier(&id, context)?,
+            path_identifier(&id, context)?,
             request.content,
             reply,
             key.as_ref(),
@@ -82,7 +84,7 @@ pub(super) async fn get(
     ApiPath(id): ApiPath<String>,
 ) -> Result<Json<MessageResponse>, ApiProblem> {
     GetMessage::new(&state.storage)
-        .execute(actor.user_id, identifier(&id, context)?)
+        .execute(actor.user_id, path_identifier(&id, context)?)
         .await
         .map(|m| Json(m.into()))
         .map_err(|e| match &e {
@@ -104,7 +106,7 @@ pub(super) async fn edit(
     let result = EditMessage::new(&state.storage, &state.messages)
         .execute(
             actor.user_id,
-            identifier(&id, context)?,
+            path_identifier(&id, context)?,
             request.content,
             OffsetDateTime::now_utc(),
         )
@@ -136,7 +138,7 @@ pub(super) async fn delete(
     let result = DeleteMessage::new(&state.storage)
         .execute(
             actor.user_id,
-            identifier(&id, context)?,
+            path_identifier(&id, context)?,
             OffsetDateTime::now_utc(),
         )
         .await
@@ -166,8 +168,8 @@ pub(super) async fn read_state(
     MarkConversationReadThrough::new(&state.storage)
         .execute(
             actor.user_id,
-            identifier(&id, context)?,
-            identifier(&request.last_read_message_id, context)?,
+            path_identifier(&id, context)?,
+            body_identifier(&request.last_read_message_id, context)?,
         )
         .await
         .map(|r| Json(r.state().into()))

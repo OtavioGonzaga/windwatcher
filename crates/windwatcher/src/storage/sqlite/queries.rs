@@ -33,8 +33,8 @@ const SUMMARY: &str = "SELECT c.id, c.kind, c.title, c.created_at, c.updated_at,
     CASE WHEN c.kind = 'group' THEN c.title ELSE
         COALESCE((SELECT u.username FROM conversation_members peer JOIN users u ON u.id = peer.user_id WHERE peer.conversation_id = c.id AND peer.user_id <> m.user_id LIMIT 1), (SELECT username FROM users WHERE id = m.user_id)) END AS resolved_title,
     (SELECT COUNT(*) FROM messages unread WHERE unread.conversation_id = c.id AND unread.sender_id <> m.user_id AND unread.deleted_at IS NULL AND (m.last_read_message_id IS NULL OR unread.id > m.last_read_message_id)) AS unread_count,
-    (SELECT MAX(latest.id) FROM messages latest WHERE latest.conversation_id = c.id) AS last_message_id,
-    MAX(c.updated_at, COALESCE((SELECT MAX(activity.created_at) FROM messages activity WHERE activity.conversation_id = c.id), c.updated_at)) AS activity_at
+    (SELECT latest.id FROM messages latest WHERE latest.conversation_id = c.id ORDER BY latest.id DESC LIMIT 1) AS last_message_id,
+    MAX(c.updated_at, COALESCE((SELECT latest.created_at FROM messages latest WHERE latest.conversation_id = c.id ORDER BY latest.id DESC LIMIT 1), c.updated_at)) AS activity_at
     FROM conversation_members m JOIN conversations c ON c.id = m.conversation_id WHERE m.user_id = ";
 
 async fn access(
@@ -398,10 +398,8 @@ mod tests {
         // Derived activity intentionally needs sorting, but message probes must
         // use the existing conversation/ID index instead of scanning all history.
         assert!(plan.contains("SEARCH unread USING INDEX"), "{plan}");
-        assert!(
-            plan.contains("SEARCH latest USING COVERING INDEX"),
-            "{plan}"
-        );
+        assert!(plan.matches("SEARCH latest USING").count() >= 2, "{plan}");
+        assert!(!plan.contains("SCAN latest"), "{plan}");
         assert!(!plan.contains("SCAN unread"), "{plan}");
         let plan = sqlx::query("EXPLAIN QUERY PLAN SELECT user_id FROM conversation_members WHERE conversation_id = ? AND (joined_at, user_id) > (?, ?) ORDER BY joined_at, user_id LIMIT 51")
             .bind(id_bytes(ConversationId::new())).bind(0_i64).bind(id_bytes(UserId::new())).fetch_all(&store.pool).await.unwrap().iter().map(|r| r.get::<String, _>("detail")).collect::<Vec<_>>().join("\n");

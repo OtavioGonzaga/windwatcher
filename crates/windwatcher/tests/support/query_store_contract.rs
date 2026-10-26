@@ -314,12 +314,46 @@ async fn activity_and_unread<S: MessagingQueryStore + ConversationStore + Messag
     );
     store.create_group(&a, actor, &[other]).await.unwrap();
     store.create_group(&b, actor, &[other]).await.unwrap();
+    let canonical = Conversation::new_group(
+        ConversationId::new(),
+        GroupTitle::new("canonical activity").unwrap(),
+        now,
+    );
+    store.create_group(&canonical, actor, &[]).await.unwrap();
+    let lower_id: MessageId = "018f6f34-0000-7000-8000-000000000000".parse().unwrap();
+    let higher_id: MessageId = "018f6f35-0000-7000-8000-000000000001".parse().unwrap();
+    let older_by_id = Message::new(
+        lower_id,
+        canonical.id(),
+        actor,
+        MessageContent::new("later timestamp").unwrap(),
+        None,
+        now + Duration::seconds(10),
+    )
+    .unwrap();
+    let newer_by_id = Message::new(
+        higher_id,
+        canonical.id(),
+        actor,
+        MessageContent::new("canonical latest").unwrap(),
+        None,
+        now + Duration::seconds(1),
+    )
+    .unwrap();
+    store.send_message(&older_by_id).await.unwrap();
+    store.send_message(&newer_by_id).await.unwrap();
+    let canonical_summary = GetConversationSummary::new(store)
+        .execute(actor, canonical.id())
+        .await
+        .unwrap();
+    assert_eq!(canonical_summary.last_message.unwrap().id(), higher_id);
+    assert_eq!(canonical_summary.activity_at, newer_by_id.created_at());
     let first = ListConversations::new(store)
         .execute(actor, PageRequest::new(PageLimit::new(1).unwrap()))
         .await
         .unwrap();
-    assert_eq!(first.items()[0].conversation.id(), a.id().max(b.id()));
-    assert_eq!(first.items()[0].activity_at, now);
+    assert_eq!(first.items()[0].conversation.id(), canonical.id());
+    assert_eq!(first.items()[0].activity_at, newer_by_id.created_at());
     let policy = MessagePolicy::default();
     let own = SendMessage::new(store, &policy)
         .execute(actor, a.id(), "own", None, now + Duration::seconds(1))

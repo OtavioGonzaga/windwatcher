@@ -70,13 +70,22 @@ impl<S: Send + Sync, T: DeserializeOwned + Send> FromRequestParts<S> for ApiPath
     }
 }
 
-pub(super) fn identifier<T: std::str::FromStr>(
+pub(super) fn path_identifier<T: std::str::FromStr>(
     value: &str,
     context: RequestContext,
 ) -> Result<T, ApiProblem> {
     value
         .parse()
         .map_err(|_| ApiProblem::new(ProblemKind::InvalidPath, context))
+}
+
+pub(super) fn body_identifier<T: std::str::FromStr>(
+    value: &str,
+    context: RequestContext,
+) -> Result<T, ApiProblem> {
+    value
+        .parse()
+        .map_err(|_| ApiProblem::new(ProblemKind::InvalidIdentifier, context))
 }
 
 #[derive(Default, Deserialize, IntoParams)]

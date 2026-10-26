@@ -41,6 +41,7 @@ macro_rules! catalog {
 catalog! {
     InvalidQuery => (BAD_REQUEST, "request.invalid_query", "request:invalid-query", "Invalid query", "The query must match the expected structure."),
     InvalidPath => (BAD_REQUEST, "request.invalid_path", "request:invalid-path", "Invalid path", "The resource identifiers must be valid UUIDs."),
+    InvalidIdentifier => (BAD_REQUEST, "request.invalid_identifier", "request:invalid-identifier", "Invalid identifier", "The supplied identifier must be a valid UUID."),
     InvalidLimit => (UNPROCESSABLE_ENTITY, "pagination.invalid_limit", "pagination:invalid-limit", "Invalid page limit", "The page limit must be between 1 and 100."),
     InvalidCursor => (BAD_REQUEST, "pagination.invalid_cursor", "pagination:invalid-cursor", "Invalid cursor", "The continuation cursor is invalid for this query."),
     InvalidIdempotencyKey => (BAD_REQUEST, "idempotency.invalid_key", "idempotency:invalid-key", "Invalid idempotency key", "Supply one key of 1 through 128 visible ASCII bytes."),

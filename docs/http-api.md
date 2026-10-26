@@ -114,8 +114,8 @@ cursor; supplied discovery cursors are rejected.
 - Members: joined_at ASC, UserId ASC; cursor bound to conversation.
 - Messages: MessageId DESC; existing message v1 cursors remain compatible.
 
-Inbox activity derives from `max(conversation.updated_at, latest message creation
-time)`, falling back to updated_at when empty. Real Group metadata/membership
+Inbox activity derives from `max(conversation.updated_at, created_at of the
+highest-MessageId message)`, falling back to updated_at when empty. Real Group metadata/membership
 changes and sends may raise a conversation. Edits, tombstoning and reading do not
 manufacture new activity. The last message can be a tombstone. No activity column
 is promised. Continuation uses normal keyset semantics, not frozen snapshots:
@@ -123,7 +123,9 @@ activity raised above an old boundary is obtained by refreshing page one.
 
 Malformed query structures return `400 request.invalid_query`; out-of-range
 limits return `422 pagination.invalid_limit`; malformed/wrong-scope cursors return
-`400 pagination.invalid_cursor`. Each page revalidates current membership.
+`400 pagination.invalid_cursor`. Malformed UUIDs in path parameters return
+`400 request.invalid_path`; malformed UUIDs in JSON identifier fields return
+`400 request.invalid_identifier`. Each page revalidates current membership.
 
 ## Optional idempotent creation
 

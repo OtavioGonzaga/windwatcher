@@ -106,9 +106,9 @@ not snapshot isolation across requests.
 
 ## Current limitations
 
-Only `ListMessages` is implemented. Future resource lists can reuse
-`PageRequest`/`Page<T>` but must define their own ordering and private cursor
+`ListMessages`, `ListConversations`, and `ListConversationMembers` use
+`PageRequest`/`Page<T>` with resource-specific ordering and private cursor
 semantics. There is no arbitrary sorting, filtering, search, backwards navigation,
-total count, signing, encryption, HTTP mapping, or snapshot cursor.
+total count, signing, encryption, or snapshot cursor.
 
 See [ADR 0009](adr/0009-opaque-keyset-pagination.md).

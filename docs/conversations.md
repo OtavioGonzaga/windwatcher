@@ -21,8 +21,8 @@ a Direct title is the peer username, or the actor's username for self Directs.
 Disabled existing peers retain attribution. Direct titles are not entity metadata.
 
 The inbox sorts by effective activity DESC, ConversationId DESC. Effective
-activity is `max(conversation.updated_at, MAX(message.created_at))`, falling back
-to `updated_at` for empty history. Sends and real Group metadata/membership
+activity is `max(conversation.updated_at, created_at of the highest-MessageId
+message)`, falling back to `updated_at` for empty history. Sends and real Group metadata/membership
 mutations can raise activity. Message edits/deletes and read updates do not.
 Activity is derived from primary state, not a persisted `last_activity_at` column.
 
@@ -72,5 +72,5 @@ membership.
 
 ## Current limitations
 
-There is no conversation listing, invitations, public groups, or network
-endpoints yet. Message history uses [opaque cursor pagination](pagination.md).
+There are no invitations or public groups. Conversation and member lists use
+[opaque cursor pagination](pagination.md).

@@ -966,6 +966,34 @@ async fn extraction_pagination_keys_and_auth_are_normalized() {
         400,
         "request.invalid_path",
     );
+    problem(
+        &send(
+            &f.router,
+            authorized(
+                "POST",
+                "/v1/conversations",
+                &token,
+                json!({"kind":"direct","participant_id":"not-a-uuid"}),
+            ),
+        )
+        .await,
+        400,
+        "request.invalid_identifier",
+    );
+    problem(
+        &send(
+            &f.router,
+            authorized(
+                "POST",
+                "/v1/conversations",
+                &token,
+                json!({"kind":"group","title":"valid title","participant_ids":["not-a-uuid"]}),
+            ),
+        )
+        .await,
+        400,
+        "request.invalid_identifier",
+    );
     let body = json!({"kind":"direct","participant_id":actor.id().to_string()});
     for key in ["", "bad key", &"a".repeat(129)] {
         problem(
@@ -1004,6 +1032,32 @@ async fn extraction_pagination_keys_and_auth_are_normalized() {
         "/v1/conversations/{}",
         self_direct.2["id"].as_str().unwrap()
     );
+    for request in [
+        authorized(
+            "PUT",
+            &format!("{base}/owner"),
+            &token,
+            json!({"user_id":"not-a-uuid"}),
+        ),
+        authorized(
+            "POST",
+            &format!("{base}/messages"),
+            &token,
+            json!({"content":"reply", "reply_to_message_id":"not-a-uuid"}),
+        ),
+        authorized(
+            "PUT",
+            &format!("{base}/read-state"),
+            &token,
+            json!({"last_read_message_id":"not-a-uuid"}),
+        ),
+    ] {
+        problem(
+            &send(&f.router, request).await,
+            400,
+            "request.invalid_identifier",
+        );
+    }
     problem(
         &send(
             &f.router,

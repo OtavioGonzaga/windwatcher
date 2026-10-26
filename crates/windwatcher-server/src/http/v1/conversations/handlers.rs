@@ -10,7 +10,9 @@ use super::dto::*;
 use crate::http::{
     HttpState,
     auth::AuthenticatedActor,
-    extract::{ApiJson, ApiPath, ApiQuery, CommandKey, PaginationQuery, identifier},
+    extract::{
+        ApiJson, ApiPath, ApiQuery, CommandKey, PaginationQuery, body_identifier, path_identifier,
+    },
     middleware::request_id::RequestContext,
     page::PageResponse,
     problem::{ApiProblem, ProblemDetails, ProblemKind},
@@ -103,7 +105,7 @@ pub(super) async fn create(
         CreateConversationRequest::Direct(request) => {
             let DirectKind::Direct = request.kind;
             ConversationCreateRequest::Direct {
-                participant_id: identifier(&request.participant_id, context)?,
+                participant_id: body_identifier(&request.participant_id, context)?,
             }
         }
         CreateConversationRequest::Group(request) => {
@@ -113,7 +115,7 @@ pub(super) async fn create(
                 participant_ids: request
                     .participant_ids
                     .iter()
-                    .map(|s| identifier(s, context))
+                    .map(|s| body_identifier(s, context))
                     .collect::<Result<_, _>>()?,
             }
         }
@@ -142,7 +144,13 @@ pub(super) async fn get(
     actor: AuthenticatedActor,
     ApiPath(id): ApiPath<String>,
 ) -> Result<Json<ConversationResponse>, ApiProblem> {
-    detail(&state, actor.user_id, identifier(&id, context)?, context).await
+    detail(
+        &state,
+        actor.user_id,
+        path_identifier(&id, context)?,
+        context,
+    )
+    .await
 }
 
 #[utoipa::path(patch, path = "/conversations/{conversation_id}", operation_id = "updateConversation", tag = "Conversations", security(("bearerAuth" = [])), params(("conversation_id" = String, Path, format = Uuid)), request_body = UpdateConversationRequest, responses((status = 200, body = ConversationResponse), (status = 400, body = ProblemDetails), (status = 401, body = ProblemDetails), (status = 403, body = ProblemDetails), (status = 404, body = ProblemDetails), (status = 409, body = ProblemDetails), (status = 422, body = ProblemDetails), (status = 429, body = ProblemDetails), (status = 500, body = ProblemDetails)))]
@@ -153,7 +161,7 @@ pub(super) async fn update(
     ApiPath(id): ApiPath<String>,
     ApiJson(request): ApiJson<UpdateConversationRequest>,
 ) -> Result<Json<ConversationResponse>, ApiProblem> {
-    let id = identifier(&id, context)?;
+    let id = path_identifier(&id, context)?;
     RenameGroupConversation::new(&state.storage)
         .execute(actor.user_id, id, request.title, OffsetDateTime::now_utc())
         .await
@@ -172,7 +180,7 @@ pub(super) async fn list_members(
     ListConversationMembers::new(&state.storage)
         .execute(
             actor.user_id,
-            identifier(&id, context)?,
+            path_identifier(&id, context)?,
             query.page(context)?,
         )
         .await
@@ -187,8 +195,8 @@ pub(super) async fn add_member(
     actor: AuthenticatedActor,
     ApiPath((id, target)): ApiPath<(String, String)>,
 ) -> Result<(StatusCode, Json<MemberResponse>), ApiProblem> {
-    let id = identifier(&id, context)?;
-    let target = identifier(&target, context)?;
+    let id = path_identifier(&id, context)?;
+    let target = path_identifier(&target, context)?;
     let outcome = AddGroupMember::new(&state.storage)
         .execute(actor.user_id, id, target, OffsetDateTime::now_utc())
         .await
@@ -212,8 +220,8 @@ pub(super) async fn update_member(
     ApiPath((id, target)): ApiPath<(String, String)>,
     ApiJson(request): ApiJson<UpdateMemberRequest>,
 ) -> Result<Json<MemberResponse>, ApiProblem> {
-    let id = identifier(&id, context)?;
-    let target = identifier(&target, context)?;
+    let id = path_identifier(&id, context)?;
+    let target = path_identifier(&target, context)?;
     SetGroupMemberRole::new(&state.storage)
         .execute(
             actor.user_id,
@@ -237,8 +245,8 @@ pub(super) async fn remove_member(
     RemoveGroupMember::new(&state.storage)
         .execute(
             actor.user_id,
-            identifier(&id, context)?,
-            identifier(&target, context)?,
+            path_identifier(&id, context)?,
+            path_identifier(&target, context)?,
             OffsetDateTime::now_utc(),
         )
         .await
@@ -254,12 +262,12 @@ pub(super) async fn transfer_owner(
     ApiPath(id): ApiPath<String>,
     ApiJson(request): ApiJson<TransferOwnerRequest>,
 ) -> Result<Json<ConversationResponse>, ApiProblem> {
-    let id = identifier(&id, context)?;
+    let id = path_identifier(&id, context)?;
     TransferGroupOwnership::new(&state.storage)
         .execute(
             actor.user_id,
             id,
-            identifier(&request.user_id, context)?,
+            body_identifier(&request.user_id, context)?,
             OffsetDateTime::now_utc(),
         )
         .await
@@ -277,7 +285,7 @@ pub(super) async fn leave(
     LeaveGroupConversation::new(&state.storage)
         .execute(
             actor.user_id,
-            identifier(&id, context)?,
+            path_identifier(&id, context)?,
             OffsetDateTime::now_utc(),
         )
         .await
