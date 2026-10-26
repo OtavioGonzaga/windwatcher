@@ -8,4 +8,5 @@ pub(super) fn router() -> OpenApiRouter<HttpState> {
     OpenApiRouter::new()
         .routes(routes!(handlers::register_user))
         .routes(routes!(handlers::get_current_user))
+        .routes(routes!(handlers::find_users))
 }

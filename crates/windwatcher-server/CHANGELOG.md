@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Authenticated exact user discovery, consumer-ready conversation inbox/detail,
+  Group membership/role/ownership lifecycle and message history/send/reply/global
+  item edit/delete HTTP APIs, including authoritative own read-state updates.
+- Standard paginated collection responses, normalized query/path errors,
+  optional persisted `Idempotency-Key` creation and `Idempotency-Replayed` headers.
+- Full messaging OpenAPI contracts, discriminated conversation creation schemas,
+  and browser CORS support for PUT/PATCH/DELETE and idempotency headers.
+
 - HTTP v1 router with public registration, local login, refresh rotation,
   idempotent current-session logout and current-user retrieval; no listener yet.
 - Server-owned transport DTOs, RFC 9457 problems with stable codes, UUIDv7 request

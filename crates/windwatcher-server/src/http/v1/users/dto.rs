@@ -4,6 +4,31 @@ use utoipa::ToSchema;
 use windwatcher::User;
 use zeroize::Zeroizing;
 
+#[derive(Deserialize, utoipa::IntoParams)]
+#[serde(deny_unknown_fields)]
+#[into_params(parameter_in = Query)]
+pub(in crate::http) struct UsersQuery {
+    pub username: String,
+    pub cursor: Option<String>,
+    #[param(default = 50, minimum = 1, maximum = 100)]
+    pub limit: Option<i64>,
+}
+
+#[derive(Serialize, ToSchema)]
+pub(in crate::http) struct UserSummaryResponse {
+    #[schema(format = Uuid)]
+    id: String,
+    username: String,
+}
+impl From<windwatcher::UserSummary> for UserSummaryResponse {
+    fn from(user: windwatcher::UserSummary) -> Self {
+        Self {
+            id: user.id.to_string(),
+            username: user.username.to_string(),
+        }
+    }
+}
+
 #[derive(Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(in crate::http) struct RegisterUserRequest {

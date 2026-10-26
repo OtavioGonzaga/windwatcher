@@ -13,6 +13,7 @@ pub struct HttpState {
     pub(super) codec: Arc<Hs256JwtAccessTokenCodec>,
     pub(super) registration: RegistrationPolicy,
     pub(super) session: SessionPolicy,
+    pub(super) messages: windwatcher::MessagePolicy,
 }
 
 impl HttpState {
@@ -23,6 +24,7 @@ impl HttpState {
         codec: Hs256JwtAccessTokenCodec,
         registration: RegistrationPolicy,
         session: SessionPolicy,
+        messages: windwatcher::MessagePolicy,
     ) -> Self {
         Self {
             storage,
@@ -30,6 +32,7 @@ impl HttpState {
             codec: Arc::new(codec),
             registration,
             session,
+            messages,
             refresh_tokens: Arc::new(OsRefreshTokenProvider),
         }
     }

@@ -4,6 +4,7 @@ mod auth;
 mod extract;
 mod middleware;
 mod openapi;
+mod page;
 mod problem;
 mod state;
 mod v1;
@@ -67,12 +68,19 @@ fn routes(config: &ResolvedHttpConfig) -> OpenApiRouter<HttpState> {
         .allow_methods([
             axum::http::Method::GET,
             axum::http::Method::POST,
+            axum::http::Method::PUT,
+            axum::http::Method::PATCH,
             axum::http::Method::DELETE,
         ])
-        .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE])
+        .allow_headers([
+            header::AUTHORIZATION,
+            header::CONTENT_TYPE,
+            header::HeaderName::from_static("idempotency-key"),
+        ])
         .expose_headers([
             header::HeaderName::from_static("x-request-id"),
             header::RETRY_AFTER,
+            header::HeaderName::from_static("idempotency-replayed"),
         ]);
     let cors = if config.any_origin {
         cors.allow_origin(Any)
@@ -102,7 +110,7 @@ pub fn router(state: HttpState, config: ResolvedHttpConfig) -> Router {
                 span.record("latency_ms", latency.as_millis() as u64);
                 tracing::info!(parent: span, status = response.status().as_u16(), latency_ms = latency.as_millis() as u64, "request_completed");
             }))
-        .layer(SetSensitiveRequestHeadersLayer::new([header::AUTHORIZATION, header::COOKIE]))
+        .layer(SetSensitiveRequestHeadersLayer::new([header::AUTHORIZATION, header::COOKIE, header::HeaderName::from_static("idempotency-key")]))
         .layer(axum_middleware::from_fn(assign))
 }
 

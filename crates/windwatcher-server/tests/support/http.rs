@@ -51,6 +51,7 @@ impl Fixture {
             codec(),
             registration,
             SessionPolicy::default(),
+            windwatcher::MessagePolicy::default(),
         );
         Self {
             _directory: directory,

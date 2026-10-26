@@ -13,6 +13,29 @@ use windwatcher::{
     SecretPassword,
 };
 
+#[utoipa::path(get, path = "/users", operation_id = "findUsers", tag = "Users", security(("bearerAuth" = [])), params(super::dto::UsersQuery), responses((status = 200, body = crate::http::page::PageResponse<super::dto::UserSummaryResponse>), (status = 400, body = ProblemDetails), (status = 401, body = ProblemDetails), (status = 422, body = ProblemDetails), (status = 429, body = ProblemDetails), (status = 500, body = ProblemDetails)))]
+pub(super) async fn find_users(
+    State(state): State<HttpState>,
+    context: RequestContext,
+    _actor: AuthenticatedActor,
+    crate::http::extract::ApiQuery(query): crate::http::extract::ApiQuery<super::dto::UsersQuery>,
+) -> Result<Json<crate::http::page::PageResponse<super::dto::UserSummaryResponse>>, ApiProblem> {
+    let page = crate::http::extract::PaginationQuery {
+        cursor: query.cursor,
+        limit: query.limit,
+    }
+    .page(context)?;
+    // Exact lookup never issues a continuation, so no supplied cursor is valid.
+    if page.cursor().is_some() {
+        return Err(ApiProblem::new(ProblemKind::InvalidCursor, context));
+    }
+    windwatcher::FindUsers::new(&state.storage)
+        .execute(&query.username)
+        .await
+        .map(|p| Json(p.into()))
+        .map_err(|e| ApiProblem::query(context, e))
+}
+
 #[utoipa::path(post, path = "/users", operation_id = "registerUser", tag = "Users",
     request_body = RegisterUserRequest,
     responses(
