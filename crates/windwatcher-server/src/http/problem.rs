@@ -66,7 +66,9 @@ impl ApiProblem {
     }
 
     pub fn internal(context: RequestContext, error: &dyn std::error::Error) -> Self {
-        tracing::error!(request_id = %context.request_id, error = %error, "HTTP operation failed");
+        // Operational errors retain their diagnostic sources on the server;
+        // the response never includes this chain. Ports forbid secret sources.
+        tracing::error!(request_id = %context.request_id, error = ?error, "HTTP operation failed");
         Self::new(ProblemKind::Internal, context)
     }
 }

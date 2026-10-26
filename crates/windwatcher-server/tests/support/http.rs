@@ -126,6 +126,7 @@ pub async fn send(router: &Router, mut request: Request<Body>) -> (StatusCode, H
     let response = router.clone().oneshot(request).await.unwrap();
     let status = response.status();
     let headers = response.headers().clone();
+    assert!(!headers.contains_key("set-cookie"));
     assert_eq!(
         uuid::Uuid::parse_str(headers["x-request-id"].to_str().unwrap())
             .unwrap()

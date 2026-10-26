@@ -245,6 +245,16 @@ async fn tracing_correlates_requests_without_logging_secrets_or_query_strings() 
     )
     .await;
     assert_eq!(response.0, StatusCode::CREATED);
+    let mut protected = bearer(
+        "GET",
+        "/v1/users/me?private_query=hidden-query-value",
+        response.2["access_token"].as_str().unwrap(),
+    );
+    protected.headers_mut().insert(
+        "cookie",
+        "private-cookie=hidden-cookie-value".parse().unwrap(),
+    );
+    assert_eq!(send(&fixture.router, protected).await.0, StatusCode::OK);
     let logs = String::from_utf8(output.lock().unwrap().clone()).unwrap();
     assert!(logs.contains(response.1["x-request-id"].to_str().unwrap()));
     assert!(logs.contains("/v1/sessions"));
@@ -254,6 +264,8 @@ async fn tracing_correlates_requests_without_logging_secrets_or_query_strings() 
         "test password",
         "secret_query",
         "do-not-log",
+        "hidden-cookie-value",
+        "hidden-query-value",
         response.2["access_token"].as_str().unwrap(),
         response.2["refresh_token"].as_str().unwrap(),
     ] {
