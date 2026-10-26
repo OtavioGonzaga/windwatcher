@@ -58,7 +58,29 @@ message fields are rejected. `config check` resolves the policy without opening
 a database or creating files. No message runtime, message CLI commands or
 dedicated message-limit CLI flag are introduced.
 
-## Logging
+## HTTP behavior
+
+`[http.cors].allowed_origins` defaults to `[]`. Use explicit web origins such as
+`["https://example.com", "http://localhost:3000"]`, without trailing slashes, or
+`["*"]` alone. Credentialed CORS is not supported.
+
+`[http.rate_limit].enabled` defaults to `true`. The `general` policy defaults to
+`requests = 100`, `period = "1s"`, `burst = 200`; the additional `auth` policy
+defaults to `10`, `"1m"`, `10`. These are token buckets with sustained refill and
+an initial/maximum burst, not fixed-window counters. Counts and durations must
+be positive. Nanosecond refill intervals round upward, never allowing a faster
+rate than configured. Invalid quotas are rejected even when disabled.
+
+`config check` validates HTTP settings without binding a listener. Limits are
+per-process and per immediate peer IP, not per forwarded client address. Behind
+a reverse proxy, clients share its bucket; adjust or disable limits as needed.
+Trusted-proxy support is not implemented.
+
+Environment overrides use Figment array syntax, for example:
+`WINDWATCHER__HTTP__CORS__ALLOWED_ORIGINS='["https://example.com"]'`, and nested
+values such as `WINDWATCHER__HTTP__RATE_LIMIT__AUTH__BURST=20`.
+
+## Logging output
 
 `logging.filter` accepts `tracing_subscriber::EnvFilter` syntax and `logging.format`
 is `compact`, `pretty`, or `json`. Logs and warnings go to stderr; command results

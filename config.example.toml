@@ -23,6 +23,23 @@ secret_file = "/etc/windwatcher/jwt.key"
 # Inclusive UTF-8 byte limit for new sends/edits; 131072 bytes = 128 KiB.
 max_content_bytes = 131072
 
+[http.cors]
+# Empty denies cross-origin browser access; ["*"] explicitly allows any origin.
+allowed_origins = []
+
+[http.rate_limit]
+enabled = true
+
+[http.rate_limit.general]
+requests = 100
+period = "1s"
+burst = 200
+
+[http.rate_limit.auth]
+requests = 10
+period = "1m"
+burst = 10
+
 [logging]
 filter = "info"
 format = "compact"

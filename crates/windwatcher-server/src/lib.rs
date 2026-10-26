@@ -8,6 +8,8 @@ mod logging;
 mod paths;
 mod storage;
 
+pub use config::http::{RawCors, RawHttp, RawRateLimit, RawRateLimitPolicy, ResolvedHttpConfig};
+
 use clap::Parser;
 use cli::{Cli, Command, MigrateCommand};
 use error::AppError;
