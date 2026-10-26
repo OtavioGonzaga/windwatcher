@@ -347,6 +347,12 @@ pub enum RefreshRotationResult {
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum SessionStoreError {
+    /// Creation was rejected because the persisted owner does not exist.
+    #[error("session owner not found")]
+    OwnerNotFound,
+    /// Creation was rejected because the persisted owner is disabled.
+    #[error("session owner disabled")]
+    OwnerDisabled,
     /// A storage conflict prevented the operation.
     #[error("session storage conflict")]
     Conflict,
@@ -360,6 +366,12 @@ pub enum SessionStoreError {
 /// Application-driven asynchronous session persistence operations.
 pub trait SessionStore: Sync {
     /// Atomically stores a session and its first refresh fingerprint, or neither.
+    /// Atomically require a persisted, enabled owner at insertion time, including
+    /// races after authentication. Return `OwnerNotFound` or `OwnerDisabled`
+    /// according to that same atomic snapshot, not a subsequent identity lookup.
+    /// Session IDs and refresh fingerprints must remain unique: collisions are
+    /// `Conflict`, not owner rejections, and must not replace existing records.
+    /// Rejection must persist neither a session nor its refresh fingerprint.
     fn create_session(
         &self,
         session: &Session,
@@ -429,9 +441,12 @@ impl fmt::Debug for SessionGrant {
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum CreateSessionError {
-    /// The supplied authenticated user is disabled.
+    /// The authenticated snapshot or persisted session owner is disabled.
     #[error("user disabled")]
     UserDisabled,
+    /// The persisted owner disappeared after authentication.
+    #[error("user not found")]
+    UserNotFound,
     /// Session expiration cannot be represented by the time type.
     #[error("session expiration cannot be represented")]
     TimeOverflow,
@@ -495,7 +510,11 @@ impl<'a, S: SessionStore, R: RefreshTokenProvider, C: AccessTokenCodec> CreateSe
         self.store
             .create_session(&session, &refresh_hash)
             .await
-            .map_err(CreateSessionError::Storage)?;
+            .map_err(|error| match error {
+                SessionStoreError::OwnerDisabled => CreateSessionError::UserDisabled,
+                SessionStoreError::OwnerNotFound => CreateSessionError::UserNotFound,
+                other => CreateSessionError::Storage(other),
+            })?;
         Ok(SessionGrant {
             session,
             access_token,

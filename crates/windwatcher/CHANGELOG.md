@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `GetUser` application lookup by identity ID, independent of authentication and
+  authorization and without exposing credentials.
+- Semantic `SessionStoreError::OwnerDisabled`/`OwnerNotFound` creation rejections
+  and `CreateSessionError::UserNotFound`, with atomic owner validation required
+  by the portable adapter contract rather than backend-specific conflict inference.
+
 - Reusable opaque cursor pagination with `PageRequest`, `Page<T>`, and validated
   `PageLimit` (default 50, maximum 100).
 - `ListMessages` paginated history using newest-first UUIDv7 keyset ordering,
@@ -47,3 +53,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Persisted enable/disable use cases for trusted operator callers.
 - Strongly typed UUIDv7 identifiers for core domain entities.
 - Initial user identity model with canonical validated usernames and enable/disable behavior.
+
+### Fixed
+
+- SQLite session creation atomically rejects missing or disabled owners, preventing
+  a disable-during-login race from creating a new active session.

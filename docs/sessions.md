@@ -62,3 +62,31 @@ each request. Consequently, revoking a session (including through user disable)
 immediately blocks refresh but an access token already issued remains cryptographically
 valid until its short expiration. This intentional v1 trade-off bounds the window to
 at most the configured access-token lifetime.
+
+## HTTP surface
+
+The server's [HTTP adapter](http-api.md) composes credentials with `CreateSession`
+at `POST /v1/sessions` (201), rotates via `POST /v1/sessions/refresh` (200) and
+revokes via bearer-authenticated `DELETE /v1/sessions/current` (204 with no body).
+Tokens are JSON data, never cookies. Grants are `Cache-Control: no-store` and
+transport timestamps are RFC 3339 UTC strings. Protect refresh tokens as secrets.
+
+**HTTP logout does not blacklist an already-issued access token.** It immediately
+blocks future refresh, while that access token can still call authenticated
+routes until expiration. Repeated deletion, including an absent session, is 204.
+`GET /v1/users/me` uses `GetUser`, may return a disabled identity during that
+window, and maps a missing identity to an invalid access principal (401).
+
+`SessionStore::create_session` atomically requires a currently enabled persisted
+owner, even if the authenticated `User` snapshot predates disabling or deletion.
+Every adapter must return `OwnerDisabled` or `OwnerNotFound` according to the
+same atomic snapshot that permits insertion, persisting neither session nor
+refresh fingerprint on rejection. Genuine persistence/uniqueness conflicts
+remain `Conflict`; callers must not reconstruct owner state with a later lookup.
+The portable session-store contract covers both owner rejections and genuine
+conflicts. SQLite implements the check and insert under one immediate transaction.
+
+`CreateSession` maps these owner rejections to `UserDisabled` and `UserNotFound`.
+HTTP handles only these application errors (403 disabled or 401 invalid
+credentials); it has no knowledge of SQLite error conventions. A subsequent
+re-enable cannot change the already-classified rejection into an internal error.

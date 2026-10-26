@@ -70,7 +70,7 @@ markers. Membership owns read state and unread counts are derived. The server
 resolves its message configuration to the reusable library policy and delegates
 the message port through concrete storage enum dispatch. See
 [messages](messages.md) and [ADR 0008](adr/0008-message-lifecycle-and-read-state.md).
-No HTTP, realtime, events or workers are implemented by this delivery.
+That message delivery did not introduce realtime, events or workers.
 
 `PageRequest`, `PageLimit` and `Page<T>` are shared, transport-independent
 application pagination infrastructure. `ListMessages` is the first consumer:
@@ -92,3 +92,29 @@ Argon2id adapter performs CPU-bound work on the polling thread; hosts can wrap
 the port with runtime-specific blocking-pool execution. See
 [local authentication](authentication.md) and
 [ADR 0003](adr/0003-local-credentials-and-authentication.md).
+
+## HTTP adapter
+
+The first public transport belongs entirely to `windwatcher-server`:
+
+```text
+HTTP adapter (Axum / Tower, server-owned DTOs and Problem Details)
+    ↓
+windwatcher application use cases (including GetUser)
+    ↓
+ports
+    ↓
+server Storage dispatch → SQLite adapter
+```
+
+Handlers consume concrete resolved state; they do not parse config, resolve
+secrets or execute SQL. Resources are organized by API version then resource,
+with explicit handler modules. Utoipa-aware route composition generates the
+OpenAPI 3.1 contract and Swagger uses vendored assets. A server-package library
+target exposes deliberate composition entry points, while the executable retains
+its existing operator CLI. There is no production listener or `serve` yet.
+
+HTTP status codes, headers, framework types and error representations never enter
+the reusable engine. Its Argon2 adapter remains runtime-independent; the server's
+bounded blocking wrapper handles HTTP hashing/verification. See [HTTP API](http-api.md)
+and [ADR 0010](adr/0010-http-v1-transport-and-contracts.md).

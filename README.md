@@ -28,6 +28,9 @@ windwatcher user create --username otavio
 windwatcher config check
 ```
 
+An [HTTP v1 router](docs/http-api.md) is implemented and tested, but the CLI does
+not bind a listener yet; there is no `serve` command in this delivery.
+
 ## Development
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development requirements, workflow,

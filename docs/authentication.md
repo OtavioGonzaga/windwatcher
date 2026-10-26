@@ -105,3 +105,19 @@ blocking pool. The host is responsible for concurrency limits and scheduling.
 users produce `UserNotFound`, including deletion between read and update. A no-op
 preserves timestamps and avoids writes. Callers must establish operator trust;
 these capabilities do not implement end-user authorization or global admin roles.
+
+## HTTP transport
+
+The server's [HTTP v1 adapter](http-api.md) exposes self-registration at
+`POST /v1/users` and composes authentication with session creation at
+`POST /v1/sessions`. Registration never creates a session. Closed registration
+remains a stable route returning `403 registration.closed`. Credential failures,
+including oversized login passwords, map to `401 auth.invalid_credentials`;
+correct credentials for a disabled user map to `403 auth.user_disabled`.
+
+The server wraps this exact Argon2 adapter in `TokioPasswordHasher`, with at most
+four blocking workers by default (fewer on smaller hosts). Clones share the
+budget and cancellation retains a worker's permit until its work finishes.
+The borrowed port requires one owned, zeroized password copy for the blocking
+task; no algorithm/configuration is duplicated and the engine remains runtime
+independent. HTTP handlers resolve neither files nor configuration.

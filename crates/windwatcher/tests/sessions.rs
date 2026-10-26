@@ -54,6 +54,7 @@ struct Sessions {
     records: Mutex<HashMap<SessionId, (Session, RefreshTokenHash)>>,
     revoke_all_calls: AtomicUsize,
     fail_revoke_all: AtomicUsize,
+    create_failure: Mutex<Option<SessionStoreError>>,
 }
 impl SessionStore for Sessions {
     async fn create_session(
@@ -61,6 +62,9 @@ impl SessionStore for Sessions {
         session: &Session,
         hash: &RefreshTokenHash,
     ) -> Result<(), SessionStoreError> {
+        if let Some(error) = self.create_failure.lock().unwrap().take() {
+            return Err(error);
+        }
         self.records
             .lock()
             .unwrap()
@@ -158,6 +162,42 @@ impl AccessTokenCodec for Codec {
         _: OffsetDateTime,
     ) -> Result<AccessTokenClaims, AccessTokenError> {
         Err(AccessTokenError::InvalidToken)
+    }
+}
+
+#[test]
+fn session_creation_maps_owner_rejections_without_reclassifying_conflicts() {
+    // The authenticated snapshot is enabled throughout. Only the port knows the
+    // atomic owner state; no identity reread can reinterpret its rejection.
+    let user = user();
+    for failure in [
+        SessionStoreError::OwnerDisabled,
+        SessionStoreError::OwnerNotFound,
+        SessionStoreError::Conflict,
+    ] {
+        let disabled = matches!(failure, SessionStoreError::OwnerDisabled);
+        let missing = matches!(failure, SessionStoreError::OwnerNotFound);
+        let sessions = Sessions {
+            create_failure: Mutex::new(Some(failure)),
+            ..Default::default()
+        };
+        let tokens = Tokens::default();
+        let error = block_on(
+            CreateSession::new(&sessions, &tokens, &Codec, SessionPolicy::default())
+                .execute(&user, now()),
+        )
+        .unwrap_err();
+        if disabled {
+            assert!(matches!(error, CreateSessionError::UserDisabled));
+        } else if missing {
+            assert!(matches!(error, CreateSessionError::UserNotFound));
+        } else {
+            assert!(matches!(
+                error,
+                CreateSessionError::Storage(SessionStoreError::Conflict)
+            ));
+        }
+        assert!(sessions.records.lock().unwrap().is_empty());
     }
 }
 

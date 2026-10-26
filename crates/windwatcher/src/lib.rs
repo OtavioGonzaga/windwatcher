@@ -19,6 +19,7 @@ mod password;
 mod session;
 #[cfg(feature = "sqlite")]
 mod storage;
+mod users;
 
 pub use authentication::{AuthenticateLocalUser, AuthenticateLocalUserError};
 pub use conversation::{
@@ -77,3 +78,4 @@ pub use id::{ConversationId, IdentifierError, MessageId, SessionId, UserId};
 pub use identity::{User, Username, UsernameError};
 #[cfg(feature = "sqlite")]
 pub use storage::{MigrationStatus, SqliteStorage, SqliteStorageError, SqliteStorageOptions};
+pub use users::{GetUser, GetUserError};

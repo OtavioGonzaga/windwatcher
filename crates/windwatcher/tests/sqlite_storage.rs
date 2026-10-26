@@ -58,6 +58,78 @@ async fn persisted_user(storage: &SqliteStorage, name: &str) -> User {
 }
 
 #[tokio::test]
+async fn session_creation_rejects_owner_disabled_after_authentication() {
+    let (_directory, storage) = store().await;
+    let mut owner = persisted_user(&storage, "racing_owner").await;
+    let now = timestamp(1_700_000_100);
+    let session = Session::new(SessionId::new(), owner.id(), now, now + Duration::days(1)).unwrap();
+    let provider = OsRefreshTokenProvider;
+    let hash = provider.hash(&provider.generate().unwrap());
+    owner.disable(now);
+    storage.update_user(&owner).await.unwrap();
+    assert!(matches!(
+        storage.create_session(&session, &hash).await,
+        Err(windwatcher::SessionStoreError::OwnerDisabled)
+    ));
+    assert!(
+        storage
+            .find_by_refresh_token_hash(&hash)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let missing = Session::new(
+        SessionId::new(),
+        UserId::new(),
+        now,
+        now + Duration::days(1),
+    )
+    .unwrap();
+    assert!(matches!(
+        storage.create_session(&missing, &hash).await,
+        Err(windwatcher::SessionStoreError::OwnerNotFound)
+    ));
+}
+
+#[cfg(feature = "jwt-hs256")]
+#[tokio::test]
+async fn session_creation_keeps_atomic_rejection_after_owner_is_reenabled() {
+    let (_directory, storage) = store().await;
+    let authenticated = persisted_user(&storage, "reenabled_owner").await;
+    let now = timestamp(1_700_000_100);
+    let mut persisted = authenticated.clone();
+    persisted.disable(now);
+    storage.update_user(&persisted).await.unwrap();
+    let codec = windwatcher::Hs256JwtAccessTokenCodec::new(
+        windwatcher::Hs256SigningSecret::new(vec![7; 32]).unwrap(),
+        "windwatcher".into(),
+    );
+    let error = windwatcher::CreateSession::new(
+        &storage,
+        &OsRefreshTokenProvider,
+        &codec,
+        windwatcher::SessionPolicy::default(),
+    )
+    .execute(&authenticated, now)
+    .await
+    .unwrap_err();
+    persisted.enable(now + Duration::seconds(1));
+    storage.update_user(&persisted).await.unwrap();
+    assert!(
+        !storage
+            .find_user(authenticated.id())
+            .await
+            .unwrap()
+            .unwrap()
+            .is_disabled()
+    );
+    assert!(matches!(
+        error,
+        windwatcher::CreateSessionError::UserDisabled
+    ));
+}
+
+#[tokio::test]
 async fn sqlite_satisfies_portable_message_contract() {
     let (_directory, storage) = store().await;
     let owner = persisted_user(&storage, "message_owner").await;
@@ -687,7 +759,17 @@ async fn sessions_use_atomic_refresh_cas_and_preserve_revocation() {
     let (_directory, storage) = store().await;
     let owner = persisted_user(&storage, "alice").await;
     let other_owner = persisted_user(&storage, "other_user").await;
-    support::session_store_contract::run(&storage, owner.id(), other_owner.id()).await;
+    let mut disabled_owner = persisted_user(&storage, "disabled_owner").await;
+    disabled_owner.disable(timestamp(1_700_000_001));
+    storage.update_user(&disabled_owner).await.unwrap();
+    support::session_store_contract::run(
+        &storage,
+        owner.id(),
+        other_owner.id(),
+        disabled_owner.id(),
+        UserId::new(),
+    )
+    .await;
     let provider = OsRefreshTokenProvider;
     let first = RefreshToken::parse("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".into()).unwrap();
     let second = RefreshToken::parse("AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE".into()).unwrap();
@@ -794,7 +876,7 @@ async fn storage_enforces_foreign_keys_and_physical_representations() {
         storage
             .create_session(&orphan, &provider.hash(&token))
             .await,
-        Err(windwatcher::SessionStoreError::Conflict)
+        Err(windwatcher::SessionStoreError::OwnerNotFound)
     ));
 
     let user = persisted_user(&storage, "alice").await;

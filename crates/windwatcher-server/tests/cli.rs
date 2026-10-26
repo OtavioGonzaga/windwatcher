@@ -41,6 +41,80 @@ fn command(config: &Path) -> Command {
 }
 
 #[test]
+fn http_config_check_validates_defaults_toml_environment_and_unknown_fields() {
+    let directory = TempDir::new().unwrap();
+    let path = complete_config(&directory, "warn");
+    let base = fs::read_to_string(&path).unwrap();
+    command(&path).args(["config", "check"]).assert().success();
+    for http in [
+        "[http.cors]\nallowed_origins = ['https://example.com', 'http://localhost:3000']",
+        "[http.cors]\nallowed_origins = ['*']",
+        "[http.rate_limit]\nenabled = false\n[http.rate_limit.auth]\nrequests = 2\nperiod = '1m'\nburst = 3",
+    ] {
+        fs::write(&path, format!("{base}\n{http}\n")).unwrap();
+        command(&path).args(["config", "check"]).assert().success();
+    }
+    for http in [
+        "[http.cors]\nallowed_origins = ['*', 'https://example.com']",
+        "[http.cors]\nallowed_origins = ['not an origin']",
+        "[http.rate_limit.general]\nrequests = 0",
+        "[http.rate_limit.auth]\nburst = 0",
+        "[http.rate_limit.auth]\nperiod = '0s'",
+        "[http.rate_limit.auth]\nperiod = 'nonsense'",
+        "[http]\nbind = '127.0.0.1:8000'",
+        "[http.cors]\nallow_credentials = true",
+        "[http.rate_limit.auth]\nunknown = true",
+    ] {
+        fs::write(&path, format!("{base}\n{http}\n")).unwrap();
+        command(&path).args(["config", "check"]).assert().failure();
+    }
+    fs::write(
+        &path,
+        format!("{base}\n[http.cors]\nallowed_origins = ['invalid']\n"),
+    )
+    .unwrap();
+    command(&path)
+        .env(
+            "WINDWATCHER__HTTP__CORS__ALLOWED_ORIGINS",
+            "[\"https://example.com\",\"http://localhost:3000\"]",
+        )
+        .args(["config", "check"])
+        .assert()
+        .success();
+    command(&path)
+        .env("WINDWATCHER__HTTP__CORS__ALLOWED_ORIGINS", "[]")
+        .args(["config", "check"])
+        .assert()
+        .success();
+    command(&path)
+        .env(
+            "WINDWATCHER__HTTP__CORS__ALLOWED_ORIGINS",
+            "https://example.com",
+        )
+        .args(["config", "check"])
+        .assert()
+        .failure();
+    fs::write(&path, &base).unwrap();
+    command(&path)
+        .env("WINDWATCHER__HTTP__RATE_LIMIT__AUTH__BURST", "0")
+        .args(["config", "check"])
+        .assert()
+        .failure();
+    command(&path)
+        .env("WINDWATCHER__HTTP__UNKNOWN", "true")
+        .args(["config", "check"])
+        .assert()
+        .failure();
+    assert!(!directory.path().join("windwatcher.db").exists());
+    fs::write(
+        &path,
+        format!("{base}\n[http.cors]\nallowed_origins = ['invalid']\n"),
+    )
+    .unwrap();
+    command(&path).arg("migrate").assert().success();
+}
+
+#[test]
 fn message_config_defaults_toml_environment_and_unknown_fields() {
     let directory = TempDir::new().unwrap();
     let path = complete_config(&directory, "warn");
