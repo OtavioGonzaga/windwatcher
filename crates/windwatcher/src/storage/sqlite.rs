@@ -7,6 +7,7 @@ use sqlx::{
 use time::OffsetDateTime;
 use uuid::Uuid;
 
+mod idempotency;
 mod messages;
 mod queries;
 
@@ -651,9 +652,9 @@ async fn eligible_participant(
     }
 }
 
-impl ConversationStore for SqliteStorage {
-    async fn get_or_create_direct(
-        &self,
+impl SqliteStorage {
+    async fn create_direct_in(
+        transaction: &mut sqlx::SqliteConnection,
         conversation: &Conversation,
         first: UserId,
         second: UserId,
@@ -665,21 +666,15 @@ impl ConversationStore for SqliteStorage {
             });
         }
         let key = direct_key(first, second);
-        let mut transaction = self
-            .pool
-            .begin_with("BEGIN IMMEDIATE")
-            .await
-            .map_err(conversation_error)?;
         let existing = sqlx::query("SELECT id, kind, title, created_at, updated_at FROM conversations WHERE direct_key = ?")
             .bind(&key).fetch_optional(&mut *transaction).await.map_err(conversation_error)?;
         if let Some(row) = existing {
             let existing = read_conversation(&row)?;
-            transaction.commit().await.map_err(conversation_error)?;
             return Ok(StartDirectStoreOutcome::Existing(existing));
         }
-        eligible_participant(&mut transaction, first).await?;
+        eligible_participant(transaction, first).await?;
         if second != first {
-            eligible_participant(&mut transaction, second).await?;
+            eligible_participant(transaction, second).await?;
         }
         let inserted = sqlx::query("INSERT INTO conversations (id, kind, title, direct_key, created_at, updated_at) VALUES (?, 'direct', NULL, ?, ?, ?) ON CONFLICT(direct_key) DO NOTHING")
             .bind(id_bytes(conversation.id())).bind(&key)
@@ -693,19 +688,17 @@ impl ConversationStore for SqliteStorage {
                     .bind(to_micros(conversation.created_at()).map_err(unexpected_conversation)?)
                     .execute(&mut *transaction).await.map_err(conversation_error)?;
             }
-            transaction.commit().await.map_err(conversation_error)?;
             Ok(StartDirectStoreOutcome::Created(conversation.clone()))
         } else {
             let row = sqlx::query("SELECT id, kind, title, created_at, updated_at FROM conversations WHERE direct_key = ?")
                 .bind(key).fetch_one(&mut *transaction).await.map_err(conversation_error)?;
             let existing = read_conversation(&row)?;
-            transaction.commit().await.map_err(conversation_error)?;
             Ok(StartDirectStoreOutcome::Existing(existing))
         }
     }
 
-    async fn create_group(
-        &self,
+    async fn create_group_in(
+        transaction: &mut sqlx::SqliteConnection,
         conversation: &Conversation,
         owner: UserId,
         participants: &[UserId],
@@ -723,14 +716,9 @@ impl ConversationStore for SqliteStorage {
                     expected: ConversationKind::Group,
                     actual: ConversationKind::Direct,
                 })?;
-        let mut transaction = self
-            .pool
-            .begin_with("BEGIN IMMEDIATE")
-            .await
-            .map_err(conversation_error)?;
-        eligible_participant(&mut transaction, owner).await?;
+        eligible_participant(transaction, owner).await?;
         for participant in participants {
-            eligible_participant(&mut transaction, *participant).await?;
+            eligible_participant(transaction, *participant).await?;
         }
         sqlx::query("INSERT INTO conversations (id, kind, title, direct_key, created_at, updated_at) VALUES (?, 'group', ?, NULL, ?, ?)")
             .bind(id_bytes(conversation.id())).bind(title.as_str())
@@ -747,7 +735,40 @@ impl ConversationStore for SqliteStorage {
                     .execute(&mut *transaction).await.map_err(conversation_error)?;
             }
         }
-        transaction.commit().await.map_err(conversation_error)
+        Ok(())
+    }
+}
+
+impl ConversationStore for SqliteStorage {
+    async fn get_or_create_direct(
+        &self,
+        conversation: &Conversation,
+        first: UserId,
+        second: UserId,
+    ) -> Result<StartDirectStoreOutcome, ConversationStoreError> {
+        let mut tx = self
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .map_err(conversation_error)?;
+        let outcome = Self::create_direct_in(&mut tx, conversation, first, second).await?;
+        tx.commit().await.map_err(conversation_error)?;
+        Ok(outcome)
+    }
+
+    async fn create_group(
+        &self,
+        conversation: &Conversation,
+        owner: UserId,
+        participants: &[UserId],
+    ) -> Result<(), ConversationStoreError> {
+        let mut tx = self
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .map_err(conversation_error)?;
+        Self::create_group_in(&mut tx, conversation, owner, participants).await?;
+        tx.commit().await.map_err(conversation_error)
     }
 
     async fn find_conversation(

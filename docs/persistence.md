@@ -13,6 +13,13 @@ Derived inbox activity uses primary conversation/message timestamps; query-plan
 tests verify indexed message probes without adding redundant message indexes or
 a materialized activity column.
 
+`CreateCommandStore` atomically persists optional retry-deduplication records with
+conversation/message creation, reusing transaction-local create primitives. SQLite
+migration 0004 also adds strict binary-UUID/hash `idempotency_records` and an
+expiration index. Records deliberately outlive physical resource deletion. Keys
+are hashed and fingerprints use semantic input; cleanup is opportunistic within
+keyed write transactions. See [ADR 0011](adr/0011-idempotent-create-commands.md).
+
 ## Ports and adapters
 
 `IdentityStore`, `SessionStore`, `ConversationStore`, and `MessageStore` are

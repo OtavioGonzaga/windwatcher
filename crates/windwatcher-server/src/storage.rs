@@ -20,6 +20,30 @@ pub enum Storage {
     Sqlite(SqliteStorage),
 }
 
+impl windwatcher::CreateCommandStore for Storage {
+    async fn create_conversation_command(
+        &self,
+        command: &windwatcher::ConversationCreateCommand,
+        key: Option<&windwatcher::IdempotencyKey>,
+        now: OffsetDateTime,
+    ) -> Result<windwatcher::CreateResult<ConversationId>, windwatcher::CreateCommandError> {
+        match self {
+            Self::Sqlite(s) => s.create_conversation_command(command, key, now).await,
+        }
+    }
+    async fn send_message_command(
+        &self,
+        message: &Message,
+        key: Option<&windwatcher::IdempotencyKey>,
+        now: OffsetDateTime,
+    ) -> Result<windwatcher::CreateResult<windwatcher::MessageView>, windwatcher::CreateCommandError>
+    {
+        match self {
+            Self::Sqlite(s) => s.send_message_command(message, key, now).await,
+        }
+    }
+}
+
 impl windwatcher::MessagingQueryStore for Storage {
     async fn find_users(
         &self,

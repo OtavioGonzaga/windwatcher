@@ -8,6 +8,7 @@ mod conversation_store;
 mod conversations;
 mod cursor;
 mod id;
+mod idempotency;
 mod identity;
 mod identity_store;
 mod local_users;
@@ -42,6 +43,11 @@ pub use conversations::{
     TransferGroupOwnershipError,
 };
 pub use cursor::CursorError;
+pub use idempotency::{
+    ConversationCreateCommand, ConversationCreateRequest, CreateCommandError, CreateCommandStore,
+    CreateConversation, CreateDisposition, CreateResult, IdempotencyKey, IdempotencyKeyError,
+    SendMessageCommand, message_request_fingerprint,
+};
 pub use identity_store::{IdentityStore, IdentityStoreError, LocalAuthentication};
 pub use local_users::{
     CreateLocalUser, CreateLocalUserError, DisableUser, EnableUser, ManageUserError,

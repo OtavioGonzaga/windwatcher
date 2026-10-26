@@ -110,6 +110,14 @@ async fn sqlite_satisfies_portable_consumer_query_contract() {
 }
 
 #[tokio::test]
+async fn sqlite_satisfies_portable_idempotent_command_contract() {
+    let (_directory, storage) = store().await;
+    let owner = persisted_user(&storage, "command_owner").await;
+    let peer = persisted_user(&storage, "command_peer").await;
+    support::idempotency_contract::run(&storage, owner.id(), peer.id()).await;
+}
+
+#[tokio::test]
 async fn direct_creation_observes_disable_committed_by_another_writer() {
     let (directory, storage) = store().await;
     let owner = persisted_user(&storage, "race_owner").await;

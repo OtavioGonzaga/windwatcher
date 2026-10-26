@@ -28,6 +28,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Optional durable create-command deduplication through `IdempotencyKey`,
+  `CreateConversation`, `SendMessageCommand` and `CreateCommandStore`, with
+  semantic fingerprints, hashed keys, 24-hour retention and atomic SQLite
+  resource/record persistence, replay/conflict/deleted-result semantics.
+
 - `MessagingQueryStore`, exact enabled-user discovery and consumer-ready
   conversation/detail/member projections with bounded snapshot-based SQLite
   loading, derived activity and actor/conversation-scoped keyset cursors.

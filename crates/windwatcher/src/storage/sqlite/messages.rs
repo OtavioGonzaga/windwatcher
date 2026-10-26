@@ -175,7 +175,7 @@ async fn find(
 
 // Global item resolution shares the caller's read snapshot or write lock with
 // membership/role checks. Never ask callers to discover a conversation first.
-async fn find_global(
+pub(super) async fn find_global(
     conn: &mut SqliteConnection,
     message: MessageId,
 ) -> Result<Option<MessageView>, MessageStoreError> {
@@ -238,35 +238,14 @@ impl MessageStore for SqliteStorage {
         Ok(List::Page(MessagePageSlice { items, has_more }))
     }
     async fn send_message(&self, message: &Message) -> Result<Send, MessageStoreError> {
-        if message.is_deleted() || message.edited_at().is_some() {
-            return Err(unexpected("send requires an active unedited message"));
-        }
         let mut tx = self
             .pool
             .begin_with("BEGIN IMMEDIATE")
             .await
             .map_err(storage_error)?;
-        match access(&mut tx, message.sender_id(), message.conversation_id()).await? {
-            Access::ConversationNotFound => return Ok(Send::ConversationNotFound),
-            Access::NotMember => return Ok(Send::NotMember),
-            Access::Member { .. } => (),
-        }
-        if let Some(reply) = message.reply_to_message_id() {
-            match find(&mut tx, message.conversation_id(), reply).await? {
-                None => return Ok(Send::ReplyTargetNotFound),
-                Some(target) if target.is_deleted() => return Ok(Send::ReplyTargetDeleted),
-                Some(_) => (),
-            }
-        }
-        sqlx::query("INSERT INTO messages (id, conversation_id, sender_id, content, reply_to_message_id, created_at) VALUES (?, ?, ?, ?, ?, ?)")
-            .bind(id_bytes(message.id())).bind(id_bytes(message.conversation_id())).bind(id_bytes(message.sender_id()))
-            .bind(message.content().map(MessageContent::as_str)).bind(message.reply_to_message_id().map(id_bytes))
-            .bind(to_micros(message.created_at()).map_err(unexpected)?).execute(&mut *tx).await.map_err(storage_error)?;
-        let persisted = find(&mut tx, message.conversation_id(), message.id())
-            .await?
-            .ok_or_else(|| unexpected("persisted message disappeared"))?;
+        let outcome = send_in(&mut tx, message).await?;
         tx.commit().await.map_err(storage_error)?;
-        Ok(Send::Sent(persisted))
+        Ok(outcome)
     }
 
     async fn get_message(
@@ -424,4 +403,33 @@ impl MessageStore for SqliteStorage {
         tx.commit().await.map_err(storage_error)?;
         Ok(Unread::Count(count))
     }
+}
+
+pub(super) async fn send_in(
+    tx: &mut SqliteConnection,
+    message: &Message,
+) -> Result<Send, MessageStoreError> {
+    if message.is_deleted() || message.edited_at().is_some() {
+        return Err(unexpected("send requires an active unedited message"));
+    }
+    match access(tx, message.sender_id(), message.conversation_id()).await? {
+        Access::ConversationNotFound => return Ok(Send::ConversationNotFound),
+        Access::NotMember => return Ok(Send::NotMember),
+        Access::Member { .. } => (),
+    }
+    if let Some(reply) = message.reply_to_message_id() {
+        match find(tx, message.conversation_id(), reply).await? {
+            None => return Ok(Send::ReplyTargetNotFound),
+            Some(target) if target.is_deleted() => return Ok(Send::ReplyTargetDeleted),
+            Some(_) => (),
+        }
+    }
+    sqlx::query("INSERT INTO messages (id, conversation_id, sender_id, content, reply_to_message_id, created_at) VALUES (?, ?, ?, ?, ?, ?)")
+        .bind(id_bytes(message.id())).bind(id_bytes(message.conversation_id())).bind(id_bytes(message.sender_id()))
+        .bind(message.content().map(MessageContent::as_str)).bind(message.reply_to_message_id().map(id_bytes))
+        .bind(to_micros(message.created_at()).map_err(unexpected)?).execute(&mut *tx).await.map_err(storage_error)?;
+    let persisted = find(tx, message.conversation_id(), message.id())
+        .await?
+        .ok_or_else(|| unexpected("persisted message disappeared"))?;
+    Ok(Send::Sent(persisted))
 }

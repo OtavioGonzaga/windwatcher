@@ -99,6 +99,93 @@ async fn message_views_enrich_current_shallow_replies_and_disabled_senders() {
 }
 
 #[tokio::test]
+async fn keyed_sends_are_atomic_concurrent_persistent_and_store_only_hashes() {
+    let f = fixture().await;
+    let key = IdempotencyKey::new("private-client-key-never-persist").unwrap();
+    let policy = MessagePolicy::default();
+    let send = SendMessageCommand::new(&f.store, &policy);
+    let (a, b) = tokio::join!(
+        send.execute(f.owner, f.conversation, "same", None, Some(&key), now()),
+        send.execute(f.owner, f.conversation, "same", None, Some(&key), now()),
+    );
+    let a = a.unwrap();
+    let b = b.unwrap();
+    assert_eq!(a.value.id(), b.value.id());
+    assert_ne!(a.disposition, b.disposition);
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM messages")
+        .fetch_one(&f.pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 1);
+    let row = sqlx::query(
+        "SELECT key_hash, request_hash, created_at, expires_at FROM idempotency_records",
+    )
+    .fetch_one(&f.pool)
+    .await
+    .unwrap();
+    assert_eq!(row.get::<Vec<u8>, _>("key_hash"), key.hash());
+    assert_eq!(row.get::<Vec<u8>, _>("request_hash").len(), 32);
+    assert_eq!(
+        row.get::<i64, _>("expires_at") - row.get::<i64, _>("created_at"),
+        86_400_000_000
+    );
+    let reopened = SqliteStorage::connect(SqliteStorageOptions::new(
+        f._directory
+            .path()
+            .join("messages.db")
+            .display()
+            .to_string(),
+    ))
+    .await
+    .unwrap();
+    let replay = SendMessageCommand::new(&reopened, &policy)
+        .execute(f.owner, f.conversation, "same", None, Some(&key), now())
+        .await
+        .unwrap();
+    assert_eq!(replay.value.id(), a.value.id());
+    assert_eq!(replay.disposition, CreateDisposition::Replayed);
+    sqlx::query("CREATE TRIGGER reject_command_record BEFORE INSERT ON idempotency_records BEGIN SELECT RAISE(ABORT, 'test failure'); END").execute(&f.pool).await.unwrap();
+    let other = IdempotencyKey::new("rollback-key").unwrap();
+    assert!(
+        send.execute(
+            f.owner,
+            f.conversation,
+            "rollback",
+            None,
+            Some(&other),
+            now()
+        )
+        .await
+        .is_err()
+    );
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM messages")
+        .fetch_one(&f.pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 1);
+    sqlx::query("DROP TRIGGER reject_command_record")
+        .execute(&f.pool)
+        .await
+        .unwrap();
+    assert!(
+        send.execute(f.owner, f.conversation, "retry", None, Some(&other), now())
+            .await
+            .is_ok()
+    );
+    let expired = now() + time::Duration::days(1);
+    send.execute(f.owner, f.conversation, "renew", None, Some(&key), expired)
+        .await
+        .unwrap();
+    let count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM idempotency_records WHERE expires_at <= ?")
+            .bind(expired.unix_timestamp() * 1_000_000)
+            .fetch_one(&f.pool)
+            .await
+            .unwrap();
+    assert_eq!(count, 0);
+}
+
+#[tokio::test]
 async fn pagination_reads_without_acquiring_the_writer_lock() {
     let f = fixture().await;
     let message = send(&f, None).await;
