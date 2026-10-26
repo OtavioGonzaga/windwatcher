@@ -4,6 +4,7 @@ use windwatcher::*;
 
 #[derive(Clone)]
 enum Response {
+    List(ListMessagesStoreOutcome, Option<MessageId>, PageLimit),
     Send(SendMessageStoreOutcome),
     Get(GetMessageStoreOutcome),
     Edit(EditMessageStoreOutcome),
@@ -16,6 +17,23 @@ enum Response {
 }
 struct Fake(Response);
 impl MessageStore for Fake {
+    async fn list_messages(
+        &self,
+        _: UserId,
+        _: ConversationId,
+        before: Option<MessageId>,
+        limit: PageLimit,
+    ) -> Result<ListMessagesStoreOutcome, MessageStoreError> {
+        match &self.0 {
+            Response::List(outcome, expected_before, expected_limit) => {
+                assert_eq!(before, *expected_before);
+                assert_eq!(limit, *expected_limit);
+                Ok(outcome.clone())
+            }
+            Response::Fail => Err(MessageStoreError::Conflict),
+            _ => panic!("unexpected store call"),
+        }
+    }
     async fn send_message(
         &self,
         message: &Message,
@@ -95,6 +113,137 @@ impl MessageStore for Fake {
             _ => panic!("unexpected store call"),
         }
     }
+}
+
+#[test]
+fn list_maps_pages_boundaries_limits_and_errors() {
+    block_on(async {
+        let actor = UserId::new();
+        let c = ConversationId::new();
+        let mut items: Vec<_> = (0..3)
+            .map(|_| {
+                Message::new(
+                    MessageId::new(),
+                    c,
+                    actor,
+                    MessageContent::new("history").unwrap(),
+                    None,
+                    OffsetDateTime::UNIX_EPOCH,
+                )
+                .unwrap()
+            })
+            .collect();
+        items.reverse();
+        let first = ListMessages::new(&Fake(Response::List(
+            ListMessagesStoreOutcome::Page(MessagePageSlice {
+                items: items[..2].to_vec(),
+                has_more: true,
+            }),
+            None,
+            PageLimit::DEFAULT,
+        )))
+        .execute(actor, c, PageRequest::default())
+        .await
+        .unwrap();
+        assert_eq!(first.items(), &items[..2]);
+        assert!(first.has_more());
+        let cursor = first.next_cursor().unwrap();
+        // The store must receive the last returned ID, not the first item.
+        let final_page = ListMessages::new(&Fake(Response::List(
+            ListMessagesStoreOutcome::Page(MessagePageSlice {
+                items: items[2..].to_vec(),
+                has_more: false,
+            }),
+            Some(items[1].id()),
+            PageLimit::MAX,
+        )))
+        .execute(
+            actor,
+            c,
+            PageRequest::new(PageLimit::MAX).with_cursor(cursor),
+        )
+        .await
+        .unwrap();
+        assert!(!final_page.has_more());
+        assert_eq!(final_page.next_cursor(), None);
+        assert_eq!(final_page.items(), &items[2..]);
+        for token in ["", "garbage", "+/=="] {
+            assert!(matches!(
+                ListMessages::new(&Fake(Response::MustNotCall))
+                    .execute(actor, c, PageRequest::default().with_cursor(token))
+                    .await,
+                Err(ListMessagesError::InvalidCursor(CursorError::Malformed))
+            ));
+        }
+        // Version/resource errors must also be rejected before touching the port.
+        use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+        for (version, kind, expected) in [
+            (2, "messages", CursorError::UnsupportedVersion),
+            (1, "users", CursorError::WrongResource),
+        ] {
+            let payload = serde_json::json!({"v":version,"kind":kind,"conversation_id":c.to_string(),"message_id":items[1].id().to_string()});
+            let token = URL_SAFE_NO_PAD.encode(payload.to_string());
+            let error = ListMessages::new(&Fake(Response::MustNotCall))
+                .execute(actor, c, PageRequest::default().with_cursor(token))
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(error, ListMessagesError::InvalidCursor(actual) if actual == expected)
+            );
+        }
+        assert!(matches!(
+            ListMessages::new(&Fake(Response::MustNotCall))
+                .execute(
+                    actor,
+                    ConversationId::new(),
+                    PageRequest::default().with_cursor(cursor)
+                )
+                .await,
+            Err(ListMessagesError::InvalidCursor(CursorError::WrongScope))
+        ));
+        for outcome in [
+            ListMessagesStoreOutcome::ConversationNotFound,
+            ListMessagesStoreOutcome::NotMember,
+        ] {
+            let error = ListMessages::new(&Fake(Response::List(
+                outcome.clone(),
+                None,
+                PageLimit::DEFAULT,
+            )))
+            .execute(actor, c, PageRequest::default())
+            .await
+            .unwrap_err();
+            assert!(matches!(
+                (outcome, error),
+                (
+                    ListMessagesStoreOutcome::ConversationNotFound,
+                    ListMessagesError::ConversationNotFound
+                ) | (
+                    ListMessagesStoreOutcome::NotMember,
+                    ListMessagesError::NotMember
+                )
+            ));
+        }
+        assert!(matches!(
+            ListMessages::new(&Fake(Response::Fail))
+                .execute(actor, c, PageRequest::default())
+                .await,
+            Err(ListMessagesError::Storage(MessageStoreError::Conflict))
+        ));
+        assert!(matches!(
+            ListMessages::new(&Fake(Response::List(
+                ListMessagesStoreOutcome::Page(MessagePageSlice {
+                    items: vec![],
+                    has_more: true
+                }),
+                None,
+                PageLimit::DEFAULT,
+            )))
+            .execute(actor, c, PageRequest::default())
+            .await,
+            Err(ListMessagesError::Storage(MessageStoreError::Unexpected(_)))
+        ));
+    });
 }
 
 #[test]

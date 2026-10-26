@@ -1,3 +1,4 @@
+use crate::{ListMessagesStoreOutcome as List, MessagePageSlice, PageLimit};
 use sqlx::{Row, SqliteConnection, sqlite::SqliteRow};
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -115,6 +116,38 @@ async fn find(
 }
 
 impl MessageStore for SqliteStorage {
+    async fn list_messages(
+        &self,
+        actor: UserId,
+        conversation: ConversationId,
+        before: Option<MessageId>,
+        limit: PageLimit,
+    ) -> Result<List, MessageStoreError> {
+        let mut tx = self.pool.begin().await.map_err(storage_error)?;
+        match access(&mut tx, actor, conversation).await? {
+            Access::ConversationNotFound => return Ok(List::ConversationNotFound),
+            Access::NotMember => return Ok(List::NotMember),
+            Access::Member { .. } => (),
+        }
+        let count = (limit.get() + 1) as i64;
+        let rows = if let Some(boundary) = before {
+            sqlx::query("SELECT id, conversation_id, sender_id, content, reply_to_message_id, created_at, edited_at, deleted_at FROM messages WHERE conversation_id = ? AND id < ? ORDER BY id DESC LIMIT ?")
+                .bind(id_bytes(conversation)).bind(id_bytes(boundary)).bind(count)
+                .fetch_all(&mut *tx).await.map_err(storage_error)?
+        } else {
+            sqlx::query("SELECT id, conversation_id, sender_id, content, reply_to_message_id, created_at, edited_at, deleted_at FROM messages WHERE conversation_id = ? ORDER BY id DESC LIMIT ?")
+                .bind(id_bytes(conversation)).bind(count)
+                .fetch_all(&mut *tx).await.map_err(storage_error)?
+        };
+        let has_more = rows.len() > limit.get();
+        let items = rows
+            .iter()
+            .take(limit.get())
+            .map(read_message)
+            .collect::<Result<Vec<_>, _>>()?;
+        tx.commit().await.map_err(storage_error)?;
+        Ok(List::Page(MessagePageSlice { items, has_more }))
+    }
     async fn send_message(&self, message: &Message) -> Result<Send, MessageStoreError> {
         if message.is_deleted() || message.edited_at().is_some() {
             return Err(unexpected("send requires an active unedited message"));

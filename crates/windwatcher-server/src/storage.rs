@@ -143,6 +143,17 @@ impl ConversationStore for Storage {
     }
 }
 impl MessageStore for Storage {
+    async fn list_messages(
+        &self,
+        actor: UserId,
+        conversation: ConversationId,
+        before: Option<MessageId>,
+        limit: windwatcher::PageLimit,
+    ) -> Result<windwatcher::ListMessagesStoreOutcome, MessageStoreError> {
+        match self {
+            Self::Sqlite(s) => s.list_messages(actor, conversation, before, limit).await,
+        }
+    }
     async fn send_message(
         &self,
         message: &Message,

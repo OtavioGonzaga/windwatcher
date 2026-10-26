@@ -39,4 +39,5 @@ membership.
 
 ## Current limitations
 
-There is no pagination, invitations, public groups, or network endpoints yet.
+There is no conversation listing, invitations, public groups, or network
+endpoints yet. Message history uses [opaque cursor pagination](pagination.md).

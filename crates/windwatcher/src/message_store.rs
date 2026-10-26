@@ -2,7 +2,28 @@ use std::{error::Error, future::Future};
 
 use time::OffsetDateTime;
 
-use crate::{ConversationId, Message, MessageContent, MessageId, UserId};
+use crate::{ConversationId, Message, MessageContent, MessageId, PageLimit, UserId};
+
+/// A bounded, strictly descending message slice, including tombstones.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MessagePageSlice {
+    /// At most the requested limit, all belonging to the requested conversation.
+    pub items: Vec<Message>,
+    /// True exactly when an older item exists beyond the returned slice.
+    /// A slice with more items available must not be empty.
+    pub has_more: bool,
+}
+
+/// Result of one consistently authorized message-history read.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ListMessagesStoreOutcome {
+    /// The bounded newest-first history slice.
+    Page(MessagePageSlice),
+    /// The conversation does not exist.
+    ConversationNotFound,
+    /// The actor is not a current member.
+    NotMember,
+}
 
 /// Normalized infrastructure failures, never business authorization outcomes.
 #[derive(Debug, thiserror::Error)]
@@ -115,6 +136,18 @@ pub enum UnreadCountStoreOutcome {
 /// use `MessageId::Ord`, not commit order. Reads include tombstones; unread counts
 /// exclude them. No operation changes conversation metadata timestamps.
 pub trait MessageStore: Sync {
+    /// Lists IDs strictly below `before`, newest first by `MessageId::Ord`.
+    /// Existence, current membership and history share one logical read snapshot.
+    /// Includes tombstones, never marks read, and does not require the boundary
+    /// to reference an existing row. `has_more` must use actual older history,
+    /// not merely whether the slice fills the limit. No cursor encoding is used.
+    fn list_messages(
+        &self,
+        actor: UserId,
+        conversation: ConversationId,
+        before: Option<MessageId>,
+        limit: PageLimit,
+    ) -> impl Future<Output = Result<ListMessagesStoreOutcome, MessageStoreError>> + Send;
     /// Persists an active, unedited message whose sender is the actor. Rejects
     /// unavailable/deleted reply targets atomically with insertion. Never advances read state.
     fn send_message(
