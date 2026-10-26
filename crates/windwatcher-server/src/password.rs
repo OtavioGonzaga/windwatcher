@@ -28,6 +28,9 @@ impl Default for TokioPasswordHasher {
 
 impl TokioPasswordHasher {
     /// Constructs a shared budget for simultaneous Argon2 operations.
+    ///
+    /// # Panics
+    /// Panics if `workers` exceeds Tokio's `Semaphore::MAX_PERMITS`.
     pub fn new(workers: NonZeroUsize) -> Self {
         Self {
             permits: Arc::new(Semaphore::new(workers.get())),

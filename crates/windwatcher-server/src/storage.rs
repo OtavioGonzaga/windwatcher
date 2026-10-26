@@ -14,23 +14,29 @@ use windwatcher::{
 };
 
 #[derive(Clone, Debug)]
+/// Concrete server storage dispatch; HTTP shares the existing database adapter.
 pub enum Storage {
+    /// Official SQLite persistence adapter.
     Sqlite(SqliteStorage),
 }
 impl Storage {
+    /// Opens the configured storage without applying migrations implicitly.
     pub async fn connect(options: SqliteStorageOptions) -> Result<Self, SqliteStorageError> {
         Ok(Self::Sqlite(SqliteStorage::connect(options).await?))
     }
+    /// Explicitly applies the engine's embedded migrations.
     pub async fn migrate(&self) -> Result<(), SqliteStorageError> {
         match self {
             Self::Sqlite(storage) => storage.migrate().await,
         }
     }
+    /// Inspects schema status without mutating it.
     pub async fn migration_status(&self) -> Result<MigrationStatus, SqliteStorageError> {
         match self {
             Self::Sqlite(storage) => storage.migration_status().await,
         }
     }
+    /// Returns the non-sensitive backend label for operator output.
     pub fn backend_name(&self) -> &'static str {
         match self {
             Self::Sqlite(_) => "SQLite",
