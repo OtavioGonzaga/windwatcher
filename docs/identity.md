@@ -30,6 +30,10 @@ separate values persisted alongside the user through an atomic storage port.
 `LocalAuthentication` transfers the user and credential only for authentication;
 ordinary user lookups do not expose credentials.
 
+`GetUser` retrieves an identity by ID through `IdentityStore`, distinguishing a
+missing identity from an operational storage failure. It returns enabled and
+disabled users alike and performs no authorization; callers establish access.
+
 `DisableUser` and `EnableUser` load and persist these domain transitions. Disabling
 also revokes every session, including on retries for an already-disabled user.
 Re-enabling does not restore revoked sessions. They are trusted operator
