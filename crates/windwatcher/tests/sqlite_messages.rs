@@ -64,11 +64,212 @@ async fn fixture() -> Fixture {
     }
 }
 
-async fn send(f: &Fixture, reply: Option<MessageId>) -> Message {
+async fn send(f: &Fixture, reply: Option<MessageId>) -> MessageView {
     SendMessage::new(&f.store, &MessagePolicy::default())
         .execute(f.owner, f.conversation, "message", reply, now())
         .await
         .unwrap()
+}
+
+#[tokio::test]
+async fn message_views_enrich_current_shallow_replies_and_disabled_senders() {
+    let f = fixture().await;
+    let original = send(&f, None).await;
+    assert_eq!(original.sender_username.as_str(), "owner");
+    assert!(original.reply_to.is_none());
+    let reply = send(&f, Some(original.id())).await;
+    let preview = reply.reply_to.as_ref().unwrap();
+    assert_eq!(preview.id, original.id());
+    assert_eq!(preview.sender.id, f.owner);
+    assert_eq!(preview.sender.username.as_str(), "owner");
+    assert_eq!(preview.content.as_ref(), original.content());
+    let nested = send(&f, Some(reply.id())).await;
+    assert_eq!(nested.reply_to.as_ref().unwrap().id, reply.id());
+    sqlx::query("UPDATE users SET disabled_at = 1 WHERE id = ?")
+        .bind(bytes(f.owner))
+        .execute(&f.pool)
+        .await
+        .unwrap();
+    let loaded = GetMessage::new(&f.store)
+        .execute(f.peer, nested.id())
+        .await
+        .unwrap();
+    assert_eq!(loaded.sender_username.as_str(), "owner");
+    assert_eq!(loaded.reply_to.unwrap().sender.username.as_str(), "owner");
+}
+
+#[tokio::test]
+async fn keyed_sends_are_atomic_concurrent_persistent_and_store_only_hashes() {
+    let f = fixture().await;
+    let key = IdempotencyKey::new("private-client-key-never-persist").unwrap();
+    let policy = MessagePolicy::default();
+    let send = SendMessageCommand::new(&f.store, &policy);
+    let (a, b) = tokio::join!(
+        send.execute(f.owner, f.conversation, "same", None, Some(&key), now()),
+        send.execute(f.owner, f.conversation, "same", None, Some(&key), now()),
+    );
+    let a = a.unwrap();
+    let b = b.unwrap();
+    assert_eq!(a.value.id(), b.value.id());
+    assert_ne!(a.disposition, b.disposition);
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM messages")
+        .fetch_one(&f.pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 1);
+    let row = sqlx::query(
+        "SELECT key_hash, request_hash, created_at, expires_at FROM idempotency_records",
+    )
+    .fetch_one(&f.pool)
+    .await
+    .unwrap();
+    assert_eq!(row.get::<Vec<u8>, _>("key_hash"), key.hash());
+    assert_eq!(row.get::<Vec<u8>, _>("request_hash").len(), 32);
+    assert_eq!(
+        row.get::<i64, _>("expires_at") - row.get::<i64, _>("created_at"),
+        86_400_000_000
+    );
+    let reopened = SqliteStorage::connect(SqliteStorageOptions::new(
+        f._directory
+            .path()
+            .join("messages.db")
+            .display()
+            .to_string(),
+    ))
+    .await
+    .unwrap();
+    let replay = SendMessageCommand::new(&reopened, &policy)
+        .execute(f.owner, f.conversation, "same", None, Some(&key), now())
+        .await
+        .unwrap();
+    assert_eq!(replay.value.id(), a.value.id());
+    assert_eq!(replay.disposition, CreateDisposition::Replayed);
+    sqlx::query("CREATE TRIGGER reject_command_record BEFORE INSERT ON idempotency_records BEGIN SELECT RAISE(ABORT, 'test failure'); END").execute(&f.pool).await.unwrap();
+    let other = IdempotencyKey::new("rollback-key").unwrap();
+    assert!(
+        send.execute(
+            f.owner,
+            f.conversation,
+            "rollback",
+            None,
+            Some(&other),
+            now()
+        )
+        .await
+        .is_err()
+    );
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM messages")
+        .fetch_one(&f.pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 1);
+    sqlx::query("DROP TRIGGER reject_command_record")
+        .execute(&f.pool)
+        .await
+        .unwrap();
+    assert!(
+        send.execute(f.owner, f.conversation, "retry", None, Some(&other), now())
+            .await
+            .is_ok()
+    );
+    let expired = now() + time::Duration::days(1);
+    send.execute(f.owner, f.conversation, "renew", None, Some(&key), expired)
+        .await
+        .unwrap();
+    let count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM idempotency_records WHERE expires_at <= ?")
+            .bind(expired.unix_timestamp() * 1_000_000)
+            .fetch_one(&f.pool)
+            .await
+            .unwrap();
+    assert_eq!(count, 0);
+}
+
+#[tokio::test]
+async fn keyed_groups_are_concurrent_atomic_and_cleanup_keeps_active_records() {
+    let f = fixture().await;
+    let key = IdempotencyKey::new("group-concurrency").unwrap();
+    let create = CreateConversation::new(&f.store);
+    let request = || ConversationCreateRequest::Group {
+        title: "one group".into(),
+        participant_ids: vec![f.peer],
+    };
+    let (a, b) = tokio::join!(
+        create.execute(f.owner, request(), Some(&key), now()),
+        create.execute(f.owner, request(), Some(&key), now())
+    );
+    let a = a.unwrap();
+    let b = b.unwrap();
+    assert_eq!(a.value, b.value);
+    assert_ne!(a.disposition, b.disposition);
+    let count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM conversations WHERE title = 'one group'")
+            .fetch_one(&f.pool)
+            .await
+            .unwrap();
+    assert_eq!(count, 1);
+    sqlx::query("CREATE TRIGGER reject_group_record BEFORE INSERT ON idempotency_records BEGIN SELECT RAISE(ABORT, 'test failure'); END").execute(&f.pool).await.unwrap();
+    let failed_key = IdempotencyKey::new("group-rollback").unwrap();
+    assert!(
+        create
+            .execute(f.owner, request(), Some(&failed_key), now())
+            .await
+            .is_err()
+    );
+    let count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM conversations WHERE title = 'one group'")
+            .fetch_one(&f.pool)
+            .await
+            .unwrap();
+    assert_eq!(count, 1);
+    sqlx::query("DROP TRIGGER reject_group_record")
+        .execute(&f.pool)
+        .await
+        .unwrap();
+    create
+        .execute(
+            f.owner,
+            request(),
+            Some(&failed_key),
+            now() + time::Duration::hours(1),
+        )
+        .await
+        .unwrap();
+    let renewed = create
+        .execute(
+            f.owner,
+            request(),
+            Some(&key),
+            now() + time::Duration::days(1),
+        )
+        .await
+        .unwrap();
+    assert_ne!(renewed.value, a.value);
+    let active: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM idempotency_records WHERE key_hash = ?")
+            .bind(failed_key.hash().as_slice())
+            .fetch_one(&f.pool)
+            .await
+            .unwrap();
+    assert_eq!(active, 1);
+    let plan =
+        sqlx::query("EXPLAIN QUERY PLAN DELETE FROM idempotency_records WHERE expires_at <= ?")
+            .bind(0_i64)
+            .fetch_all(&f.pool)
+            .await
+            .unwrap()
+            .iter()
+            .map(|r| r.get::<String, _>("detail"))
+            .collect::<Vec<_>>()
+            .join("\n");
+    assert!(plan.contains("idempotency_records_expires"), "{plan}");
+    // Raw client key strings never enter the database; only fixed-size hashes do.
+    let key_type: String =
+        sqlx::query_scalar("SELECT typeof(key_hash) FROM idempotency_records LIMIT 1")
+            .fetch_one(&f.pool)
+            .await
+            .unwrap();
+    assert_eq!(key_type, "blob");
 }
 
 #[tokio::test]
@@ -297,7 +498,7 @@ async fn blob_order_matches_message_id_ord_and_read_queries() {
         panic!("expected page")
     };
     assert_eq!(
-        page.items.iter().map(Message::id).collect::<Vec<_>>(),
+        page.items.iter().map(|m| m.id()).collect::<Vec<_>>(),
         ids.iter().rev().copied().collect::<Vec<_>>()
     );
     let ListMessagesStoreOutcome::Page(page) = f
@@ -361,8 +562,7 @@ async fn reply_delete_edit_and_read_races_preserve_invariants() {
         .unwrap();
         let (reply_result, deletion) = tokio::join!(
             f.store.send_message(&reply),
-            f.store
-                .delete_message(f.owner, f.conversation, target.id(), now()),
+            f.store.delete_message(f.owner, target.id(), now()),
         );
         assert!(matches!(
             deletion.unwrap(),
@@ -371,20 +571,17 @@ async fn reply_delete_edit_and_read_races_preserve_invariants() {
         match reply_result.unwrap() {
             SendMessageStoreOutcome::Sent(persisted) => {
                 assert_eq!(persisted.reply_to_message_id(), Some(target.id()));
-                assert_eq!(
-                    f.store
-                        .get_message(f.owner, f.conversation, persisted.id())
-                        .await
-                        .unwrap(),
-                    GetMessageStoreOutcome::Found(persisted)
-                );
+                let loaded = match f.store.get_message(f.owner, persisted.id()).await.unwrap() {
+                    GetMessageStoreOutcome::Found(view) => view,
+                    outcome => panic!("unexpected reply result: {outcome:?}"),
+                };
+                assert_eq!(loaded.message, persisted.message);
+                assert!(loaded.reply_to.as_ref().unwrap().content.is_none());
+                assert!(loaded.reply_to.as_ref().unwrap().deleted_at.is_some());
             }
             SendMessageStoreOutcome::ReplyTargetDeleted => {
                 assert_eq!(
-                    f.store
-                        .get_message(f.owner, f.conversation, reply.id())
-                        .await
-                        .unwrap(),
+                    f.store.get_message(f.owner, reply.id()).await.unwrap(),
                     GetMessageStoreOutcome::MessageNotFound
                 );
             }
@@ -408,9 +605,8 @@ async fn reply_delete_edit_and_read_races_preserve_invariants() {
         let content = MessageContent::new("edited").unwrap();
         let (edit, delete) = tokio::join!(
             f.store
-                .edit_message(f.owner, f.conversation, editable.id(), &content, now()),
-            f.store
-                .delete_message(f.owner, f.conversation, editable.id(), now()),
+                .edit_message(f.owner, editable.id(), &content, now()),
+            f.store.delete_message(f.owner, editable.id(), now()),
         );
         assert!(matches!(
             edit.unwrap(),
@@ -435,10 +631,10 @@ async fn reply_delete_edit_and_read_races_preserve_invariants() {
             f.store
                 .mark_read_through(f.peer, f.conversation, older.id()),
         );
-        assert!(matches!(a.unwrap(), MarkReadStoreOutcome::Changed));
+        assert!(matches!(a.unwrap(), MarkReadStoreOutcome::Changed(_)));
         assert!(matches!(
             b.unwrap(),
-            MarkReadStoreOutcome::Changed | MarkReadStoreOutcome::Unchanged
+            MarkReadStoreOutcome::Changed(_) | MarkReadStoreOutcome::Unchanged(_)
         ));
         assert_eq!(
             f.store
@@ -471,7 +667,7 @@ async fn writes_observe_membership_and_role_changes_before_commit() {
     .unwrap();
     let store = f.store.clone();
     let (actor, c, id) = (f.peer, f.conversation, message.id());
-    let deletion = tokio::spawn(async move { store.delete_message(actor, c, id, now()).await });
+    let deletion = tokio::spawn(async move { store.delete_message(actor, id, now()).await });
     tx.commit().await.unwrap();
     assert_eq!(
         deletion.await.unwrap().unwrap(),
@@ -503,7 +699,7 @@ async fn writes_observe_membership_and_role_changes_before_commit() {
     let content = MessageContent::new("edit").unwrap();
     assert_eq!(
         f.store
-            .edit_message(actor, c, id, &content, now())
+            .edit_message(actor, id, &content, now())
             .await
             .unwrap(),
         EditMessageStoreOutcome::NotMember
@@ -568,7 +764,7 @@ async fn storage_rolls_back_failures_rejects_corruption_and_loads_large_history(
     assert!(smaller.validate(large.content().unwrap()).is_err());
     assert_eq!(
         GetMessage::new(&f.store)
-            .execute(f.owner, f.conversation, large.id())
+            .execute(f.owner, large.id())
             .await
             .unwrap(),
         large
@@ -593,7 +789,6 @@ async fn storage_rolls_back_failures_rejects_corruption_and_loads_large_history(
         f.store
             .edit_message(
                 f.owner,
-                f.conversation,
                 large.id(),
                 &MessageContent::new("changed").unwrap(),
                 now()
@@ -603,7 +798,7 @@ async fn storage_rolls_back_failures_rejects_corruption_and_loads_large_history(
     );
     assert_eq!(
         GetMessage::new(&f.store)
-            .execute(f.owner, f.conversation, large.id())
+            .execute(f.owner, large.id())
             .await
             .unwrap(),
         large
@@ -619,9 +814,7 @@ async fn storage_rolls_back_failures_rejects_corruption_and_loads_large_history(
         .await
         .unwrap();
     assert!(matches!(
-        f.store
-            .get_message(f.owner, f.conversation, large.id())
-            .await,
+        f.store.get_message(f.owner, large.id()).await,
         Err(MessageStoreError::Unexpected(_))
     ));
     sqlx::query(
@@ -667,7 +860,7 @@ async fn migration_upgrades_existing_memberships_without_backfill() {
     let store = SqliteStorage::connect(SqliteStorageOptions::new(path.display().to_string()))
         .await
         .unwrap();
-    assert_eq!(store.migration_status().await.unwrap().pending(), 1);
+    assert_eq!(store.migration_status().await.unwrap().pending(), 2);
     store.migrate().await.unwrap();
     assert_eq!(
         store

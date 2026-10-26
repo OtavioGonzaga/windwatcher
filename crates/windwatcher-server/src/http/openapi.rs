@@ -7,7 +7,12 @@ use utoipa::openapi::{
 
 pub(super) fn finish(mut spec: OpenApi) -> OpenApi {
     spec.info = InfoBuilder::new().title("Windwatcher API").version(env!("CARGO_PKG_VERSION")).description(Some("Windwatcher HTTP API v1. Tokens are JSON bearer secrets; this protocol is not OAuth or OIDC.")).build();
-    spec.tags = Some(vec![Tag::new("Users"), Tag::new("Sessions")]);
+    spec.tags = Some(vec![
+        Tag::new("Users"),
+        Tag::new("Sessions"),
+        Tag::new("Conversations"),
+        Tag::new("Messages"),
+    ]);
     spec.components
         .get_or_insert_with(Default::default)
         .add_security_scheme(
@@ -69,10 +74,35 @@ fn document_response_headers(spec: &mut OpenApi) {
         .flatten()
         .chain(path.additional_operations.values_mut())
         {
+            if operation.request_body.is_some()
+                && let Some(problem) = operation.responses.responses.get("400").cloned()
+            {
+                for (status, description) in [
+                    ("413", "Body exceeds the transport limit"),
+                    ("415", "JSON Content-Type required"),
+                ] {
+                    let mut response = problem.clone();
+                    if let RefOr::T(ref mut response) = response {
+                        response.description = description.into();
+                    }
+                    operation
+                        .responses
+                        .responses
+                        .entry(status.into())
+                        .or_insert(response);
+                }
+            }
             for (status, response) in &mut operation.responses.responses {
                 // Current route annotations produce inline response objects;
                 // the semantic contract tests assert headers on every response.
                 if let RefOr::T(response) = response {
+                    if (status.starts_with('4') || status.starts_with('5'))
+                        && let Some(content) = response.content.shift_remove("application/json")
+                    {
+                        response
+                            .content
+                            .insert("application/problem+json".into(), content);
+                    }
                     response
                         .headers
                         .insert("X-Request-Id".into(), request_id.clone().into());

@@ -8,6 +8,7 @@ mod conversation_store;
 mod conversations;
 mod cursor;
 mod id;
+mod idempotency;
 mod identity;
 mod identity_store;
 mod local_users;
@@ -16,6 +17,8 @@ mod message_store;
 mod messages;
 mod pagination;
 mod password;
+mod queries;
+mod read_models;
 mod session;
 #[cfg(feature = "sqlite")]
 mod storage;
@@ -40,6 +43,11 @@ pub use conversations::{
     TransferGroupOwnershipError,
 };
 pub use cursor::CursorError;
+pub use idempotency::{
+    ConversationCreateCommand, ConversationCreateRequest, CreateCommandError, CreateCommandStore,
+    CreateConversation, CreateDisposition, CreateResult, IdempotencyKey, IdempotencyKeyError,
+    SendMessageCommand, message_request_fingerprint,
+};
 pub use identity_store::{IdentityStore, IdentityStoreError, LocalAuthentication};
 pub use local_users::{
     CreateLocalUser, CreateLocalUserError, DisableUser, EnableUser, ManageUserError,
@@ -63,6 +71,15 @@ pub use pagination::{Page, PageLimit, PageLimitError, PageRequest};
 pub use password::{
     Argon2idPasswordHasher, PasswordHash, PasswordHashError, PasswordHasher, PasswordPolicyError,
     SecretPassword,
+};
+pub use queries::{
+    ConversationQueryOutcome, FindUsers, GetConversationMember, GetConversationSummary,
+    ListConversationMembers, ListConversations, MessagingQueryError, MessagingQueryStore,
+    QuerySlice, QueryStoreError,
+};
+pub use read_models::{
+    ConversationBoundary, ConversationMemberSummary, ConversationReadState, ConversationSummary,
+    MemberBoundary, MessageView, ReplyPreview, UserSummary,
 };
 pub use session::{
     AccessToken, AccessTokenClaims, AccessTokenCodec, AccessTokenError, CreateSession,

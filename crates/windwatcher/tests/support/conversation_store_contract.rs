@@ -5,6 +5,105 @@ use windwatcher::{
     StartDirectStoreOutcome, UserId,
 };
 
+/// New membership eligibility is atomic adapter behavior, not an identity preflight.
+pub async fn disabled_memberships<S: ConversationStore + windwatcher::IdentityStore>(
+    store: &S,
+    mut owner: windwatcher::User,
+    mut peer: windwatcher::User,
+    mut target: windwatcher::User,
+) {
+    let now = OffsetDateTime::UNIX_EPOCH;
+    let direct = Conversation::new_direct(ConversationId::new(), now);
+    store
+        .get_or_create_direct(&direct, owner.id(), peer.id())
+        .await
+        .unwrap();
+    let group = Conversation::new_group(
+        ConversationId::new(),
+        GroupTitle::new("eligible").unwrap(),
+        now,
+    );
+    store
+        .create_group(&group, owner.id(), &[peer.id()])
+        .await
+        .unwrap();
+    peer.disable(now);
+    target.disable(now);
+    store.update_user(&peer).await.unwrap();
+    store.update_user(&target).await.unwrap();
+    assert!(matches!(
+        store
+            .get_or_create_direct(&direct, peer.id(), owner.id())
+            .await
+            .unwrap(),
+        StartDirectStoreOutcome::Existing(_)
+    ));
+    assert_eq!(
+        store
+            .add_group_member(group.id(), owner.id(), peer.id(), now)
+            .await
+            .unwrap(),
+        AddMemberStoreOutcome::AlreadyMember
+    );
+    let candidate = Conversation::new_direct(ConversationId::new(), now);
+    assert!(
+        matches!(store.get_or_create_direct(&candidate, owner.id(), target.id()).await, Err(ConversationStoreError::ParticipantUnavailable(id)) if id == target.id())
+    );
+    assert!(
+        store
+            .find_conversation(candidate.id())
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        matches!(store.add_group_member(group.id(), owner.id(), target.id(), now).await, Err(ConversationStoreError::ParticipantUnavailable(id)) if id == target.id())
+    );
+    assert!(
+        store
+            .find_member(group.id(), target.id())
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let candidate = Conversation::new_group(
+        ConversationId::new(),
+        GroupTitle::new("rejected").unwrap(),
+        now,
+    );
+    assert!(matches!(
+        store
+            .create_group(&candidate, owner.id(), &[target.id()])
+            .await,
+        Err(ConversationStoreError::ParticipantUnavailable(_))
+    ));
+    assert!(
+        store
+            .find_conversation(candidate.id())
+            .await
+            .unwrap()
+            .is_none()
+    );
+    owner.disable(now);
+    store.update_user(&owner).await.unwrap();
+    assert!(
+        matches!(store.create_group(&candidate, owner.id(), &[]).await, Err(ConversationStoreError::ParticipantUnavailable(id)) if id == owner.id())
+    );
+    assert!(matches!(
+        store
+            .get_or_create_direct(&candidate, UserId::new(), UserId::new())
+            .await,
+        Err(ConversationStoreError::InvalidConversationKind { .. })
+    ));
+    let missing = Conversation::new_direct(ConversationId::new(), now);
+    assert!(matches!(
+        store
+            .get_or_create_direct(&missing, UserId::new(), target.id())
+            .await,
+        Err(ConversationStoreError::ParticipantUnavailable(_))
+    ));
+}
+
 /// Exercises adapter-independent conversation persistence semantics.
 pub async fn run<S: ConversationStore>(
     store: &S,

@@ -53,4 +53,8 @@ connect-info and implement actual lifecycle/health behavior. Reverse-proxy users
 must adjust or disable peer-based quotas until trusted proxies are supported.
 The limiter is neither distributed nor persistent. Access revocation remains
 bounded by token lifetime; this is documented rather than hidden by per-request
-session lookups. Cookies, idempotency, discovery and messaging HTTP remain absent.
+session lookups. Cookies remain absent. The subsequent messaging delivery adds
+authenticated exact discovery, nested dependent collections and globally
+identified top-level message items. All collections share Page responses and
+normalized query errors. Persisted creation idempotency is covered by ADR 0011;
+runtime/realtime remain separate deliveries.

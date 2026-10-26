@@ -21,7 +21,7 @@ fn openapi_contract_has_exact_routes_security_schemas_and_statuses() {
     assert_eq!(doc["openapi"], "3.1.0");
     assert_eq!(doc["info"]["title"], "Windwatcher API");
     assert_eq!(doc["info"]["version"], env!("CARGO_PKG_VERSION"));
-    assert_eq!(doc["paths"].as_object().unwrap().len(), 5);
+    assert_eq!(doc["paths"].as_object().unwrap().len(), 14);
     let mut ids = std::collections::HashSet::new();
     for (path, method, id, tag, protected, statuses) in [
         (
@@ -68,7 +68,10 @@ fn openapi_contract_has_exact_routes_security_schemas_and_statuses() {
         ),
     ] {
         let item = &doc["paths"][path];
-        assert_eq!(item.as_object().unwrap().len(), 1);
+        assert_eq!(
+            item.as_object().unwrap().len(),
+            if path == "/v1/users" { 2 } else { 1 }
+        );
         let operation = &item[method];
         assert_eq!(operation["operationId"], id);
         assert!(ids.insert(operation["operationId"].as_str().unwrap()));

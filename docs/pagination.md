@@ -1,5 +1,21 @@
 # Pagination
 
+## Inbox and member continuations
+
+Conversation cursors bind the actor and exclusive descending
+`(effective activity, ConversationId)` boundary. Member cursors bind the
+conversation and exclusive ascending `(joined_at, UserId)` boundary. Full
+timestamp precision is preserved. Both use strict versioned base64url payloads
+without padding; possession never replaces membership authorization.
+
+There is no shared snapshot between pages. Newly raised activity above an old
+inbox boundary is obtained by refreshing page one; continuation traverses older
+keys rather than restarting. Mutable sort keys do not provide frozen-inbox
+guarantees. Future result-changing filters must also bind their cursors.
+
+Exact enabled-username discovery returns at most one item in the same `Page`
+shape and never issues a continuation. No all-user listing is introduced.
+
 ## Strategy
 
 Windwatcher uses opaque cursors with keyset pagination and next-only navigation.
@@ -90,9 +106,9 @@ not snapshot isolation across requests.
 
 ## Current limitations
 
-Only `ListMessages` is implemented. Future resource lists can reuse
-`PageRequest`/`Page<T>` but must define their own ordering and private cursor
+`ListMessages`, `ListConversations`, and `ListConversationMembers` use
+`PageRequest`/`Page<T>` with resource-specific ordering and private cursor
 semantics. There is no arbitrary sorting, filtering, search, backwards navigation,
-total count, signing, encryption, HTTP mapping, or snapshot cursor.
+total count, signing, encryption, or snapshot cursor.
 
 See [ADR 0009](adr/0009-opaque-keyset-pagination.md).

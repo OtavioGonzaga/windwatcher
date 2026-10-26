@@ -1,5 +1,25 @@
 # Persistence
 
+## Consumer query projections
+
+`MessagingQueryStore` loads exact enabled-user discovery, inbox/detail and public
+member projections. SQLite inbox reads use one keyset query plus one bulk
+last-message hydration query in a normal read transaction. Detail and member
+queries likewise authorize within the same read snapshot. Query counts do not
+grow with page size; identities and reply targets are joined, not loaded per item.
+
+Migration 0004 adds `(conversation_id, joined_at, user_id)` for member pagination.
+Derived inbox activity uses primary conversation/message timestamps; query-plan
+tests verify indexed message probes without adding redundant message indexes or
+a materialized activity column.
+
+`CreateCommandStore` atomically persists optional retry-deduplication records with
+conversation/message creation, reusing transaction-local create primitives. SQLite
+migration 0004 also adds strict binary-UUID/hash `idempotency_records` and an
+expiration index. Records deliberately outlive physical resource deletion. Keys
+are hashed and fingerprints use semantic input; cleanup is opportunistic within
+keyed write transactions. See [ADR 0011](adr/0011-idempotent-create-commands.md).
+
 ## Ports and adapters
 
 `IdentityStore`, `SessionStore`, `ConversationStore`, and `MessageStore` are

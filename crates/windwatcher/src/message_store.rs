@@ -2,13 +2,16 @@ use std::{error::Error, future::Future};
 
 use time::OffsetDateTime;
 
-use crate::{ConversationId, Message, MessageContent, MessageId, PageLimit, UserId};
+use crate::{
+    ConversationId, ConversationReadState, Message, MessageContent, MessageId, MessageView,
+    PageLimit, UserId,
+};
 
 /// A bounded, strictly descending message slice, including tombstones.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MessagePageSlice {
     /// At most the requested limit, all belonging to the requested conversation.
-    pub items: Vec<Message>,
+    pub items: Vec<MessageView>,
     /// True exactly when an older item exists beyond the returned slice.
     /// A slice with more items available must not be empty.
     pub has_more: bool,
@@ -44,7 +47,7 @@ pub enum MessageStoreError {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SendMessageStoreOutcome {
     /// The active message is durably persisted.
-    Sent(Message),
+    Sent(MessageView),
     /// The conversation does not exist.
     ConversationNotFound,
     /// The sender is not currently a member.
@@ -59,12 +62,10 @@ pub enum SendMessageStoreOutcome {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum GetMessageStoreOutcome {
     /// An active message or tombstone.
-    Found(Message),
-    /// The conversation does not exist.
-    ConversationNotFound,
+    Found(MessageView),
     /// The actor is not a current member.
     NotMember,
-    /// The message is unavailable in this conversation.
+    /// The globally identified message does not exist.
     MessageNotFound,
 }
 
@@ -72,11 +73,9 @@ pub enum GetMessageStoreOutcome {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum EditMessageStoreOutcome {
     /// Content changed and the edit timestamp advanced.
-    Changed(Message),
+    Changed(MessageView),
     /// Exact content already matched; no timestamps changed.
-    Unchanged(Message),
-    /// The conversation does not exist.
-    ConversationNotFound,
+    Unchanged(MessageView),
     /// The actor is not a current member.
     NotMember,
     /// The message is unavailable in this conversation.
@@ -91,11 +90,9 @@ pub enum EditMessageStoreOutcome {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DeleteMessageStoreOutcome {
     /// Content was removed and the structural tombstone persisted.
-    Deleted(Message),
+    Deleted(MessageView),
     /// An authorized repeated deletion preserved the original timestamps.
-    AlreadyDeleted(Message),
-    /// The conversation does not exist.
-    ConversationNotFound,
+    AlreadyDeleted(MessageView),
     /// The actor is not a current member.
     NotMember,
     /// The message is unavailable in this conversation.
@@ -108,9 +105,9 @@ pub enum DeleteMessageStoreOutcome {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MarkReadStoreOutcome {
     /// The watermark advanced.
-    Changed,
+    Changed(ConversationReadState),
     /// An equal or later watermark already existed.
-    Unchanged,
+    Unchanged(ConversationReadState),
     /// The conversation does not exist.
     ConversationNotFound,
     /// The actor is not a current member.
@@ -154,18 +151,17 @@ pub trait MessageStore: Sync {
         &self,
         message: &Message,
     ) -> impl Future<Output = Result<SendMessageStoreOutcome, MessageStoreError>> + Send;
-    /// Returns a message only to a current member of the specified conversation.
+    /// Resolves a globally identified message and requires current membership in
+    /// its conversation within the same logical read snapshot.
     fn get_message(
         &self,
         actor: UserId,
-        conversation: ConversationId,
         message: MessageId,
     ) -> impl Future<Output = Result<GetMessageStoreOutcome, MessageStoreError>> + Send;
     /// Conditionally edits an active message owned by a current member.
     fn edit_message(
         &self,
         actor: UserId,
-        conversation: ConversationId,
         message: MessageId,
         content: &MessageContent,
         now: OffsetDateTime,
@@ -175,11 +171,11 @@ pub trait MessageStore: Sync {
     fn delete_message(
         &self,
         actor: UserId,
-        conversation: ConversationId,
         message: MessageId,
         now: OffsetDateTime,
     ) -> impl Future<Output = Result<DeleteMessageStoreOutcome, MessageStoreError>> + Send;
     /// Advances only to a greater existing same-conversation ID; tombstones qualify.
+    /// Returns the effective watermark and unread count in the same transaction.
     fn mark_read_through(
         &self,
         actor: UserId,

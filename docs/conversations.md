@@ -1,5 +1,38 @@
 # Conversations
 
+## Participant eligibility
+
+Creating a new membership requires an existing enabled user, including the Group
+creator and initial participants. Persistence checks eligibility atomically with
+insertion; the create/add use cases depend only on `ConversationStore`, not on
+an identity preflight. Missing and disabled participants are publicly represented
+as `ParticipantUnavailable`.
+
+Disabling a user does not erase existing membership or identity attribution.
+Opening an existing Direct or adding an existing Group member still succeeds,
+even when that peer/member is disabled, without resetting read state.
+
+## Consumer queries
+
+`ListConversations` and `GetConversationSummary` return `ConversationSummary`:
+metadata, actor-relative title, own membership/read marker, unread count and the
+highest-ID `MessageView` (including tombstones). A Group title is persisted;
+a Direct title is the peer username, or the actor's username for self Directs.
+Disabled existing peers retain attribution. Direct titles are not entity metadata.
+
+The inbox sorts by effective activity DESC, ConversationId DESC. Effective
+activity is `max(conversation.updated_at, created_at of the highest-MessageId
+message)`, falling back to `updated_at` for empty history. Sends and real Group metadata/membership
+mutations can raise activity. Message edits/deletes and read updates do not.
+Activity is derived from primary state, not a persisted `last_activity_at` column.
+
+`ListConversationMembers` supports both kinds, sorting by joined_at ASC, UserId
+ASC. It includes disabled existing users but never exposes other members' read
+markers. Every page rechecks current actor membership in the read snapshot.
+`GetConversationMember` provides the same public attribution for mutation results
+without listing all members. Group mutations acquire the SQLite writer lock
+before checking authorization, including successful self-transfer no-ops.
+
 ## Conversation kinds
 
 Windwatcher currently supports only `Direct` and `Group` conversations.
@@ -39,5 +72,5 @@ membership.
 
 ## Current limitations
 
-There is no conversation listing, invitations, public groups, or network
-endpoints yet. Message history uses [opaque cursor pagination](pagination.md).
+There are no invitations or public groups. Conversation and member lists use
+[opaque cursor pagination](pagination.md).

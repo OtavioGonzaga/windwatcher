@@ -6,7 +6,8 @@ use crate::{
     ConversationId, DeleteMessageStoreOutcome as Delete, EditMessageStoreOutcome as Edit,
     GetMessageStoreOutcome as Get, MarkReadStoreOutcome as Read, Message, MessageContent,
     MessageContentError, MessageId, MessagePolicy, MessagePolicyError, MessageStore,
-    MessageStoreError, SendMessageStoreOutcome as Send, UnreadCountStoreOutcome as Unread, UserId,
+    MessageStoreError, MessageView, SendMessageStoreOutcome as Send,
+    UnreadCountStoreOutcome as Unread, UserId,
 };
 
 macro_rules! operation_error {
@@ -15,9 +16,6 @@ macro_rules! operation_error {
         #[derive(Debug, thiserror::Error)]
         #[non_exhaustive]
         pub enum $name {
-            /// The requested conversation does not exist.
-            #[error("conversation not found")]
-            ConversationNotFound,
             /// The actor is not currently a member.
             #[error("actor is not a conversation member")]
             NotMember,
@@ -30,6 +28,7 @@ macro_rules! operation_error {
 }
 
 operation_error!(SendMessageError, "A message could not be sent.", {
+    ConversationNotFound => "conversation not found",
     ReplyTargetNotFound => "reply target not found in conversation",
     ReplyTargetDeleted => "reply target is deleted",
     InvalidContent(MessageContentError) => "invalid message content",
@@ -39,6 +38,7 @@ operation_error!(GetMessageError, "A message could not be retrieved.", {
     MessageNotFound => "message not found in conversation",
 });
 operation_error!(ListMessagesError, "Message history could not be listed.", {
+    ConversationNotFound => "conversation not found",
     InvalidCursor(CursorError) => "invalid pagination cursor",
 });
 
@@ -78,7 +78,7 @@ impl<'a, S: MessageStore> ListMessages<'a, S> {
         actor: UserId,
         conversation: ConversationId,
         request: PageRequest,
-    ) -> Result<Page<Message>, ListMessagesError> {
+    ) -> Result<Page<MessageView>, ListMessagesError> {
         let before = request
             .cursor()
             .map(|token| cursor::decode_message(token, conversation))
@@ -121,39 +121,49 @@ operation_error!(DeleteMessageError, "A message could not be deleted.", {
     NotAuthorized => "actor cannot delete this message",
 });
 operation_error!(MarkConversationReadError, "A read watermark could not be advanced.", {
+    ConversationNotFound => "conversation not found",
     MessageNotFound => "message not found in conversation",
 });
 operation_error!(
     GetUnreadCountError,
     "Unread count could not be retrieved.",
-    {}
+    { ConversationNotFound => "conversation not found", }
 );
 
 /// An author's edit either changed content or preserved exact current state.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum EditMessageOutcome {
     /// New content and edit timestamp were persisted.
-    Changed(Message),
+    Changed(MessageView),
     /// Exact content matched; timestamps were preserved.
-    Unchanged(Message),
+    Unchanged(MessageView),
 }
 
 /// An authorized deletion preserves a structural tombstone.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DeleteMessageOutcome {
     /// Content was destroyed in primary state.
-    Deleted(Message),
+    Deleted(MessageView),
     /// The existing tombstone and timestamps were preserved.
-    AlreadyDeleted(Message),
+    AlreadyDeleted(MessageView),
 }
 
 /// Whether explicit marking advanced the monotonic read boundary.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MarkReadOutcome {
     /// The read boundary advanced.
-    Changed,
+    Changed(crate::ConversationReadState),
     /// An equal or greater boundary already existed.
-    Unchanged,
+    Unchanged(crate::ConversationReadState),
+}
+
+impl MarkReadOutcome {
+    /// Authoritative resulting state, including for an older/same target no-op.
+    pub fn state(self) -> crate::ConversationReadState {
+        match self {
+            Self::Changed(state) | Self::Unchanged(state) => state,
+        }
+    }
 }
 
 /// Synchronously sends exact portable text under an embedder's write policy.
@@ -197,7 +207,7 @@ impl<'a, S: MessageStore> SendMessage<'a, S> {
         content: impl Into<String>,
         reply: Option<MessageId>,
         now: OffsetDateTime,
-    ) -> Result<Message, SendMessageError> {
+    ) -> Result<MessageView, SendMessageError> {
         let content = MessageContent::new(content).map_err(SendMessageError::InvalidContent)?;
         self.policy
             .validate(&content)
@@ -228,12 +238,10 @@ impl<'a, S: MessageStore> GetMessage<'a, S> {
     pub async fn execute(
         &self,
         actor: UserId,
-        conversation: ConversationId,
         message: MessageId,
-    ) -> Result<Message, GetMessageError> {
-        match self.store.get_message(actor, conversation, message).await? {
+    ) -> Result<MessageView, GetMessageError> {
+        match self.store.get_message(actor, message).await? {
             Get::Found(message) => Ok(message),
-            Get::ConversationNotFound => Err(GetMessageError::ConversationNotFound),
             Get::NotMember => Err(GetMessageError::NotMember),
             Get::MessageNotFound => Err(GetMessageError::MessageNotFound),
         }
@@ -254,7 +262,6 @@ impl<'a, S: MessageStore> EditMessage<'a, S> {
     pub async fn execute(
         &self,
         actor: UserId,
-        conversation: ConversationId,
         message: MessageId,
         content: impl Into<String>,
         now: OffsetDateTime,
@@ -265,12 +272,11 @@ impl<'a, S: MessageStore> EditMessage<'a, S> {
             .map_err(EditMessageError::ContentTooLarge)?;
         match self
             .store
-            .edit_message(actor, conversation, message, &content, now)
+            .edit_message(actor, message, &content, now)
             .await?
         {
             Edit::Changed(message) => Ok(EditMessageOutcome::Changed(message)),
             Edit::Unchanged(message) => Ok(EditMessageOutcome::Unchanged(message)),
-            Edit::ConversationNotFound => Err(EditMessageError::ConversationNotFound),
             Edit::NotMember => Err(EditMessageError::NotMember),
             Edit::MessageNotFound => Err(EditMessageError::MessageNotFound),
             Edit::NotAuthor => Err(EditMessageError::NotAuthor),
@@ -292,18 +298,12 @@ impl<'a, S: MessageStore> DeleteMessage<'a, S> {
     pub async fn execute(
         &self,
         actor: UserId,
-        conversation: ConversationId,
         message: MessageId,
         now: OffsetDateTime,
     ) -> Result<DeleteMessageOutcome, DeleteMessageError> {
-        match self
-            .store
-            .delete_message(actor, conversation, message, now)
-            .await?
-        {
+        match self.store.delete_message(actor, message, now).await? {
             Delete::Deleted(message) => Ok(DeleteMessageOutcome::Deleted(message)),
             Delete::AlreadyDeleted(message) => Ok(DeleteMessageOutcome::AlreadyDeleted(message)),
-            Delete::ConversationNotFound => Err(DeleteMessageError::ConversationNotFound),
             Delete::NotMember => Err(DeleteMessageError::NotMember),
             Delete::MessageNotFound => Err(DeleteMessageError::MessageNotFound),
             Delete::NotAuthorized => Err(DeleteMessageError::NotAuthorized),
@@ -332,8 +332,8 @@ impl<'a, S: MessageStore> MarkConversationReadThrough<'a, S> {
             .mark_read_through(actor, conversation, message)
             .await?
         {
-            Read::Changed => Ok(MarkReadOutcome::Changed),
-            Read::Unchanged => Ok(MarkReadOutcome::Unchanged),
+            Read::Changed(state) => Ok(MarkReadOutcome::Changed(state)),
+            Read::Unchanged(state) => Ok(MarkReadOutcome::Unchanged(state)),
             Read::ConversationNotFound => Err(MarkConversationReadError::ConversationNotFound),
             Read::NotMember => Err(MarkConversationReadError::NotMember),
             Read::MessageNotFound => Err(MarkConversationReadError::MessageNotFound),

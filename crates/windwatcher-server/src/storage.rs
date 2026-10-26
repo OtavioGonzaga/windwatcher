@@ -19,6 +19,98 @@ pub enum Storage {
     /// Official SQLite persistence adapter.
     Sqlite(SqliteStorage),
 }
+
+impl windwatcher::CreateCommandStore for Storage {
+    async fn create_conversation_command(
+        &self,
+        command: &windwatcher::ConversationCreateCommand,
+        key: Option<&windwatcher::IdempotencyKey>,
+        now: OffsetDateTime,
+    ) -> Result<windwatcher::CreateResult<ConversationId>, windwatcher::CreateCommandError> {
+        match self {
+            Self::Sqlite(s) => s.create_conversation_command(command, key, now).await,
+        }
+    }
+    async fn send_message_command(
+        &self,
+        message: &Message,
+        key: Option<&windwatcher::IdempotencyKey>,
+        now: OffsetDateTime,
+    ) -> Result<windwatcher::CreateResult<windwatcher::MessageView>, windwatcher::CreateCommandError>
+    {
+        match self {
+            Self::Sqlite(s) => s.send_message_command(message, key, now).await,
+        }
+    }
+}
+
+impl windwatcher::MessagingQueryStore for Storage {
+    async fn get_conversation_member(
+        &self,
+        actor: UserId,
+        conversation: ConversationId,
+        target: UserId,
+    ) -> Result<
+        windwatcher::ConversationQueryOutcome<Option<windwatcher::ConversationMemberSummary>>,
+        windwatcher::QueryStoreError,
+    > {
+        match self {
+            Self::Sqlite(s) => s.get_conversation_member(actor, conversation, target).await,
+        }
+    }
+    async fn find_users(
+        &self,
+        username: &Username,
+    ) -> Result<Vec<windwatcher::UserSummary>, windwatcher::QueryStoreError> {
+        match self {
+            Self::Sqlite(s) => s.find_users(username).await,
+        }
+    }
+    async fn list_conversations(
+        &self,
+        actor: UserId,
+        before: Option<windwatcher::ConversationBoundary>,
+        limit: windwatcher::PageLimit,
+    ) -> Result<
+        windwatcher::QuerySlice<windwatcher::ConversationSummary>,
+        windwatcher::QueryStoreError,
+    > {
+        match self {
+            Self::Sqlite(s) => s.list_conversations(actor, before, limit).await,
+        }
+    }
+    async fn get_conversation_summary(
+        &self,
+        actor: UserId,
+        conversation: ConversationId,
+    ) -> Result<
+        windwatcher::ConversationQueryOutcome<windwatcher::ConversationSummary>,
+        windwatcher::QueryStoreError,
+    > {
+        match self {
+            Self::Sqlite(s) => s.get_conversation_summary(actor, conversation).await,
+        }
+    }
+    async fn list_conversation_members(
+        &self,
+        actor: UserId,
+        conversation: ConversationId,
+        after: Option<windwatcher::MemberBoundary>,
+        limit: windwatcher::PageLimit,
+    ) -> Result<
+        windwatcher::ConversationQueryOutcome<
+            windwatcher::QuerySlice<windwatcher::ConversationMemberSummary>,
+        >,
+        windwatcher::QueryStoreError,
+    > {
+        match self {
+            Self::Sqlite(s) => {
+                s.list_conversation_members(actor, conversation, after, limit)
+                    .await
+            }
+        }
+    }
+}
 impl Storage {
     /// Opens the configured storage without applying migrations implicitly.
     pub async fn connect(options: SqliteStorageOptions) -> Result<Self, SqliteStorageError> {
@@ -171,37 +263,31 @@ impl MessageStore for Storage {
     async fn get_message(
         &self,
         actor: UserId,
-        conversation: ConversationId,
         message: MessageId,
     ) -> Result<GetMessageStoreOutcome, MessageStoreError> {
         match self {
-            Self::Sqlite(s) => s.get_message(actor, conversation, message).await,
+            Self::Sqlite(s) => s.get_message(actor, message).await,
         }
     }
     async fn edit_message(
         &self,
         actor: UserId,
-        conversation: ConversationId,
         message: MessageId,
         content: &MessageContent,
         now: OffsetDateTime,
     ) -> Result<EditMessageStoreOutcome, MessageStoreError> {
         match self {
-            Self::Sqlite(s) => {
-                s.edit_message(actor, conversation, message, content, now)
-                    .await
-            }
+            Self::Sqlite(s) => s.edit_message(actor, message, content, now).await,
         }
     }
     async fn delete_message(
         &self,
         actor: UserId,
-        conversation: ConversationId,
         message: MessageId,
         now: OffsetDateTime,
     ) -> Result<DeleteMessageStoreOutcome, MessageStoreError> {
         match self {
-            Self::Sqlite(s) => s.delete_message(actor, conversation, message, now).await,
+            Self::Sqlite(s) => s.delete_message(actor, message, now).await,
         }
     }
     async fn mark_read_through(

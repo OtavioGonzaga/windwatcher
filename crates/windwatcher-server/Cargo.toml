@@ -15,7 +15,7 @@ path = "src/main.rs"
 doc = false
 
 [dependencies]
-axum = { version = "0.8", default-features = false, features = ["json", "matched-path", "tokio"] }
+axum = { version = "0.8", default-features = false, features = ["json", "query", "matched-path", "tokio"] }
 governor = { version = "0.10", default-features = false, features = ["std", "dashmap"] }
 clap = { version = "4", features = ["derive"] }
 directories = "6"

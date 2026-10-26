@@ -7,8 +7,8 @@ use super::{Corrupt, SqliteStorage, from_micros, id_bytes, to_micros, unavailabl
 use crate::{
     ConversationId, DeleteMessageStoreOutcome as Delete, EditMessageStoreOutcome as Edit,
     GetMessageStoreOutcome as Get, MarkReadStoreOutcome as Read, Message, MessageContent,
-    MessageId, MessageStore, MessageStoreError, SendMessageStoreOutcome as Send,
-    UnreadCountStoreOutcome as Unread, UserId,
+    MessageId, MessageStore, MessageStoreError, MessageView, ReplyPreview,
+    SendMessageStoreOutcome as Send, UnreadCountStoreOutcome as Unread, UserId, UserSummary,
 };
 
 fn unexpected(message: &'static str) -> MessageStoreError {
@@ -72,6 +72,56 @@ fn read_message(row: &SqliteRow) -> Result<Message, MessageStoreError> {
     .map_err(|_| unexpected("invalid persisted message state"))
 }
 
+pub(super) const VIEW_SELECT: &str = "SELECT msg.id, msg.conversation_id, msg.sender_id, msg.content, msg.reply_to_message_id, msg.created_at, msg.edited_at, msg.deleted_at, sender.username AS sender_username, reply.sender_id AS reply_sender_id, reply_sender.username AS reply_sender_username, reply.content AS reply_content, reply.deleted_at AS reply_deleted_at FROM messages msg JOIN users sender ON sender.id = msg.sender_id LEFT JOIN messages reply ON reply.conversation_id = msg.conversation_id AND reply.id = msg.reply_to_message_id LEFT JOIN users reply_sender ON reply_sender.id = reply.sender_id";
+
+fn view_query() -> sqlx::QueryBuilder<sqlx::Sqlite> {
+    sqlx::QueryBuilder::new(VIEW_SELECT)
+}
+
+pub(super) fn read_view(row: &SqliteRow) -> Result<MessageView, MessageStoreError> {
+    let message = read_message(row)?;
+    let username = |column| -> Result<crate::Username, MessageStoreError> {
+        row.try_get::<String, _>(column)
+            .map_err(storage_error)?
+            .parse()
+            .map_err(|_| unexpected("invalid projected username"))
+    };
+    let reply_to = message
+        .reply_to_message_id()
+        .map(|id| {
+            let content = row
+                .try_get::<Option<String>, _>("reply_content")
+                .map_err(storage_error)?
+                .map(MessageContent::new)
+                .transpose()
+                .map_err(|_| unexpected("invalid reply content"))?;
+            let deleted_at = row
+                .try_get::<Option<i64>, _>("reply_deleted_at")
+                .map_err(storage_error)?
+                .map(from_micros)
+                .transpose()
+                .map_err(unexpected)?;
+            if content.is_some() == deleted_at.is_some() {
+                return Err(unexpected("invalid reply tombstone"));
+            }
+            Ok(ReplyPreview {
+                id,
+                sender: UserSummary {
+                    id: identifier(row.try_get("reply_sender_id").map_err(storage_error)?)?,
+                    username: username("reply_sender_username")?,
+                },
+                content,
+                deleted_at,
+            })
+        })
+        .transpose()?;
+    Ok(MessageView {
+        message,
+        sender_username: username("sender_username")?,
+        reply_to: reply_to.map(Box::new),
+    })
+}
+
 enum Access {
     ConversationNotFound,
     NotMember,
@@ -109,10 +159,35 @@ async fn find(
     conn: &mut SqliteConnection,
     conversation: ConversationId,
     message: MessageId,
-) -> Result<Option<Message>, MessageStoreError> {
-    sqlx::query("SELECT id, conversation_id, sender_id, content, reply_to_message_id, created_at, edited_at, deleted_at FROM messages WHERE conversation_id = ? AND id = ?")
-        .bind(id_bytes(conversation)).bind(id_bytes(message)).fetch_optional(conn).await.map_err(storage_error)?
-        .map(|row| read_message(&row)).transpose()
+) -> Result<Option<MessageView>, MessageStoreError> {
+    view_query()
+        .push(" WHERE msg.conversation_id = ")
+        .push_bind(id_bytes(conversation))
+        .push(" AND msg.id = ")
+        .push_bind(id_bytes(message))
+        .build()
+        .fetch_optional(conn)
+        .await
+        .map_err(storage_error)?
+        .map(|row| read_view(&row))
+        .transpose()
+}
+
+// Global item resolution shares the caller's read snapshot or write lock with
+// membership/role checks. Never ask callers to discover a conversation first.
+pub(super) async fn find_global(
+    conn: &mut SqliteConnection,
+    message: MessageId,
+) -> Result<Option<MessageView>, MessageStoreError> {
+    view_query()
+        .push(" WHERE msg.id = ")
+        .push_bind(id_bytes(message))
+        .build()
+        .fetch_optional(conn)
+        .await
+        .map_err(storage_error)?
+        .map(|row| read_view(&row))
+        .transpose()
 }
 
 impl MessageStore for SqliteStorage {
@@ -131,79 +206,69 @@ impl MessageStore for SqliteStorage {
         }
         let count = (limit.get() + 1) as i64;
         let rows = if let Some(boundary) = before {
-            sqlx::query("SELECT id, conversation_id, sender_id, content, reply_to_message_id, created_at, edited_at, deleted_at FROM messages WHERE conversation_id = ? AND id < ? ORDER BY id DESC LIMIT ?")
-                .bind(id_bytes(conversation)).bind(id_bytes(boundary)).bind(count)
-                .fetch_all(&mut *tx).await.map_err(storage_error)?
+            view_query()
+                .push(" WHERE msg.conversation_id = ")
+                .push_bind(id_bytes(conversation))
+                .push(" AND msg.id < ")
+                .push_bind(id_bytes(boundary))
+                .push(" ORDER BY msg.id DESC LIMIT ")
+                .push_bind(count)
+                .build()
+                .fetch_all(&mut *tx)
+                .await
+                .map_err(storage_error)?
         } else {
-            sqlx::query("SELECT id, conversation_id, sender_id, content, reply_to_message_id, created_at, edited_at, deleted_at FROM messages WHERE conversation_id = ? ORDER BY id DESC LIMIT ?")
-                .bind(id_bytes(conversation)).bind(count)
-                .fetch_all(&mut *tx).await.map_err(storage_error)?
+            view_query()
+                .push(" WHERE msg.conversation_id = ")
+                .push_bind(id_bytes(conversation))
+                .push(" ORDER BY msg.id DESC LIMIT ")
+                .push_bind(count)
+                .build()
+                .fetch_all(&mut *tx)
+                .await
+                .map_err(storage_error)?
         };
         let has_more = rows.len() > limit.get();
         let items = rows
             .iter()
             .take(limit.get())
-            .map(read_message)
+            .map(read_view)
             .collect::<Result<Vec<_>, _>>()?;
         tx.commit().await.map_err(storage_error)?;
         Ok(List::Page(MessagePageSlice { items, has_more }))
     }
     async fn send_message(&self, message: &Message) -> Result<Send, MessageStoreError> {
-        if message.is_deleted() || message.edited_at().is_some() {
-            return Err(unexpected("send requires an active unedited message"));
-        }
         let mut tx = self
             .pool
             .begin_with("BEGIN IMMEDIATE")
             .await
             .map_err(storage_error)?;
-        match access(&mut tx, message.sender_id(), message.conversation_id()).await? {
-            Access::ConversationNotFound => return Ok(Send::ConversationNotFound),
-            Access::NotMember => return Ok(Send::NotMember),
-            Access::Member { .. } => (),
-        }
-        if let Some(reply) = message.reply_to_message_id() {
-            match find(&mut tx, message.conversation_id(), reply).await? {
-                None => return Ok(Send::ReplyTargetNotFound),
-                Some(target) if target.is_deleted() => return Ok(Send::ReplyTargetDeleted),
-                Some(_) => (),
-            }
-        }
-        sqlx::query("INSERT INTO messages (id, conversation_id, sender_id, content, reply_to_message_id, created_at) VALUES (?, ?, ?, ?, ?, ?)")
-            .bind(id_bytes(message.id())).bind(id_bytes(message.conversation_id())).bind(id_bytes(message.sender_id()))
-            .bind(message.content().map(MessageContent::as_str)).bind(message.reply_to_message_id().map(id_bytes))
-            .bind(to_micros(message.created_at()).map_err(unexpected)?).execute(&mut *tx).await.map_err(storage_error)?;
-        let persisted = find(&mut tx, message.conversation_id(), message.id())
-            .await?
-            .ok_or_else(|| unexpected("persisted message disappeared"))?;
+        let outcome = send_in(&mut tx, message).await?;
         tx.commit().await.map_err(storage_error)?;
-        Ok(Send::Sent(persisted))
+        Ok(outcome)
     }
 
     async fn get_message(
         &self,
         actor: UserId,
-        conversation: ConversationId,
         message: MessageId,
     ) -> Result<Get, MessageStoreError> {
         let mut tx = self.pool.begin().await.map_err(storage_error)?;
-        match access(&mut tx, actor, conversation).await? {
-            Access::ConversationNotFound => return Ok(Get::ConversationNotFound),
+        let Some(current) = find_global(&mut tx, message).await? else {
+            return Ok(Get::MessageNotFound);
+        };
+        match access(&mut tx, actor, current.conversation_id()).await? {
+            Access::ConversationNotFound => return Ok(Get::MessageNotFound),
             Access::NotMember => return Ok(Get::NotMember),
             Access::Member { .. } => (),
         }
-        let result = match find(&mut tx, conversation, message).await? {
-            Some(message) => Get::Found(message),
-            None => Get::MessageNotFound,
-        };
         tx.commit().await.map_err(storage_error)?;
-        Ok(result)
+        Ok(Get::Found(current))
     }
 
     async fn edit_message(
         &self,
         actor: UserId,
-        conversation: ConversationId,
         message: MessageId,
         content: &MessageContent,
         now: OffsetDateTime,
@@ -213,14 +278,15 @@ impl MessageStore for SqliteStorage {
             .begin_with("BEGIN IMMEDIATE")
             .await
             .map_err(storage_error)?;
+        let Some(current) = find_global(&mut tx, message).await? else {
+            return Ok(Edit::MessageNotFound);
+        };
+        let conversation = current.conversation_id();
         match access(&mut tx, actor, conversation).await? {
-            Access::ConversationNotFound => return Ok(Edit::ConversationNotFound),
+            Access::ConversationNotFound => return Ok(Edit::MessageNotFound),
             Access::NotMember => return Ok(Edit::NotMember),
             Access::Member { .. } => (),
         }
-        let Some(current) = find(&mut tx, conversation, message).await? else {
-            return Ok(Edit::MessageNotFound);
-        };
         if current.sender_id() != actor {
             return Ok(Edit::NotAuthor);
         }
@@ -243,7 +309,6 @@ impl MessageStore for SqliteStorage {
     async fn delete_message(
         &self,
         actor: UserId,
-        conversation: ConversationId,
         message: MessageId,
         now: OffsetDateTime,
     ) -> Result<Delete, MessageStoreError> {
@@ -252,13 +317,14 @@ impl MessageStore for SqliteStorage {
             .begin_with("BEGIN IMMEDIATE")
             .await
             .map_err(storage_error)?;
+        let Some(current) = find_global(&mut tx, message).await? else {
+            return Ok(Delete::MessageNotFound);
+        };
+        let conversation = current.conversation_id();
         let moderator = match access(&mut tx, actor, conversation).await? {
-            Access::ConversationNotFound => return Ok(Delete::ConversationNotFound),
+            Access::ConversationNotFound => return Ok(Delete::MessageNotFound),
             Access::NotMember => return Ok(Delete::NotMember),
             Access::Member { moderator } => moderator,
-        };
-        let Some(current) = find(&mut tx, conversation, message).await? else {
-            return Ok(Delete::MessageNotFound);
         };
         if current.sender_id() != actor && !moderator {
             return Ok(Delete::NotAuthorized);
@@ -298,11 +364,25 @@ impl MessageStore for SqliteStorage {
         let result = sqlx::query("UPDATE conversation_members SET last_read_message_id = ? WHERE conversation_id = ? AND user_id = ? AND (last_read_message_id IS NULL OR last_read_message_id < ?)")
             .bind(id_bytes(message)).bind(id_bytes(conversation)).bind(id_bytes(actor)).bind(id_bytes(message))
             .execute(&mut *tx).await.map_err(storage_error)?;
+        let row = sqlx::query("SELECT m.last_read_message_id, (SELECT COUNT(*) FROM messages msg WHERE msg.conversation_id = m.conversation_id AND msg.sender_id <> m.user_id AND msg.deleted_at IS NULL AND (m.last_read_message_id IS NULL OR msg.id > m.last_read_message_id)) AS unread_count FROM conversation_members m WHERE m.conversation_id = ? AND m.user_id = ?")
+            .bind(id_bytes(conversation)).bind(id_bytes(actor)).fetch_one(&mut *tx).await.map_err(storage_error)?;
+        let state = crate::ConversationReadState {
+            last_read_message_id: row
+                .try_get::<Option<Vec<u8>>, _>("last_read_message_id")
+                .map_err(storage_error)?
+                .map(identifier)
+                .transpose()?,
+            unread_count: u64::try_from(
+                row.try_get::<i64, _>("unread_count")
+                    .map_err(storage_error)?,
+            )
+            .map_err(|_| unexpected("invalid unread count"))?,
+        };
         tx.commit().await.map_err(storage_error)?;
         Ok(if result.rows_affected() == 1 {
-            Read::Changed
+            Read::Changed(state)
         } else {
-            Read::Unchanged
+            Read::Unchanged(state)
         })
     }
 
@@ -323,4 +403,33 @@ impl MessageStore for SqliteStorage {
         tx.commit().await.map_err(storage_error)?;
         Ok(Unread::Count(count))
     }
+}
+
+pub(super) async fn send_in(
+    tx: &mut SqliteConnection,
+    message: &Message,
+) -> Result<Send, MessageStoreError> {
+    if message.is_deleted() || message.edited_at().is_some() {
+        return Err(unexpected("send requires an active unedited message"));
+    }
+    match access(tx, message.sender_id(), message.conversation_id()).await? {
+        Access::ConversationNotFound => return Ok(Send::ConversationNotFound),
+        Access::NotMember => return Ok(Send::NotMember),
+        Access::Member { .. } => (),
+    }
+    if let Some(reply) = message.reply_to_message_id() {
+        match find(tx, message.conversation_id(), reply).await? {
+            None => return Ok(Send::ReplyTargetNotFound),
+            Some(target) if target.is_deleted() => return Ok(Send::ReplyTargetDeleted),
+            Some(_) => (),
+        }
+    }
+    sqlx::query("INSERT INTO messages (id, conversation_id, sender_id, content, reply_to_message_id, created_at) VALUES (?, ?, ?, ?, ?, ?)")
+        .bind(id_bytes(message.id())).bind(id_bytes(message.conversation_id())).bind(id_bytes(message.sender_id()))
+        .bind(message.content().map(MessageContent::as_str)).bind(message.reply_to_message_id().map(id_bytes))
+        .bind(to_micros(message.created_at()).map_err(unexpected)?).execute(&mut *tx).await.map_err(storage_error)?;
+    let persisted = find(tx, message.conversation_id(), message.id())
+        .await?
+        .ok_or_else(|| unexpected("persisted message disappeared"))?;
+    Ok(Send::Sent(persisted))
 }

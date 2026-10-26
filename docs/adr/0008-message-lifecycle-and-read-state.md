@@ -36,6 +36,16 @@ and Group Owners/Admins delete. Moderator deletion does not require the original
 sender to remain a member. Repeated deletion still requires permission. Exact
 edits and repeated deletes preserve timestamps.
 
+Individual get/edit/delete operations use globally unique `MessageId` without a
+redundant conversation argument. Persistence resolves the parent and authorizes
+within the same snapshot/transaction. Their not-found outcome is message-specific;
+conversation cascading deletion also removes the message.
+
+`MessageView` enriches read/mutation results with the current sender username and
+shallow reply target state in the same logical persistence operation. Disabled
+identities remain attributable and reply tombstones remain visible. Projection
+fields are not persisted in the domain entity and replies never recurse.
+
 Read state belongs to membership as `last_read_message_id`. Explicit read markers
 are monotonic and may point to tombstones. Sending does not advance read state.
 Own messages and tombstones are excluded from unread. Unread count is derived
@@ -57,5 +67,6 @@ representations or runtime types. Tombstones preserve structural history and
 future paginated lists must include them. UUIDv7 avoids coordinated sequences
 with explicitly bounded ordering guarantees. SQLite write contention can still
 surface as normalized unavailability; correctness does not depend on workers or
-notifications. Pagination, HTTP, events, realtime, retention and attachments
-remain separate deliveries.
+notifications. Pagination and HTTP are defined separately in ADRs 0009/0010;
+persisted create-command replay is defined in ADR 0011. Events, realtime,
+message retention and attachments remain separate deliveries.

@@ -1,3 +1,5 @@
+mod conversations;
+mod messages;
 mod sessions;
 mod users;
 
@@ -8,4 +10,6 @@ pub(super) fn router() -> OpenApiRouter<HttpState> {
     OpenApiRouter::new()
         .merge(users::router())
         .merge(sessions::router())
+        .merge(conversations::router())
+        .merge(messages::router())
 }

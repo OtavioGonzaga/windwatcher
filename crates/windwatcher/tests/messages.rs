@@ -2,6 +2,14 @@ use futures_executor::block_on;
 use time::OffsetDateTime;
 use windwatcher::*;
 
+fn view(message: Message) -> MessageView {
+    MessageView {
+        message,
+        sender_username: "sender".parse().unwrap(),
+        reply_to: None,
+    }
+}
+
 #[derive(Clone)]
 enum Response {
     List(ListMessagesStoreOutcome, Option<MessageId>, PageLimit),
@@ -46,7 +54,7 @@ impl MessageStore for Fake {
                 assert_eq!(message.conversation_id(), *conversation);
                 assert_eq!(message.content().unwrap().as_str(), " 😀 ");
                 assert_eq!(message.created_at(), OffsetDateTime::UNIX_EPOCH);
-                Ok(SendMessageStoreOutcome::Sent(message.clone()))
+                Ok(SendMessageStoreOutcome::Sent(view(message.clone())))
             }
             _ => panic!("unexpected store call"),
         }
@@ -54,7 +62,6 @@ impl MessageStore for Fake {
     async fn get_message(
         &self,
         _: UserId,
-        _: ConversationId,
         _: MessageId,
     ) -> Result<GetMessageStoreOutcome, MessageStoreError> {
         match &self.0 {
@@ -66,7 +73,6 @@ impl MessageStore for Fake {
     async fn edit_message(
         &self,
         _: UserId,
-        _: ConversationId,
         _: MessageId,
         _: &MessageContent,
         _: OffsetDateTime,
@@ -80,7 +86,6 @@ impl MessageStore for Fake {
     async fn delete_message(
         &self,
         _: UserId,
-        _: ConversationId,
         _: MessageId,
         _: OffsetDateTime,
     ) -> Result<DeleteMessageStoreOutcome, MessageStoreError> {
@@ -122,15 +127,17 @@ fn list_maps_pages_boundaries_limits_and_errors() {
         let c = ConversationId::new();
         let mut items: Vec<_> = (0..3)
             .map(|_| {
-                Message::new(
-                    MessageId::new(),
-                    c,
-                    actor,
-                    MessageContent::new("history").unwrap(),
-                    None,
-                    OffsetDateTime::UNIX_EPOCH,
+                view(
+                    Message::new(
+                        MessageId::new(),
+                        c,
+                        actor,
+                        MessageContent::new("history").unwrap(),
+                        None,
+                        OffsetDateTime::UNIX_EPOCH,
+                    )
+                    .unwrap(),
                 )
-                .unwrap()
             })
             .collect();
         items.reverse();
@@ -273,16 +280,16 @@ fn validates_writes_before_storage_and_preserves_actor_context() {
         ));
         let edit = EditMessage::new(&store, &policy);
         assert!(matches!(
-            edit.execute(actor, c, id, "\0", now).await,
+            edit.execute(actor, id, "\0", now).await,
             Err(EditMessageError::InvalidContent(_))
         ));
         assert!(matches!(
-            edit.execute(actor, c, id, "😀", now).await,
+            edit.execute(actor, id, "😀", now).await,
             Err(EditMessageError::ContentTooLarge(_))
         ));
         let echo = Fake(Response::Echo(actor, c));
         let policy = MessagePolicy::default();
-        let sent: Message = SendMessage::new(&echo, &policy)
+        let sent: MessageView = SendMessage::new(&echo, &policy)
             .execute(actor, c, " 😀 ", None, now)
             .await
             .unwrap();
@@ -320,13 +327,12 @@ fn focused_errors_map_every_semantic_store_failure() {
             ($variant:ident) => {
                 assert!(matches!(
                     GetMessage::new(&Fake(Response::Get(GetMessageStoreOutcome::$variant)))
-                        .execute(actor, c, id)
+                        .execute(actor, id)
                         .await,
                     Err(GetMessageError::$variant)
                 ));
             };
         }
-        get_error!(ConversationNotFound);
         get_error!(NotMember);
         get_error!(MessageNotFound);
         macro_rules! edit_error {
@@ -336,13 +342,12 @@ fn focused_errors_map_every_semantic_store_failure() {
                         &Fake(Response::Edit(EditMessageStoreOutcome::$store)),
                         &policy
                     )
-                    .execute(actor, c, id, "", now)
+                    .execute(actor, id, "", now)
                     .await,
                     Err(EditMessageError::$error)
                 ));
             };
         }
-        edit_error!(ConversationNotFound, ConversationNotFound);
         edit_error!(NotMember, NotMember);
         edit_error!(MessageNotFound, MessageNotFound);
         edit_error!(NotAuthor, NotAuthor);
@@ -353,13 +358,12 @@ fn focused_errors_map_every_semantic_store_failure() {
                     DeleteMessage::new(&Fake(Response::Delete(
                         DeleteMessageStoreOutcome::$variant
                     )))
-                    .execute(actor, c, id, now)
+                    .execute(actor, id, now)
                     .await,
                     Err(DeleteMessageError::$variant)
                 ));
             };
         }
-        delete_error!(ConversationNotFound);
         delete_error!(NotMember);
         delete_error!(MessageNotFound);
         delete_error!(NotAuthorized);
@@ -400,17 +404,17 @@ fn focused_errors_map_every_semantic_store_failure() {
             Err(SendMessageError::Storage(MessageStoreError::Conflict))
         ));
         assert!(matches!(
-            GetMessage::new(&failed).execute(actor, c, id).await,
+            GetMessage::new(&failed).execute(actor, id).await,
             Err(GetMessageError::Storage(_))
         ));
         assert!(matches!(
             EditMessage::new(&failed, &policy)
-                .execute(actor, c, id, "", now)
+                .execute(actor, id, "", now)
                 .await,
             Err(EditMessageError::Storage(_))
         ));
         assert!(matches!(
-            DeleteMessage::new(&failed).execute(actor, c, id, now).await,
+            DeleteMessage::new(&failed).execute(actor, id, now).await,
             Err(DeleteMessageError::Storage(_))
         ));
         assert!(matches!(
@@ -443,36 +447,44 @@ fn public_outcomes_are_application_types_and_historical_reads_ignore_policy() {
         .unwrap();
         let policy = MessagePolicy::new(0);
         assert!(policy.validate(message.content().unwrap()).is_err());
-        let loaded: Message = GetMessage::new(&Fake(Response::Get(GetMessageStoreOutcome::Found(
-            message.clone(),
-        ))))
-        .execute(actor, c, message.id())
+        let loaded: MessageView = GetMessage::new(&Fake(Response::Get(
+            GetMessageStoreOutcome::Found(view(message.clone())),
+        )))
+        .execute(actor, message.id())
         .await
         .unwrap();
-        assert_eq!(loaded, message);
-        let edited = Message::restore(
-            message.id(),
-            c,
-            actor,
-            Some(MessageContent::new("").unwrap()),
-            None,
-            now,
-            Some(now),
-            None,
-        )
-        .unwrap();
-        let tombstone = Message::restore(
-            message.id(),
-            c,
-            actor,
-            None,
-            None,
-            now,
-            Some(now),
-            Some(now),
-        )
-        .unwrap();
+        assert_eq!(loaded.message, message);
+        let edited = view(
+            Message::restore(
+                message.id(),
+                c,
+                actor,
+                Some(MessageContent::new("").unwrap()),
+                None,
+                now,
+                Some(now),
+                None,
+            )
+            .unwrap(),
+        );
+        let tombstone = view(
+            Message::restore(
+                message.id(),
+                c,
+                actor,
+                None,
+                None,
+                now,
+                Some(now),
+                Some(now),
+            )
+            .unwrap(),
+        );
         for changed in [true, false] {
+            let state = ConversationReadState {
+                last_read_message_id: Some(message.id()),
+                unread_count: 2,
+            };
             let outcome = if changed {
                 EditMessageStoreOutcome::Changed(edited.clone())
             } else {
@@ -480,7 +492,7 @@ fn public_outcomes_are_application_types_and_historical_reads_ignore_policy() {
             };
             let result: EditMessageOutcome =
                 EditMessage::new(&Fake(Response::Edit(outcome)), &policy)
-                    .execute(actor, c, message.id(), "", now)
+                    .execute(actor, message.id(), "", now)
                     .await
                     .unwrap();
             assert_eq!(
@@ -497,7 +509,7 @@ fn public_outcomes_are_application_types_and_historical_reads_ignore_policy() {
                 DeleteMessageStoreOutcome::AlreadyDeleted(tombstone.clone())
             };
             let result: DeleteMessageOutcome = DeleteMessage::new(&Fake(Response::Delete(outcome)))
-                .execute(actor, c, message.id(), now)
+                .execute(actor, message.id(), now)
                 .await
                 .unwrap();
             assert_eq!(
@@ -510,9 +522,9 @@ fn public_outcomes_are_application_types_and_historical_reads_ignore_policy() {
             );
             let result: MarkReadOutcome =
                 MarkConversationReadThrough::new(&Fake(Response::Read(if changed {
-                    MarkReadStoreOutcome::Changed
+                    MarkReadStoreOutcome::Changed(state)
                 } else {
-                    MarkReadStoreOutcome::Unchanged
+                    MarkReadStoreOutcome::Unchanged(state)
                 })))
                 .execute(actor, c, message.id())
                 .await
@@ -520,9 +532,9 @@ fn public_outcomes_are_application_types_and_historical_reads_ignore_policy() {
             assert_eq!(
                 result,
                 if changed {
-                    MarkReadOutcome::Changed
+                    MarkReadOutcome::Changed(state)
                 } else {
-                    MarkReadOutcome::Unchanged
+                    MarkReadOutcome::Unchanged(state)
                 }
             );
         }

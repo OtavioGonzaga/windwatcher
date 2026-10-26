@@ -38,6 +38,12 @@ advances the sender's read marker and never changes conversation metadata time.
 
 ## Replies
 
+Send/get/edit/delete and paginated history return `MessageView`: the domain
+message, sender username and an optional shallow `ReplyPreview`. These are
+projections loaded together, without per-message identity lookups. Disabled
+senders retain their username. Reply previews show the target's current text or
+content-free tombstone, and never contain another nested reply.
+
 A new reply must target an existing active message in the same conversation.
 Missing or cross-conversation targets are unavailable; a tombstone cannot receive
 new replies. Storage enforces this atomically with insertion, including against
@@ -46,6 +52,12 @@ deletion and continues referencing that tombstone. This lightweight reference is
 not thread support.
 
 ## Editing
+
+`GetMessage`, `EditMessage` and `DeleteMessage` address items by globally unique
+`MessageId` alone: `execute(actor, message_id, ...)`. The store resolves the
+conversation and checks current membership in the same logical snapshot or write
+transaction. Missing items return `MessageNotFound`; inaccessible existing items
+remain a distinct internal `NotMember` outcome for transport-level privacy mapping.
 
 `EditMessage` requires current membership and authorship, even for a Group Owner
 or Admin. An exact content match returns `EditMessageOutcome::Unchanged` without
@@ -80,6 +92,12 @@ Mutating store operations enforce membership and role at persistence time.
 watermark. `MarkConversationReadThrough` accepts an existing same-conversation
 message, including a tombstone. A greater target advances it; equal/older targets
 return `Unchanged`. Marking a missing or cross-conversation target fails.
+
+Both changed and unchanged outcomes carry `ConversationReadState`; `.state()`
+returns the authoritative effective marker and unread count from the same write
+transaction. An older target from another device never regresses the marker.
+These watermarks are not receipts: Group join initializes historical read state
+without the user explicitly reading that history.
 
 Sending does not mark intervening messages as read. Read markers advance only
 through explicit mark-read after membership initialization. Direct and initial
@@ -120,13 +138,14 @@ messages, including reply relationships. See [persistence](persistence.md) and
 
 ## Current limitations
 
-This delivery has no HTTP, realtime, events, queues, attachments, reactions, threads,
+This delivery has no realtime, events, queues, attachments, reactions, threads,
 search, edit history, undelete or message purge.
+The [HTTP API](http-api.md) exposes the messaging journey without a listener.
 
 ## Paginated history
 
 `ListMessages::new(&storage).execute(actor, conversation_id, PageRequest::default())`
-returns `Page<Message>` newest-first by UUIDv7 `MessageId::Ord`. Active messages
+returns `Page<MessageView>` newest-first by UUIDv7 `MessageId::Ord`. Active messages
 and tombstones both appear. `next_cursor()` continues toward older history using
 `PageRequest::new(limit).with_cursor(cursor)`; the last page has no cursor even
 when exactly full. Listing does not mark read or apply the current write policy.

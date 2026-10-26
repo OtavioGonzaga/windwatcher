@@ -77,7 +77,7 @@ application pagination infrastructure. `ListMessages` is the first consumer:
 
 ```text
 ListMessages → decode/validate opaque cursor → MessageStore keyset query
-            → encode next cursor → Page<Message> (newest first)
+            → encode next cursor → Page<MessageView> (newest first)
 ```
 
 Only the application knows cursor encoding. The persistence port receives a
@@ -86,6 +86,17 @@ lookahead information. Ordering remains resource-specific, while representation
 is reusable. Authorization is independent of cursor possession and shares the
 storage read snapshot. See [pagination](pagination.md) and
 [ADR 0009](adr/0009-opaque-keyset-pagination.md).
+
+Message operations return application read projections containing sender username
+and a shallow current reply preview. SQLite joins attribution and reply state in
+the same snapshot/transaction as the message operation; `Message` itself remains
+unchanged and transport-independent.
+
+`MessagingQueryStore` supplies reusable consumer queries: exact enabled username
+discovery, actor inbox/detail summaries and public member lists. Projections are
+application models rather than enriched domain entities. SQLite batches inbox
+hydration within one read snapshot; cursors remain application-owned and typed
+boundaries remain independent of transport and storage encoding.
 
 Ports return native Rust `Send` futures and impose no executor. The initial
 Argon2id adapter performs CPU-bound work on the polling thread; hosts can wrap
@@ -113,6 +124,14 @@ with explicit handler modules. Utoipa-aware route composition generates the
 OpenAPI 3.1 contract and Swagger uses vendored assets. A server-package library
 target exposes deliberate composition entry points, while the executable retains
 its existing operator CLI. There is no production listener or `serve` yet.
+
+The messaging surface includes authenticated discovery, inbox/detail/member
+queries, Group lifecycle, enriched message history/global items and own read-state
+updates. `HttpState` consumes resolved `MessagePolicy`. `CreateCommandStore`
+atomically joins primary create effects and hashed-key command records; SQLite
+shares transaction-local primitives with ordinary conversation/message storage.
+Replay is current authorized state, not cached transport bytes. See
+[ADR 0011](adr/0011-idempotent-create-commands.md).
 
 HTTP status codes, headers, framework types and error representations never enter
 the reusable engine. Its Argon2 adapter remains runtime-independent; the server's

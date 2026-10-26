@@ -39,6 +39,14 @@ cursor uses the last returned item, not the lookahead row. Other resource lists
 will adopt the same `Page`/`PageRequest` contract when implemented, defining their
 own resource-specific keysets rather than imposing message semantics on them.
 
+Inbox continuations use actor-scoped `(effective activity DESC, ConversationId
+DESC)` keys, preserving timestamp precision. Member continuations use
+conversation-scoped `(joined_at ASC, UserId ASC)` keys and revalidate membership
+on every page. Effective activity is derived, not materialized; mutable activity
+keys do not establish a frozen snapshot across requests. Future filters that
+change result membership must be bound into cursor scope. Message v1 tokens
+remain backward-compatible.
+
 ## Consequences
 
 Callers cannot jump to arbitrary numbered pages or request totals. Indexed

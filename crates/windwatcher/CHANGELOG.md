@@ -7,7 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking:** mark-read outcomes now carry authoritative
+  `ConversationReadState` (effective watermark and unread count), loaded
+  atomically for both advancement and monotonic no-ops.
+
+- **Breaking:** message reads, send/edit/delete results and paginated history now
+  return `MessageView`, with sender username and a shallow current reply preview
+  loaded through SQLite joins, including disabled identities and tombstones.
+
+- **Breaking:** Direct/Group creation and Group-member addition now depend only
+  on `ConversationStore`; unavailable participants are reported semantically.
+  Storage atomically rejects disabled/missing new members while preserving
+  existing Directs and memberships, including idempotent member additions.
+
+- **Breaking:** get/edit/delete message use cases and `MessageStore` item methods
+  now accept globally unique `MessageId` without `ConversationId`. Item outcomes
+  no longer include `ConversationNotFound`; parent deletion yields `MessageNotFound`.
+
 ### Added
+
+- Optional durable create-command deduplication through `IdempotencyKey`,
+  `CreateConversation`, `SendMessageCommand` and `CreateCommandStore`, with
+  semantic fingerprints, hashed keys, 24-hour retention and atomic SQLite
+  resource/record persistence, replay/conflict/deleted-result semantics.
+
+- `MessagingQueryStore`, exact enabled-user discovery and consumer-ready
+  conversation/detail/member projections with bounded snapshot-based SQLite
+  loading, derived activity and actor/conversation-scoped keyset cursors.
+- SQLite migration 0004 with a member-pagination index, without new message
+  indexes or a persisted conversation activity timestamp.
 
 - `GetUser` application lookup by identity ID, independent of authentication and
   authorization and without exposing credentials.

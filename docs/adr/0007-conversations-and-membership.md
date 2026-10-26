@@ -23,9 +23,16 @@ must transfer ownership first.
 or a Unit of Work. SQLite enforces Direct pair uniqueness and at-most-one Owner;
 transactions preserve creation, transfer, and leave lifecycle invariants.
 
+New memberships require existing enabled users atomically at persistence time,
+including the Group Owner. Identity preflights are not sufficient and are removed
+from create/add use cases. Missing and disabled participants share an unavailable
+semantic. Existing Directs and memberships are resolved before eligibility checks;
+later disabling does not invalidate existing membership or idempotent adds.
+
 ## Consequences
 
 Future adapters share domain and application contracts without inheriting SQL
 representations. Direct participants cannot mutate, while Groups can evolve
-without allowing a stable zero- or multi-owner state. Messages and read state
-remain separate future work.
+without allowing a stable zero- or multi-owner state. Message/read-state semantics
+are defined separately in ADR 0008; HTTP and command replay remain transport and
+application concerns rather than additions to conversation identity.
