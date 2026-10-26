@@ -31,7 +31,8 @@ fn grant_response(status: StatusCode, grant: windwatcher::SessionGrant) -> Respo
 #[utoipa::path(post, path = "/sessions", operation_id = "createSession", tag = "Sessions",
     request_body = CreateSessionRequest,
     responses(
-        (status = 201, description = "Session persisted; JSON bearer secrets must not be cached", body = SessionGrantResponse),
+        (status = 201, description = "Session persisted; JSON bearer secrets must not be cached", body = SessionGrantResponse,
+            headers(("Cache-Control" = String, description = "Always no-store; bearer token grants must not be cached."))),
         (status = 400, description = "Invalid JSON structure", body = ProblemDetails, content_type = "application/problem+json"),
         (status = 401, description = "Invalid credentials", body = ProblemDetails, content_type = "application/problem+json"),
         (status = 403, description = "User disabled", body = ProblemDetails, content_type = "application/problem+json"),
@@ -81,7 +82,8 @@ pub(super) async fn create_session(
 #[utoipa::path(post, path = "/sessions/refresh", operation_id = "refreshSession", tag = "Sessions",
     request_body = RefreshSessionRequest,
     responses(
-        (status = 200, description = "Refresh rotated; the old refresh token is immediately invalid", body = SessionGrantResponse),
+        (status = 200, description = "Refresh rotated; the old refresh token is immediately invalid", body = SessionGrantResponse,
+            headers(("Cache-Control" = String, description = "Always no-store; bearer token grants must not be cached."))),
         (status = 400, description = "Invalid JSON structure", body = ProblemDetails, content_type = "application/problem+json"),
         (status = 401, description = "Invalid refresh token", body = ProblemDetails, content_type = "application/problem+json"),
         (status = 413, description = "Body exceeds 2 MiB", body = ProblemDetails, content_type = "application/problem+json"),

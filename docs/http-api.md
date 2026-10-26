@@ -81,6 +81,8 @@ request cancellation does not release a still-running worker's concurrency slot.
 
 All response timestamps are RFC 3339 UTC strings, described as OpenAPI
 `string/date-time`. Domain and SQLite timestamp encodings are not exposed.
+User IDs, session IDs and problem request IDs are described as `string/uuid`;
+OpenAPI does not duplicate UUIDv7 domain validation with a regular expression.
 
 ## Error contract and validation semantics
 
@@ -125,6 +127,13 @@ OpenAPI 3.1 is generated from the same Utoipa-aware composition that registers
 runtime routes. Operation IDs and schema names are intentional public contracts.
 `Users` and `Sessions` tags organize the operations; `bearerAuth` is required only
 for current-user retrieval and current-session deletion.
+
+Response headers are part of the generated contract: every declared response
+includes `X-Request-Id` (UUID), every 401 includes `WWW-Authenticate: Bearer`,
+every 429 includes positive integer `Retry-After` seconds, and successful login
+and refresh responses declare `Cache-Control: no-store`. Common headers are
+applied centrally to the generated responses; grant cache policy remains next
+to its response annotation, without maintaining a separate route registry.
 
 Swagger loads `/openapi/v1.json`. UI assets are vendored and minified: normal
 builds do not download Swagger assets, and the UI does not require a CDN.

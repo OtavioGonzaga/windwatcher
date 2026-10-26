@@ -14,6 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Server-owned transport DTOs, RFC 9457 problems with stable codes, UUIDv7 request
   correlation, bearer extraction, safe structured tracing and no-store grants.
 - Code-first OpenAPI 3.1 at `/openapi/v1.json` and vendored Swagger UI at `/docs`.
+- OpenAPI response-header contracts for correlation IDs, no-store token grants,
+  bearer challenges and retry delays, plus UUID formats for transport IDs.
 - Validated configurable deny-by-default CORS and general/authentication peer-IP
   governor quotas, including `config check` and environment overrides.
 - Bounded Tokio blocking adapter preserving the engine's Argon2 semantics and

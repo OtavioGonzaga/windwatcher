@@ -31,6 +31,7 @@ pub(in crate::http) struct SessionGrantResponse {
     #[serde(with = "time::serde::rfc3339")]
     #[schema(value_type = String, format = DateTime)]
     access_token_expires_at: OffsetDateTime,
+    #[schema(format = Uuid, example = "019a0000-0000-7000-8000-000000000001")]
     session_id: String,
     #[serde(with = "time::serde::rfc3339")]
     #[schema(value_type = String, format = DateTime)]

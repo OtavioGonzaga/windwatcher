@@ -28,7 +28,7 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync"] }
 time = { version = "0.3", features = ["serde", "serde-well-known", "formatting", "parsing"] }
 tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.7", features = ["cors", "trace", "sensitive-headers"] }
-utoipa = { version = "6", features = ["axum_extras", "time"] }
+utoipa = { version = "6", features = ["axum_extras", "time", "uuid"] }
 utoipa-axum = "0.3"
 utoipa-swagger-ui = { version = "10", default-features = false, features = ["axum", "vendored", "minified"] }
 uuid = { version = "1", features = ["v7"] }

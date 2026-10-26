@@ -109,6 +109,15 @@ fn openapi_contract_has_exact_routes_security_schemas_and_statuses() {
     ] {
         assert!(schemas[name].is_object(), "{name}");
     }
+    for (schema, field) in [
+        ("UserResponse", "id"),
+        ("SessionGrantResponse", "session_id"),
+        ("ProblemDetails", "request_id"),
+    ] {
+        assert_eq!(schemas[schema]["properties"][field]["type"], "string");
+        assert_eq!(schemas[schema]["properties"][field]["format"], "uuid");
+        assert!(schemas[schema]["properties"][field]["pattern"].is_null());
+    }
     for (schema, fields) in [
         ("UserResponse", vec!["created_at", "updated_at"]),
         (
@@ -136,6 +145,57 @@ fn openapi_contract_has_exact_routes_security_schemas_and_statuses() {
             .unwrap()
             .contains_key("/openapi/v1.json")
     );
+}
+
+#[test]
+fn openapi_contract_documents_runtime_headers_on_every_response() {
+    let spec = serde_json::to_value(windwatcher_server::http::openapi()).unwrap();
+    let mut grants = 0;
+    for path in spec["paths"].as_object().unwrap().values() {
+        for operation in path.as_object().unwrap().values() {
+            let id = operation["operationId"].as_str().unwrap();
+            for (status, response) in operation["responses"].as_object().unwrap() {
+                let headers = &response["headers"];
+                let request_id = &headers["X-Request-Id"];
+                assert_eq!(request_id["schema"]["type"], "string", "{id} {status}");
+                assert_eq!(request_id["schema"]["format"], "uuid", "{id} {status}");
+                assert!(!request_id["description"].as_str().unwrap().is_empty());
+                if status == "401" {
+                    assert_eq!(headers["WWW-Authenticate"]["schema"]["type"], "string");
+                    assert_eq!(
+                        headers["WWW-Authenticate"]["schema"]["enum"],
+                        json!(["Bearer"])
+                    );
+                    assert_eq!(headers["WWW-Authenticate"]["example"], "Bearer");
+                } else {
+                    assert!(headers["WWW-Authenticate"].is_null(), "{id} {status}");
+                }
+                if status == "429" {
+                    assert_eq!(headers["Retry-After"]["schema"]["type"], "integer");
+                    assert_eq!(headers["Retry-After"]["schema"]["minimum"], 1);
+                    assert_eq!(headers["Retry-After"]["example"], 1);
+                } else {
+                    assert!(headers["Retry-After"].is_null(), "{id} {status}");
+                }
+                if matches!(
+                    (id, status.as_str()),
+                    ("createSession", "201") | ("refreshSession", "200")
+                ) {
+                    grants += 1;
+                    assert_eq!(headers["Cache-Control"]["schema"]["type"], "string");
+                    assert!(
+                        headers["Cache-Control"]["description"]
+                            .as_str()
+                            .unwrap()
+                            .contains("no-store")
+                    );
+                } else {
+                    assert!(headers["Cache-Control"].is_null(), "{id} {status}");
+                }
+            }
+        }
+    }
+    assert_eq!(grants, 2);
 }
 
 #[tokio::test]

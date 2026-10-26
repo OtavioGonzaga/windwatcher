@@ -15,7 +15,7 @@ pub(in crate::http) struct RegisterUserRequest {
 
 #[derive(Serialize, ToSchema)]
 pub(in crate::http) struct UserResponse {
-    #[schema(example = "019a0000-0000-7000-8000-000000000001")]
+    #[schema(format = Uuid, example = "019a0000-0000-7000-8000-000000000001")]
     id: String,
     #[schema(example = "alice")]
     username: String,

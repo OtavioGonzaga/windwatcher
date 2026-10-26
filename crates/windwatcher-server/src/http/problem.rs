@@ -22,7 +22,7 @@ pub(super) struct ProblemDetails {
     detail: &'static str,
     #[schema(example = "auth.invalid_credentials")]
     code: &'static str,
-    #[schema(example = "019a0000-0000-7000-8000-000000000001")]
+    #[schema(format = Uuid, example = "019a0000-0000-7000-8000-000000000001")]
     request_id: String,
 }
 
