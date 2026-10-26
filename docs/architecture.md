@@ -125,6 +125,14 @@ OpenAPI 3.1 contract and Swagger uses vendored assets. A server-package library
 target exposes deliberate composition entry points, while the executable retains
 its existing operator CLI. There is no production listener or `serve` yet.
 
+The messaging surface includes authenticated discovery, inbox/detail/member
+queries, Group lifecycle, enriched message history/global items and own read-state
+updates. `HttpState` consumes resolved `MessagePolicy`. `CreateCommandStore`
+atomically joins primary create effects and hashed-key command records; SQLite
+shares transaction-local primitives with ordinary conversation/message storage.
+Replay is current authorized state, not cached transport bytes. See
+[ADR 0011](adr/0011-idempotent-create-commands.md).
+
 HTTP status codes, headers, framework types and error representations never enter
 the reusable engine. Its Argon2 adapter remains runtime-independent; the server's
 bounded blocking wrapper handles HTTP hashing/verification. See [HTTP API](http-api.md)

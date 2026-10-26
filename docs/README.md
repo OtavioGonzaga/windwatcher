@@ -6,7 +6,12 @@
   and storage/password port contracts.
 - [Sessions and tokens](sessions.md): session lifecycle and token contracts.
 - [HTTP API](http-api.md): v1 transport contracts, authentication, errors,
-  OpenAPI/Swagger, CORS and peer-IP quotas (router only; no serving runtime yet).
+  messaging client journey, pagination/idempotency, OpenAPI/Swagger, CORS and
+  peer-IP quotas (router only; no serving runtime yet).
+- [Conversations](conversations.md): membership, consumer inbox queries and activity.
+- [Messages](messages.md): message projections, replies, tombstones and own read state.
+- [Pagination](pagination.md): opaque resource-scoped keyset continuations.
+- [Persistence](persistence.md): semantic ports, SQLite snapshots and atomic commands.
 - [Server configuration](server-configuration.md): operational configuration,
   paths, secrets, and logging.
 - [CLI](cli.md): explicit migration and user-provisioning commands.

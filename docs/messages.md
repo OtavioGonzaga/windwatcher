@@ -138,8 +138,9 @@ messages, including reply relationships. See [persistence](persistence.md) and
 
 ## Current limitations
 
-This delivery has no HTTP, realtime, events, queues, attachments, reactions, threads,
+This delivery has no realtime, events, queues, attachments, reactions, threads,
 search, edit history, undelete or message purge.
+The [HTTP API](http-api.md) exposes the messaging journey without a listener.
 
 ## Paginated history
 

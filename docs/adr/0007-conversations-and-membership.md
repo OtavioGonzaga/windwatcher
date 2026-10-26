@@ -33,5 +33,6 @@ later disabling does not invalidate existing membership or idempotent adds.
 
 Future adapters share domain and application contracts without inheriting SQL
 representations. Direct participants cannot mutate, while Groups can evolve
-without allowing a stable zero- or multi-owner state. Messages and read state
-remain separate future work.
+without allowing a stable zero- or multi-owner state. Message/read-state semantics
+are defined separately in ADR 0008; HTTP and command replay remain transport and
+application concerns rather than additions to conversation identity.

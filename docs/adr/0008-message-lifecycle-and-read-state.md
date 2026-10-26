@@ -67,5 +67,6 @@ representations or runtime types. Tombstones preserve structural history and
 future paginated lists must include them. UUIDv7 avoids coordinated sequences
 with explicitly bounded ordering guarantees. SQLite write contention can still
 surface as normalized unavailability; correctness does not depend on workers or
-notifications. Pagination, HTTP, events, realtime, retention and attachments
-remain separate deliveries.
+notifications. Pagination and HTTP are defined separately in ADRs 0009/0010;
+persisted create-command replay is defined in ADR 0011. Events, realtime,
+message retention and attachments remain separate deliveries.
