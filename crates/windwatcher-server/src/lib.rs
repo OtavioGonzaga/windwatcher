@@ -17,7 +17,7 @@ use clap::Parser;
 use cli::{Cli, Command, MigrateCommand};
 use error::AppError;
 use paths::{ResolvedPaths, RuntimeMode};
-use storage::Storage;
+pub use storage::Storage;
 
 /// Runs the operator CLI, reporting safe errors and exiting unsuccessfully on failure.
 pub async fn run_cli() {
