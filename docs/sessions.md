@@ -77,6 +77,16 @@ routes until expiration. Repeated deletion, including an absent session, is 204.
 `GET /v1/users/me` uses `GetUser`, may return a disabled identity during that
 window, and maps a missing identity to an invalid access principal (401).
 
-SQLite session insertion atomically requires a currently enabled persisted owner.
-This closes the race where an authenticated `User` snapshot predates disabling;
-the adapter reports `SessionStoreError::Conflict` without creating a session.
+`SessionStore::create_session` atomically requires a currently enabled persisted
+owner, even if the authenticated `User` snapshot predates disabling or deletion.
+Every adapter must return `OwnerDisabled` or `OwnerNotFound` according to the
+same atomic snapshot that permits insertion, persisting neither session nor
+refresh fingerprint on rejection. Genuine persistence/uniqueness conflicts
+remain `Conflict`; callers must not reconstruct owner state with a later lookup.
+The portable session-store contract covers both owner rejections and genuine
+conflicts. SQLite implements the check and insert under one immediate transaction.
+
+`CreateSession` maps these owner rejections to `UserDisabled` and `UserNotFound`.
+HTTP handles only these application errors (403 disabled or 401 invalid
+credentials); it has no knowledge of SQLite error conventions. A subsequent
+re-enable cannot change the already-classified rejection into an internal error.

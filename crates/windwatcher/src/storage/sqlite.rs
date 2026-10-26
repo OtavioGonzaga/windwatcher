@@ -548,19 +548,33 @@ impl SessionStore for SqliteStorage {
         session: &Session,
         hash: &RefreshTokenHash,
     ) -> Result<(), SessionStoreError> {
-        // A user may have been disabled after credential authentication. The
-        // condition and insertion share one SQLite statement/write snapshot.
-        let result = sqlx::query("INSERT INTO sessions (id, user_id, refresh_token_hash, created_at, expires_at, revoked_at) SELECT ?, ?, ?, ?, ?, ? FROM users WHERE id = ? AND disabled_at IS NULL")
+        // Classify owner rejection and insert under the same write lock. No
+        // re-enable/delete can change the meaning between these operations.
+        let mut transaction = self
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .map_err(session_error)?;
+        let owner = sqlx::query("SELECT disabled_at FROM users WHERE id = ?")
+            .bind(id_bytes(session.user_id()))
+            .fetch_optional(&mut *transaction)
+            .await
+            .map_err(session_error)?
+            .ok_or(SessionStoreError::OwnerNotFound)?;
+        if owner
+            .try_get::<Option<i64>, _>("disabled_at")
+            .map_err(session_error)?
+            .is_some()
+        {
+            return Err(SessionStoreError::OwnerDisabled);
+        }
+        sqlx::query("INSERT INTO sessions (id, user_id, refresh_token_hash, created_at, expires_at, revoked_at) VALUES (?, ?, ?, ?, ?, ?)")
             .bind(id_bytes(session.id())).bind(id_bytes(session.user_id())).bind(hash.as_bytes().to_vec())
             .bind(to_micros(session.created_at()).map_err(unexpected_session)?)
             .bind(to_micros(session.expires_at()).map_err(unexpected_session)?)
             .bind(session.revoked_at().map(to_micros).transpose().map_err(unexpected_session)?)
-            .bind(id_bytes(session.user_id()))
-            .execute(&self.pool).await.map_err(session_error)?;
-        if result.rows_affected() == 0 {
-            return Err(SessionStoreError::Conflict);
-        }
-        Ok(())
+            .execute(&mut *transaction).await.map_err(session_error)?;
+        transaction.commit().await.map_err(session_error)
     }
     async fn find_by_refresh_token_hash(
         &self,

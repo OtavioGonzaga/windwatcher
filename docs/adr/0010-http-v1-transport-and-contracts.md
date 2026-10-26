@@ -19,9 +19,12 @@ CLI command, listener, broad dead-code suppression or a second reusable domain.
 
 Expose only registration, session creation/refresh/current revocation and current
 identity. `GetUser` is the reusable identity lookup, without authorization.
-The existing SQLite session INSERT additionally checks the persisted owner's
-enabled state atomically, preventing a real disable-between-auth-and-create race
-without changing the port API or adding a migration.
+The session-store port requires an atomic persisted-owner check at creation and
+reports missing/disabled owners semantically, separately from persistence
+conflicts. `CreateSession` maps those rejections to application errors; HTTP does
+not infer storage semantics or reread identity state. SQLite checks and inserts
+under one immediate transaction, preventing a disable-between-auth-and-create
+race without a migration. The portable adapter contract verifies these outcomes.
 
 Use JSON bearer transport without cookies. Verify access claims without a storage
 lookup on every request; revocation blocks refresh, not already-issued JWTs.

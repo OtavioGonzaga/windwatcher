@@ -11,6 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `GetUser` application lookup by identity ID, independent of authentication and
   authorization and without exposing credentials.
+- Semantic `SessionStoreError::OwnerDisabled`/`OwnerNotFound` creation rejections
+  and `CreateSessionError::UserNotFound`, with atomic owner validation required
+  by the portable adapter contract rather than backend-specific conflict inference.
 
 - Reusable opaque cursor pagination with `PageRequest`, `Page<T>`, and validated
   `PageLimit` (default 50, maximum 100).

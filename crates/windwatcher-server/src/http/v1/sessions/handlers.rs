@@ -14,9 +14,9 @@ use axum::{
 };
 use time::OffsetDateTime;
 use windwatcher::{
-    AuthenticateLocalUser, AuthenticateLocalUserError, CreateSession, CreateSessionError, GetUser,
-    GetUserError, RefreshSession, RefreshSessionError, RefreshToken, RevokeSession,
-    RevokeSessionError, SecretPassword, SessionStoreError,
+    AuthenticateLocalUser, AuthenticateLocalUserError, CreateSession, CreateSessionError,
+    RefreshSession, RefreshSessionError, RefreshToken, RevokeSession, RevokeSessionError,
+    SecretPassword,
 };
 
 fn grant_response(status: StatusCode, grant: windwatcher::SessionGrant) -> Response {
@@ -59,36 +59,21 @@ pub(super) async fn create_session(
             }
             _ => ApiProblem::internal(context, &error),
         })?;
-    let result = CreateSession::new(
+    let grant = CreateSession::new(
         &state.storage,
         state.refresh_tokens.as_ref(),
         state.codec.as_ref(),
         state.session,
     )
     .execute(&user, OffsetDateTime::now_utc())
-    .await;
-    let grant = match result {
-        Ok(grant) => grant,
-        Err(CreateSessionError::UserDisabled) => {
-            return Err(ApiProblem::new(ProblemKind::UserDisabled, context));
+    .await
+    .map_err(|error| match error {
+        CreateSessionError::UserDisabled => ApiProblem::new(ProblemKind::UserDisabled, context),
+        CreateSessionError::UserNotFound => {
+            ApiProblem::new(ProblemKind::InvalidCredentials, context)
         }
-        Err(error @ CreateSessionError::Storage(SessionStoreError::Conflict)) => {
-            // SQLite atomically rejects an owner disabled/deleted since authentication.
-            return Err(
-                match GetUser::new(&state.storage).execute(user.id()).await {
-                    Ok(current) if current.is_disabled() => {
-                        ApiProblem::new(ProblemKind::UserDisabled, context)
-                    }
-                    Err(GetUserError::UserNotFound) => {
-                        ApiProblem::new(ProblemKind::InvalidCredentials, context)
-                    }
-                    Err(lookup) => ApiProblem::internal(context, &lookup),
-                    _ => ApiProblem::internal(context, &error),
-                },
-            );
-        }
-        Err(error) => return Err(ApiProblem::internal(context, &error)),
-    };
+        _ => ApiProblem::internal(context, &error),
+    })?;
     tracing::info!(user_id = %user.id(), session_id = %grant.session().id(), "session_created");
     Ok(grant_response(StatusCode::CREATED, grant))
 }
