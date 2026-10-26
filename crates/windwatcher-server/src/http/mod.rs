@@ -3,6 +3,7 @@
 mod auth;
 mod extract;
 mod middleware;
+mod openapi;
 mod problem;
 mod state;
 mod v1;
@@ -85,8 +86,10 @@ fn routes(config: &ResolvedHttpConfig) -> OpenApiRouter<HttpState> {
 /// When limiting is enabled, serving must install `ConnectInfo<SocketAddr>` using
 /// Axum's connect-info make-service; forwarded headers are deliberately ignored.
 pub fn router(state: HttpState, config: ResolvedHttpConfig) -> Router {
-    let (router, _) = routes(&config).split_for_parts();
-    router.fallback(not_found).with_state(state)
+    let (router, spec) = routes(&config).split_for_parts();
+    router
+        .merge(utoipa_swagger_ui::SwaggerUi::new("/docs").url("/openapi/v1.json", openapi::finish(spec)))
+        .fallback(not_found).with_state(state)
         .layer(SetSensitiveResponseHeadersLayer::new([header::SET_COOKIE]))
         .layer(TraceLayer::new_for_http()
             .make_span_with(|request: &Request<Body>| {
@@ -101,4 +104,16 @@ pub fn router(state: HttpState, config: ResolvedHttpConfig) -> Router {
             }))
         .layer(SetSensitiveRequestHeadersLayer::new([header::AUTHORIZATION, header::COOKIE]))
         .layer(axum_middleware::from_fn(assign))
+}
+
+/// Generates the same v1 contract registered by the HTTP router, without I/O.
+pub fn openapi() -> utoipa::openapi::OpenApi {
+    openapi::finish(
+        routes(
+            &crate::RawHttp::default()
+                .resolve()
+                .expect("valid built-in HTTP config"),
+        )
+        .into_openapi(),
+    )
 }

@@ -13,6 +13,208 @@ use windwatcher::{
     UserId,
 };
 
+#[test]
+fn openapi_contract_has_exact_routes_security_schemas_and_statuses() {
+    let spec = windwatcher_server::http::openapi();
+    let encoded = serde_json::to_vec(&spec).unwrap();
+    let doc: serde_json::Value = serde_json::from_slice(&encoded).unwrap();
+    assert_eq!(doc["openapi"], "3.1.0");
+    assert_eq!(doc["info"]["title"], "Windwatcher API");
+    assert_eq!(doc["info"]["version"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(doc["paths"].as_object().unwrap().len(), 5);
+    let mut ids = std::collections::HashSet::new();
+    for (path, method, id, tag, protected, statuses) in [
+        (
+            "/v1/users",
+            "post",
+            "registerUser",
+            "Users",
+            false,
+            vec![
+                "201", "400", "403", "409", "413", "415", "422", "429", "500",
+            ],
+        ),
+        (
+            "/v1/sessions",
+            "post",
+            "createSession",
+            "Sessions",
+            false,
+            vec!["201", "400", "401", "403", "413", "415", "429", "500"],
+        ),
+        (
+            "/v1/sessions/refresh",
+            "post",
+            "refreshSession",
+            "Sessions",
+            false,
+            vec!["200", "400", "401", "413", "415", "429", "500"],
+        ),
+        (
+            "/v1/sessions/current",
+            "delete",
+            "revokeCurrentSession",
+            "Sessions",
+            true,
+            vec!["204", "401", "429", "500"],
+        ),
+        (
+            "/v1/users/me",
+            "get",
+            "getCurrentUser",
+            "Users",
+            true,
+            vec!["200", "401", "429", "500"],
+        ),
+    ] {
+        let item = &doc["paths"][path];
+        assert_eq!(item.as_object().unwrap().len(), 1);
+        let operation = &item[method];
+        assert_eq!(operation["operationId"], id);
+        assert!(ids.insert(operation["operationId"].as_str().unwrap()));
+        assert_eq!(operation["tags"], json!([tag]));
+        if protected {
+            assert_eq!(operation["security"], json!([{"bearerAuth":[]}]))
+        } else {
+            assert!(operation["security"].is_null() || operation["security"] == json!([]));
+        }
+        assert_eq!(
+            operation["responses"].as_object().unwrap().len(),
+            statuses.len()
+        );
+        for status in statuses {
+            let response = &operation["responses"][status];
+            assert!(!response.is_null());
+            if status.starts_with('4') || status.starts_with('5') {
+                assert_eq!(
+                    response["content"]["application/problem+json"]["schema"]["$ref"],
+                    "#/components/schemas/ProblemDetails"
+                );
+                assert!(response["content"]["application/json"].is_null());
+            }
+        }
+    }
+    assert_eq!(
+        doc["components"]["securitySchemes"]["bearerAuth"],
+        json!({"type":"http", "scheme":"bearer", "bearerFormat":"JWT"})
+    );
+    let schemas = &doc["components"]["schemas"];
+    for name in [
+        "RegisterUserRequest",
+        "UserResponse",
+        "CreateSessionRequest",
+        "RefreshSessionRequest",
+        "SessionGrantResponse",
+        "ProblemDetails",
+    ] {
+        assert!(schemas[name].is_object(), "{name}");
+    }
+    for (schema, fields) in [
+        ("UserResponse", vec!["created_at", "updated_at"]),
+        (
+            "SessionGrantResponse",
+            vec!["access_token_expires_at", "session_expires_at"],
+        ),
+    ] {
+        for field in fields {
+            assert_eq!(schemas[schema]["properties"][field]["type"], "string");
+            assert_eq!(schemas[schema]["properties"][field]["format"], "date-time");
+        }
+    }
+    for field in ["type", "title", "status", "detail", "code", "request_id"] {
+        assert!(
+            schemas["ProblemDetails"]["required"]
+                .as_array()
+                .unwrap()
+                .contains(&json!(field))
+        );
+    }
+    assert!(!doc["paths"].as_object().unwrap().contains_key("/docs"));
+    assert!(
+        !doc["paths"]
+            .as_object()
+            .unwrap()
+            .contains_key("/openapi/v1.json")
+    );
+}
+
+#[tokio::test]
+async fn documentation_uses_generated_contract_and_local_assets_without_api_quotas() {
+    use tower::ServiceExt;
+    let mut cfg = config();
+    cfg.rate_limit.enabled = true;
+    cfg.rate_limit.general.burst = 1;
+    cfg.rate_limit.general.period = "1h".into();
+    cfg.rate_limit.auth.burst = 1;
+    cfg.cors.allowed_origins = vec!["*".into()];
+    let fixture = Fixture::new(cfg, RegistrationPolicy::Closed, true).await;
+    for _ in 0..3 {
+        // No peer information: documentation is outside the API limiter and CORS.
+        let request = Request::builder()
+            .uri("/openapi/v1.json")
+            .header("origin", "https://other.example")
+            .body(Body::empty())
+            .unwrap();
+        let response = fixture.router.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(response.headers().contains_key("x-request-id"));
+        assert!(
+            !response
+                .headers()
+                .contains_key("access-control-allow-origin")
+        );
+        let bytes = axum::body::to_bytes(response.into_body(), 4 * 1024 * 1024)
+            .await
+            .unwrap();
+        let served: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(
+            served,
+            serde_json::to_value(windwatcher_server::http::openapi()).unwrap()
+        );
+    }
+    for path in [
+        "/docs",
+        "/docs/",
+        "/docs/swagger-ui-bundle.js",
+        "/docs/swagger-initializer.js",
+    ] {
+        let response = fixture
+            .router
+            .clone()
+            .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert!(response.headers().contains_key("x-request-id"));
+        if path == "/docs" && response.status().is_redirection() {
+            assert_eq!(response.headers()["location"], "/docs/");
+            continue;
+        }
+        assert_eq!(response.status(), StatusCode::OK, "{path}");
+        let bytes = axum::body::to_bytes(response.into_body(), 8 * 1024 * 1024)
+            .await
+            .unwrap();
+        assert!(!bytes.is_empty());
+        if path.ends_with("swagger-initializer.js") {
+            let text = std::str::from_utf8(&bytes).unwrap();
+            assert!(text.contains("/openapi/v1.json"));
+        }
+    }
+    // Documentation did not spend the single general or auth request.
+    problem(
+        &send(
+            &fixture.router,
+            command(
+                "POST",
+                "/v1/users",
+                json!({"username":"alice", "password":"test password"}),
+            ),
+        )
+        .await,
+        403,
+        "registration.closed",
+    );
+}
+
 #[tokio::test]
 async fn registration_semantics_and_transport_rejections() {
     let fixture = Fixture::open().await;
