@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking:** message reads, send/edit/delete results and paginated history now
+  return `MessageView`, with sender username and a shallow current reply preview
+  loaded through SQLite joins, including disabled identities and tombstones.
+
 - **Breaking:** Direct/Group creation and Group-member addition now depend only
   on `ConversationStore`; unavailable participants are reported semantically.
   Storage atomically rejects disabled/missing new members while preserving

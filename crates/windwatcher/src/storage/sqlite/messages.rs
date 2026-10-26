@@ -7,8 +7,8 @@ use super::{Corrupt, SqliteStorage, from_micros, id_bytes, to_micros, unavailabl
 use crate::{
     ConversationId, DeleteMessageStoreOutcome as Delete, EditMessageStoreOutcome as Edit,
     GetMessageStoreOutcome as Get, MarkReadStoreOutcome as Read, Message, MessageContent,
-    MessageId, MessageStore, MessageStoreError, SendMessageStoreOutcome as Send,
-    UnreadCountStoreOutcome as Unread, UserId,
+    MessageId, MessageStore, MessageStoreError, MessageView, ReplyPreview,
+    SendMessageStoreOutcome as Send, UnreadCountStoreOutcome as Unread, UserId, UserSummary,
 };
 
 fn unexpected(message: &'static str) -> MessageStoreError {
@@ -72,6 +72,56 @@ fn read_message(row: &SqliteRow) -> Result<Message, MessageStoreError> {
     .map_err(|_| unexpected("invalid persisted message state"))
 }
 
+pub(super) const VIEW_SELECT: &str = "SELECT msg.id, msg.conversation_id, msg.sender_id, msg.content, msg.reply_to_message_id, msg.created_at, msg.edited_at, msg.deleted_at, sender.username AS sender_username, reply.sender_id AS reply_sender_id, reply_sender.username AS reply_sender_username, reply.content AS reply_content, reply.deleted_at AS reply_deleted_at FROM messages msg JOIN users sender ON sender.id = msg.sender_id LEFT JOIN messages reply ON reply.conversation_id = msg.conversation_id AND reply.id = msg.reply_to_message_id LEFT JOIN users reply_sender ON reply_sender.id = reply.sender_id";
+
+fn view_query() -> sqlx::QueryBuilder<sqlx::Sqlite> {
+    sqlx::QueryBuilder::new(VIEW_SELECT)
+}
+
+pub(super) fn read_view(row: &SqliteRow) -> Result<MessageView, MessageStoreError> {
+    let message = read_message(row)?;
+    let username = |column| -> Result<crate::Username, MessageStoreError> {
+        row.try_get::<String, _>(column)
+            .map_err(storage_error)?
+            .parse()
+            .map_err(|_| unexpected("invalid projected username"))
+    };
+    let reply_to = message
+        .reply_to_message_id()
+        .map(|id| {
+            let content = row
+                .try_get::<Option<String>, _>("reply_content")
+                .map_err(storage_error)?
+                .map(MessageContent::new)
+                .transpose()
+                .map_err(|_| unexpected("invalid reply content"))?;
+            let deleted_at = row
+                .try_get::<Option<i64>, _>("reply_deleted_at")
+                .map_err(storage_error)?
+                .map(from_micros)
+                .transpose()
+                .map_err(unexpected)?;
+            if content.is_some() == deleted_at.is_some() {
+                return Err(unexpected("invalid reply tombstone"));
+            }
+            Ok(ReplyPreview {
+                id,
+                sender: UserSummary {
+                    id: identifier(row.try_get("reply_sender_id").map_err(storage_error)?)?,
+                    username: username("reply_sender_username")?,
+                },
+                content,
+                deleted_at,
+            })
+        })
+        .transpose()?;
+    Ok(MessageView {
+        message,
+        sender_username: username("sender_username")?,
+        reply_to,
+    })
+}
+
 enum Access {
     ConversationNotFound,
     NotMember,
@@ -109,10 +159,18 @@ async fn find(
     conn: &mut SqliteConnection,
     conversation: ConversationId,
     message: MessageId,
-) -> Result<Option<Message>, MessageStoreError> {
-    sqlx::query("SELECT id, conversation_id, sender_id, content, reply_to_message_id, created_at, edited_at, deleted_at FROM messages WHERE conversation_id = ? AND id = ?")
-        .bind(id_bytes(conversation)).bind(id_bytes(message)).fetch_optional(conn).await.map_err(storage_error)?
-        .map(|row| read_message(&row)).transpose()
+) -> Result<Option<MessageView>, MessageStoreError> {
+    view_query()
+        .push(" WHERE msg.conversation_id = ")
+        .push_bind(id_bytes(conversation))
+        .push(" AND msg.id = ")
+        .push_bind(id_bytes(message))
+        .build()
+        .fetch_optional(conn)
+        .await
+        .map_err(storage_error)?
+        .map(|row| read_view(&row))
+        .transpose()
 }
 
 // Global item resolution shares the caller's read snapshot or write lock with
@@ -120,10 +178,16 @@ async fn find(
 async fn find_global(
     conn: &mut SqliteConnection,
     message: MessageId,
-) -> Result<Option<Message>, MessageStoreError> {
-    sqlx::query("SELECT id, conversation_id, sender_id, content, reply_to_message_id, created_at, edited_at, deleted_at FROM messages WHERE id = ?")
-        .bind(id_bytes(message)).fetch_optional(conn).await.map_err(storage_error)?
-        .map(|row| read_message(&row)).transpose()
+) -> Result<Option<MessageView>, MessageStoreError> {
+    view_query()
+        .push(" WHERE msg.id = ")
+        .push_bind(id_bytes(message))
+        .build()
+        .fetch_optional(conn)
+        .await
+        .map_err(storage_error)?
+        .map(|row| read_view(&row))
+        .transpose()
 }
 
 impl MessageStore for SqliteStorage {
@@ -142,19 +206,33 @@ impl MessageStore for SqliteStorage {
         }
         let count = (limit.get() + 1) as i64;
         let rows = if let Some(boundary) = before {
-            sqlx::query("SELECT id, conversation_id, sender_id, content, reply_to_message_id, created_at, edited_at, deleted_at FROM messages WHERE conversation_id = ? AND id < ? ORDER BY id DESC LIMIT ?")
-                .bind(id_bytes(conversation)).bind(id_bytes(boundary)).bind(count)
-                .fetch_all(&mut *tx).await.map_err(storage_error)?
+            view_query()
+                .push(" WHERE msg.conversation_id = ")
+                .push_bind(id_bytes(conversation))
+                .push(" AND msg.id < ")
+                .push_bind(id_bytes(boundary))
+                .push(" ORDER BY msg.id DESC LIMIT ")
+                .push_bind(count)
+                .build()
+                .fetch_all(&mut *tx)
+                .await
+                .map_err(storage_error)?
         } else {
-            sqlx::query("SELECT id, conversation_id, sender_id, content, reply_to_message_id, created_at, edited_at, deleted_at FROM messages WHERE conversation_id = ? ORDER BY id DESC LIMIT ?")
-                .bind(id_bytes(conversation)).bind(count)
-                .fetch_all(&mut *tx).await.map_err(storage_error)?
+            view_query()
+                .push(" WHERE msg.conversation_id = ")
+                .push_bind(id_bytes(conversation))
+                .push(" ORDER BY msg.id DESC LIMIT ")
+                .push_bind(count)
+                .build()
+                .fetch_all(&mut *tx)
+                .await
+                .map_err(storage_error)?
         };
         let has_more = rows.len() > limit.get();
         let items = rows
             .iter()
             .take(limit.get())
-            .map(read_message)
+            .map(read_view)
             .collect::<Result<Vec<_>, _>>()?;
         tx.commit().await.map_err(storage_error)?;
         Ok(List::Page(MessagePageSlice { items, has_more }))

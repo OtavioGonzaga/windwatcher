@@ -41,6 +41,11 @@ redundant conversation argument. Persistence resolves the parent and authorizes
 within the same snapshot/transaction. Their not-found outcome is message-specific;
 conversation cascading deletion also removes the message.
 
+`MessageView` enriches read/mutation results with the current sender username and
+shallow reply target state in the same logical persistence operation. Disabled
+identities remain attributable and reply tombstones remain visible. Projection
+fields are not persisted in the domain entity and replies never recurse.
+
 Read state belongs to membership as `last_read_message_id`. Explicit read markers
 are monotonic and may point to tombstones. Sending does not advance read state.
 Own messages and tombstones are excluded from unread. Unread count is derived

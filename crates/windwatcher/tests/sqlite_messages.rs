@@ -64,11 +64,38 @@ async fn fixture() -> Fixture {
     }
 }
 
-async fn send(f: &Fixture, reply: Option<MessageId>) -> Message {
+async fn send(f: &Fixture, reply: Option<MessageId>) -> MessageView {
     SendMessage::new(&f.store, &MessagePolicy::default())
         .execute(f.owner, f.conversation, "message", reply, now())
         .await
         .unwrap()
+}
+
+#[tokio::test]
+async fn message_views_enrich_current_shallow_replies_and_disabled_senders() {
+    let f = fixture().await;
+    let original = send(&f, None).await;
+    assert_eq!(original.sender_username.as_str(), "owner");
+    assert!(original.reply_to.is_none());
+    let reply = send(&f, Some(original.id())).await;
+    let preview = reply.reply_to.as_ref().unwrap();
+    assert_eq!(preview.id, original.id());
+    assert_eq!(preview.sender.id, f.owner);
+    assert_eq!(preview.sender.username.as_str(), "owner");
+    assert_eq!(preview.content.as_ref(), original.content());
+    let nested = send(&f, Some(reply.id())).await;
+    assert_eq!(nested.reply_to.as_ref().unwrap().id, reply.id());
+    sqlx::query("UPDATE users SET disabled_at = 1 WHERE id = ?")
+        .bind(bytes(f.owner))
+        .execute(&f.pool)
+        .await
+        .unwrap();
+    let loaded = GetMessage::new(&f.store)
+        .execute(f.peer, nested.id())
+        .await
+        .unwrap();
+    assert_eq!(loaded.sender_username.as_str(), "owner");
+    assert_eq!(loaded.reply_to.unwrap().sender.username.as_str(), "owner");
 }
 
 #[tokio::test]
@@ -297,7 +324,7 @@ async fn blob_order_matches_message_id_ord_and_read_queries() {
         panic!("expected page")
     };
     assert_eq!(
-        page.items.iter().map(Message::id).collect::<Vec<_>>(),
+        page.items.iter().map(|m| m.id()).collect::<Vec<_>>(),
         ids.iter().rev().copied().collect::<Vec<_>>()
     );
     let ListMessagesStoreOutcome::Page(page) = f
@@ -370,10 +397,13 @@ async fn reply_delete_edit_and_read_races_preserve_invariants() {
         match reply_result.unwrap() {
             SendMessageStoreOutcome::Sent(persisted) => {
                 assert_eq!(persisted.reply_to_message_id(), Some(target.id()));
-                assert_eq!(
-                    f.store.get_message(f.owner, persisted.id()).await.unwrap(),
-                    GetMessageStoreOutcome::Found(persisted)
-                );
+                let loaded = match f.store.get_message(f.owner, persisted.id()).await.unwrap() {
+                    GetMessageStoreOutcome::Found(view) => view,
+                    outcome => panic!("unexpected reply result: {outcome:?}"),
+                };
+                assert_eq!(loaded.message, persisted.message);
+                assert!(loaded.reply_to.as_ref().unwrap().content.is_none());
+                assert!(loaded.reply_to.as_ref().unwrap().deleted_at.is_some());
             }
             SendMessageStoreOutcome::ReplyTargetDeleted => {
                 assert_eq!(

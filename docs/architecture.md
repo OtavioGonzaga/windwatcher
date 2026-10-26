@@ -77,7 +77,7 @@ application pagination infrastructure. `ListMessages` is the first consumer:
 
 ```text
 ListMessages → decode/validate opaque cursor → MessageStore keyset query
-            → encode next cursor → Page<Message> (newest first)
+            → encode next cursor → Page<MessageView> (newest first)
 ```
 
 Only the application knows cursor encoding. The persistence port receives a
@@ -86,6 +86,11 @@ lookahead information. Ordering remains resource-specific, while representation
 is reusable. Authorization is independent of cursor possession and shares the
 storage read snapshot. See [pagination](pagination.md) and
 [ADR 0009](adr/0009-opaque-keyset-pagination.md).
+
+Message operations return application read projections containing sender username
+and a shallow current reply preview. SQLite joins attribution and reply state in
+the same snapshot/transaction as the message operation; `Message` itself remains
+unchanged and transport-independent.
 
 Ports return native Rust `Send` futures and impose no executor. The initial
 Argon2id adapter performs CPU-bound work on the polling thread; hosts can wrap

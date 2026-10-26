@@ -38,6 +38,12 @@ advances the sender's read marker and never changes conversation metadata time.
 
 ## Replies
 
+Send/get/edit/delete and paginated history return `MessageView`: the domain
+message, sender username and an optional shallow `ReplyPreview`. These are
+projections loaded together, without per-message identity lookups. Disabled
+senders retain their username. Reply previews show the target's current text or
+content-free tombstone, and never contain another nested reply.
+
 A new reply must target an existing active message in the same conversation.
 Missing or cross-conversation targets are unavailable; a tombstone cannot receive
 new replies. Storage enforces this atomically with insertion, including against
@@ -132,7 +138,7 @@ search, edit history, undelete or message purge.
 ## Paginated history
 
 `ListMessages::new(&storage).execute(actor, conversation_id, PageRequest::default())`
-returns `Page<Message>` newest-first by UUIDv7 `MessageId::Ord`. Active messages
+returns `Page<MessageView>` newest-first by UUIDv7 `MessageId::Ord`. Active messages
 and tombstones both appear. `next_cursor()` continues toward older history using
 `PageRequest::new(limit).with_cursor(cursor)`; the last page has no cursor even
 when exactly full. Listing does not mark read or apply the current write policy.

@@ -2,13 +2,13 @@ use std::{error::Error, future::Future};
 
 use time::OffsetDateTime;
 
-use crate::{ConversationId, Message, MessageContent, MessageId, PageLimit, UserId};
+use crate::{ConversationId, Message, MessageContent, MessageId, MessageView, PageLimit, UserId};
 
 /// A bounded, strictly descending message slice, including tombstones.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MessagePageSlice {
     /// At most the requested limit, all belonging to the requested conversation.
-    pub items: Vec<Message>,
+    pub items: Vec<MessageView>,
     /// True exactly when an older item exists beyond the returned slice.
     /// A slice with more items available must not be empty.
     pub has_more: bool,
@@ -44,7 +44,7 @@ pub enum MessageStoreError {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SendMessageStoreOutcome {
     /// The active message is durably persisted.
-    Sent(Message),
+    Sent(MessageView),
     /// The conversation does not exist.
     ConversationNotFound,
     /// The sender is not currently a member.
@@ -59,7 +59,7 @@ pub enum SendMessageStoreOutcome {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum GetMessageStoreOutcome {
     /// An active message or tombstone.
-    Found(Message),
+    Found(MessageView),
     /// The actor is not a current member.
     NotMember,
     /// The globally identified message does not exist.
@@ -70,9 +70,9 @@ pub enum GetMessageStoreOutcome {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum EditMessageStoreOutcome {
     /// Content changed and the edit timestamp advanced.
-    Changed(Message),
+    Changed(MessageView),
     /// Exact content already matched; no timestamps changed.
-    Unchanged(Message),
+    Unchanged(MessageView),
     /// The actor is not a current member.
     NotMember,
     /// The message is unavailable in this conversation.
@@ -87,9 +87,9 @@ pub enum EditMessageStoreOutcome {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DeleteMessageStoreOutcome {
     /// Content was removed and the structural tombstone persisted.
-    Deleted(Message),
+    Deleted(MessageView),
     /// An authorized repeated deletion preserved the original timestamps.
-    AlreadyDeleted(Message),
+    AlreadyDeleted(MessageView),
     /// The actor is not a current member.
     NotMember,
     /// The message is unavailable in this conversation.

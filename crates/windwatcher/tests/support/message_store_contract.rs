@@ -8,7 +8,7 @@ async fn send<S: MessageStore>(
     text: &str,
     reply: Option<MessageId>,
     now: OffsetDateTime,
-) -> Message {
+) -> MessageView {
     let message = Message::new(
         MessageId::new(),
         conversation,
@@ -20,7 +20,7 @@ async fn send<S: MessageStore>(
     .unwrap();
     match store.send_message(&message).await.unwrap() {
         SendMessageStoreOutcome::Sent(persisted) => {
-            assert_eq!(persisted, message);
+            assert_eq!(persisted.message, message);
             persisted
         }
         outcome => panic!("send failed: {outcome:?}"),
@@ -32,7 +32,7 @@ async fn get<S: MessageStore>(
     actor: UserId,
     _conversation: ConversationId,
     id: MessageId,
-) -> Message {
+) -> MessageView {
     match store.get_message(actor, id).await.unwrap() {
         GetMessageStoreOutcome::Found(message) => message,
         outcome => panic!("get failed: {outcome:?}"),
@@ -442,10 +442,14 @@ pub async fn run<S: MessageStore + ConversationStore>(
         Some(first.id())
     );
 
-    assert_eq!(
-        get(store, member, c, surviving_reply.id()).await,
-        surviving_reply
-    );
+    let loaded_reply = get(store, member, c, surviving_reply.id()).await;
+    assert_eq!(loaded_reply.message, surviving_reply.message);
+    let preview = loaded_reply.reply_to.unwrap();
+    assert_eq!(preview.id, first.id());
+    assert_eq!(preview.sender.id, owner);
+    assert_eq!(preview.sender.username, first.sender_username);
+    assert!(preview.content.is_none());
+    assert_eq!(preview.deleted_at, Some(last));
 
     let group = Conversation::new_group(
         ConversationId::new(),
@@ -729,7 +733,7 @@ async fn pagination_contract<S: MessageStore + ConversationStore>(
         .await
         .unwrap();
     assert_eq!(
-        first.items().iter().map(Message::id).collect::<Vec<_>>(),
+        first.items().iter().map(|m| m.id()).collect::<Vec<_>>(),
         ids[..2]
     );
     // A newer insertion stays above the boundary and does not enter continuation.
@@ -761,7 +765,7 @@ async fn pagination_contract<S: MessageStore + ConversationStore>(
         .iter()
         .chain(second.items())
         .chain(third.items())
-        .map(Message::id)
+        .map(|m| m.id())
         .collect();
     assert_eq!(traversed, ids);
     assert_eq!(

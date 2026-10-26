@@ -6,7 +6,8 @@ use crate::{
     ConversationId, DeleteMessageStoreOutcome as Delete, EditMessageStoreOutcome as Edit,
     GetMessageStoreOutcome as Get, MarkReadStoreOutcome as Read, Message, MessageContent,
     MessageContentError, MessageId, MessagePolicy, MessagePolicyError, MessageStore,
-    MessageStoreError, SendMessageStoreOutcome as Send, UnreadCountStoreOutcome as Unread, UserId,
+    MessageStoreError, MessageView, SendMessageStoreOutcome as Send,
+    UnreadCountStoreOutcome as Unread, UserId,
 };
 
 macro_rules! operation_error {
@@ -77,7 +78,7 @@ impl<'a, S: MessageStore> ListMessages<'a, S> {
         actor: UserId,
         conversation: ConversationId,
         request: PageRequest,
-    ) -> Result<Page<Message>, ListMessagesError> {
+    ) -> Result<Page<MessageView>, ListMessagesError> {
         let before = request
             .cursor()
             .map(|token| cursor::decode_message(token, conversation))
@@ -133,18 +134,18 @@ operation_error!(
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum EditMessageOutcome {
     /// New content and edit timestamp were persisted.
-    Changed(Message),
+    Changed(MessageView),
     /// Exact content matched; timestamps were preserved.
-    Unchanged(Message),
+    Unchanged(MessageView),
 }
 
 /// An authorized deletion preserves a structural tombstone.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DeleteMessageOutcome {
     /// Content was destroyed in primary state.
-    Deleted(Message),
+    Deleted(MessageView),
     /// The existing tombstone and timestamps were preserved.
-    AlreadyDeleted(Message),
+    AlreadyDeleted(MessageView),
 }
 
 /// Whether explicit marking advanced the monotonic read boundary.
@@ -197,7 +198,7 @@ impl<'a, S: MessageStore> SendMessage<'a, S> {
         content: impl Into<String>,
         reply: Option<MessageId>,
         now: OffsetDateTime,
-    ) -> Result<Message, SendMessageError> {
+    ) -> Result<MessageView, SendMessageError> {
         let content = MessageContent::new(content).map_err(SendMessageError::InvalidContent)?;
         self.policy
             .validate(&content)
@@ -229,7 +230,7 @@ impl<'a, S: MessageStore> GetMessage<'a, S> {
         &self,
         actor: UserId,
         message: MessageId,
-    ) -> Result<Message, GetMessageError> {
+    ) -> Result<MessageView, GetMessageError> {
         match self.store.get_message(actor, message).await? {
             Get::Found(message) => Ok(message),
             Get::NotMember => Err(GetMessageError::NotMember),

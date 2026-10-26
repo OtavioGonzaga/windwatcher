@@ -16,6 +16,7 @@ mod message_store;
 mod messages;
 mod pagination;
 mod password;
+mod read_models;
 mod session;
 #[cfg(feature = "sqlite")]
 mod storage;
@@ -64,6 +65,7 @@ pub use password::{
     Argon2idPasswordHasher, PasswordHash, PasswordHashError, PasswordHasher, PasswordPolicyError,
     SecretPassword,
 };
+pub use read_models::{ConversationReadState, MessageView, ReplyPreview, UserSummary};
 pub use session::{
     AccessToken, AccessTokenClaims, AccessTokenCodec, AccessTokenError, CreateSession,
     CreateSessionError, OsRefreshTokenProvider, RefreshRotationResult, RefreshSession,

@@ -2,6 +2,14 @@ use futures_executor::block_on;
 use time::OffsetDateTime;
 use windwatcher::*;
 
+fn view(message: Message) -> MessageView {
+    MessageView {
+        message,
+        sender_username: "sender".parse().unwrap(),
+        reply_to: None,
+    }
+}
+
 #[derive(Clone)]
 enum Response {
     List(ListMessagesStoreOutcome, Option<MessageId>, PageLimit),
@@ -46,7 +54,7 @@ impl MessageStore for Fake {
                 assert_eq!(message.conversation_id(), *conversation);
                 assert_eq!(message.content().unwrap().as_str(), " 😀 ");
                 assert_eq!(message.created_at(), OffsetDateTime::UNIX_EPOCH);
-                Ok(SendMessageStoreOutcome::Sent(message.clone()))
+                Ok(SendMessageStoreOutcome::Sent(view(message.clone())))
             }
             _ => panic!("unexpected store call"),
         }
@@ -119,15 +127,17 @@ fn list_maps_pages_boundaries_limits_and_errors() {
         let c = ConversationId::new();
         let mut items: Vec<_> = (0..3)
             .map(|_| {
-                Message::new(
-                    MessageId::new(),
-                    c,
-                    actor,
-                    MessageContent::new("history").unwrap(),
-                    None,
-                    OffsetDateTime::UNIX_EPOCH,
+                view(
+                    Message::new(
+                        MessageId::new(),
+                        c,
+                        actor,
+                        MessageContent::new("history").unwrap(),
+                        None,
+                        OffsetDateTime::UNIX_EPOCH,
+                    )
+                    .unwrap(),
                 )
-                .unwrap()
             })
             .collect();
         items.reverse();
@@ -279,7 +289,7 @@ fn validates_writes_before_storage_and_preserves_actor_context() {
         ));
         let echo = Fake(Response::Echo(actor, c));
         let policy = MessagePolicy::default();
-        let sent: Message = SendMessage::new(&echo, &policy)
+        let sent: MessageView = SendMessage::new(&echo, &policy)
             .execute(actor, c, " 😀 ", None, now)
             .await
             .unwrap();
@@ -437,35 +447,39 @@ fn public_outcomes_are_application_types_and_historical_reads_ignore_policy() {
         .unwrap();
         let policy = MessagePolicy::new(0);
         assert!(policy.validate(message.content().unwrap()).is_err());
-        let loaded: Message = GetMessage::new(&Fake(Response::Get(GetMessageStoreOutcome::Found(
-            message.clone(),
-        ))))
+        let loaded: MessageView = GetMessage::new(&Fake(Response::Get(
+            GetMessageStoreOutcome::Found(view(message.clone())),
+        )))
         .execute(actor, message.id())
         .await
         .unwrap();
-        assert_eq!(loaded, message);
-        let edited = Message::restore(
-            message.id(),
-            c,
-            actor,
-            Some(MessageContent::new("").unwrap()),
-            None,
-            now,
-            Some(now),
-            None,
-        )
-        .unwrap();
-        let tombstone = Message::restore(
-            message.id(),
-            c,
-            actor,
-            None,
-            None,
-            now,
-            Some(now),
-            Some(now),
-        )
-        .unwrap();
+        assert_eq!(loaded.message, message);
+        let edited = view(
+            Message::restore(
+                message.id(),
+                c,
+                actor,
+                Some(MessageContent::new("").unwrap()),
+                None,
+                now,
+                Some(now),
+                None,
+            )
+            .unwrap(),
+        );
+        let tombstone = view(
+            Message::restore(
+                message.id(),
+                c,
+                actor,
+                None,
+                None,
+                now,
+                Some(now),
+                Some(now),
+            )
+            .unwrap(),
+        );
         for changed in [true, false] {
             let outcome = if changed {
                 EditMessageStoreOutcome::Changed(edited.clone())
