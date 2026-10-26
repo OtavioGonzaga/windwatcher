@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking:** get/edit/delete message use cases and `MessageStore` item methods
+  now accept globally unique `MessageId` without `ConversationId`. Item outcomes
+  no longer include `ConversationNotFound`; parent deletion yields `MessageNotFound`.
+
 ### Added
 
 - `GetUser` application lookup by identity ID, independent of authentication and

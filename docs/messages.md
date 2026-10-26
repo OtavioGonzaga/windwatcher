@@ -47,6 +47,12 @@ not thread support.
 
 ## Editing
 
+`GetMessage`, `EditMessage` and `DeleteMessage` address items by globally unique
+`MessageId` alone: `execute(actor, message_id, ...)`. The store resolves the
+conversation and checks current membership in the same logical snapshot or write
+transaction. Missing items return `MessageNotFound`; inaccessible existing items
+remain a distinct internal `NotMember` outcome for transport-level privacy mapping.
+
 `EditMessage` requires current membership and authorship, even for a Group Owner
 or Admin. An exact content match returns `EditMessageOutcome::Unchanged` without
 changing `edited_at`. A meaningful edit replaces content and sets `edited_at` to

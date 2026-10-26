@@ -361,8 +361,7 @@ async fn reply_delete_edit_and_read_races_preserve_invariants() {
         .unwrap();
         let (reply_result, deletion) = tokio::join!(
             f.store.send_message(&reply),
-            f.store
-                .delete_message(f.owner, f.conversation, target.id(), now()),
+            f.store.delete_message(f.owner, target.id(), now()),
         );
         assert!(matches!(
             deletion.unwrap(),
@@ -372,19 +371,13 @@ async fn reply_delete_edit_and_read_races_preserve_invariants() {
             SendMessageStoreOutcome::Sent(persisted) => {
                 assert_eq!(persisted.reply_to_message_id(), Some(target.id()));
                 assert_eq!(
-                    f.store
-                        .get_message(f.owner, f.conversation, persisted.id())
-                        .await
-                        .unwrap(),
+                    f.store.get_message(f.owner, persisted.id()).await.unwrap(),
                     GetMessageStoreOutcome::Found(persisted)
                 );
             }
             SendMessageStoreOutcome::ReplyTargetDeleted => {
                 assert_eq!(
-                    f.store
-                        .get_message(f.owner, f.conversation, reply.id())
-                        .await
-                        .unwrap(),
+                    f.store.get_message(f.owner, reply.id()).await.unwrap(),
                     GetMessageStoreOutcome::MessageNotFound
                 );
             }
@@ -408,9 +401,8 @@ async fn reply_delete_edit_and_read_races_preserve_invariants() {
         let content = MessageContent::new("edited").unwrap();
         let (edit, delete) = tokio::join!(
             f.store
-                .edit_message(f.owner, f.conversation, editable.id(), &content, now()),
-            f.store
-                .delete_message(f.owner, f.conversation, editable.id(), now()),
+                .edit_message(f.owner, editable.id(), &content, now()),
+            f.store.delete_message(f.owner, editable.id(), now()),
         );
         assert!(matches!(
             edit.unwrap(),
@@ -471,7 +463,7 @@ async fn writes_observe_membership_and_role_changes_before_commit() {
     .unwrap();
     let store = f.store.clone();
     let (actor, c, id) = (f.peer, f.conversation, message.id());
-    let deletion = tokio::spawn(async move { store.delete_message(actor, c, id, now()).await });
+    let deletion = tokio::spawn(async move { store.delete_message(actor, id, now()).await });
     tx.commit().await.unwrap();
     assert_eq!(
         deletion.await.unwrap().unwrap(),
@@ -503,7 +495,7 @@ async fn writes_observe_membership_and_role_changes_before_commit() {
     let content = MessageContent::new("edit").unwrap();
     assert_eq!(
         f.store
-            .edit_message(actor, c, id, &content, now())
+            .edit_message(actor, id, &content, now())
             .await
             .unwrap(),
         EditMessageStoreOutcome::NotMember
@@ -568,7 +560,7 @@ async fn storage_rolls_back_failures_rejects_corruption_and_loads_large_history(
     assert!(smaller.validate(large.content().unwrap()).is_err());
     assert_eq!(
         GetMessage::new(&f.store)
-            .execute(f.owner, f.conversation, large.id())
+            .execute(f.owner, large.id())
             .await
             .unwrap(),
         large
@@ -593,7 +585,6 @@ async fn storage_rolls_back_failures_rejects_corruption_and_loads_large_history(
         f.store
             .edit_message(
                 f.owner,
-                f.conversation,
                 large.id(),
                 &MessageContent::new("changed").unwrap(),
                 now()
@@ -603,7 +594,7 @@ async fn storage_rolls_back_failures_rejects_corruption_and_loads_large_history(
     );
     assert_eq!(
         GetMessage::new(&f.store)
-            .execute(f.owner, f.conversation, large.id())
+            .execute(f.owner, large.id())
             .await
             .unwrap(),
         large
@@ -619,9 +610,7 @@ async fn storage_rolls_back_failures_rejects_corruption_and_loads_large_history(
         .await
         .unwrap();
     assert!(matches!(
-        f.store
-            .get_message(f.owner, f.conversation, large.id())
-            .await,
+        f.store.get_message(f.owner, large.id()).await,
         Err(MessageStoreError::Unexpected(_))
     ));
     sqlx::query(

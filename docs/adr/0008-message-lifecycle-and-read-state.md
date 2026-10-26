@@ -36,6 +36,11 @@ and Group Owners/Admins delete. Moderator deletion does not require the original
 sender to remain a member. Repeated deletion still requires permission. Exact
 edits and repeated deletes preserve timestamps.
 
+Individual get/edit/delete operations use globally unique `MessageId` without a
+redundant conversation argument. Persistence resolves the parent and authorizes
+within the same snapshot/transaction. Their not-found outcome is message-specific;
+conversation cascading deletion also removes the message.
+
 Read state belongs to membership as `last_read_message_id`. Explicit read markers
 are monotonic and may point to tombstones. Sending does not advance read state.
 Own messages and tombstones are excluded from unread. Unread count is derived

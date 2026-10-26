@@ -60,11 +60,9 @@ pub enum SendMessageStoreOutcome {
 pub enum GetMessageStoreOutcome {
     /// An active message or tombstone.
     Found(Message),
-    /// The conversation does not exist.
-    ConversationNotFound,
     /// The actor is not a current member.
     NotMember,
-    /// The message is unavailable in this conversation.
+    /// The globally identified message does not exist.
     MessageNotFound,
 }
 
@@ -75,8 +73,6 @@ pub enum EditMessageStoreOutcome {
     Changed(Message),
     /// Exact content already matched; no timestamps changed.
     Unchanged(Message),
-    /// The conversation does not exist.
-    ConversationNotFound,
     /// The actor is not a current member.
     NotMember,
     /// The message is unavailable in this conversation.
@@ -94,8 +90,6 @@ pub enum DeleteMessageStoreOutcome {
     Deleted(Message),
     /// An authorized repeated deletion preserved the original timestamps.
     AlreadyDeleted(Message),
-    /// The conversation does not exist.
-    ConversationNotFound,
     /// The actor is not a current member.
     NotMember,
     /// The message is unavailable in this conversation.
@@ -154,18 +148,17 @@ pub trait MessageStore: Sync {
         &self,
         message: &Message,
     ) -> impl Future<Output = Result<SendMessageStoreOutcome, MessageStoreError>> + Send;
-    /// Returns a message only to a current member of the specified conversation.
+    /// Resolves a globally identified message and requires current membership in
+    /// its conversation within the same logical read snapshot.
     fn get_message(
         &self,
         actor: UserId,
-        conversation: ConversationId,
         message: MessageId,
     ) -> impl Future<Output = Result<GetMessageStoreOutcome, MessageStoreError>> + Send;
     /// Conditionally edits an active message owned by a current member.
     fn edit_message(
         &self,
         actor: UserId,
-        conversation: ConversationId,
         message: MessageId,
         content: &MessageContent,
         now: OffsetDateTime,
@@ -175,7 +168,6 @@ pub trait MessageStore: Sync {
     fn delete_message(
         &self,
         actor: UserId,
-        conversation: ConversationId,
         message: MessageId,
         now: OffsetDateTime,
     ) -> impl Future<Output = Result<DeleteMessageStoreOutcome, MessageStoreError>> + Send;

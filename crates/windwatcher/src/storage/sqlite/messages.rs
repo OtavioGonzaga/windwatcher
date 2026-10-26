@@ -115,6 +115,17 @@ async fn find(
         .map(|row| read_message(&row)).transpose()
 }
 
+// Global item resolution shares the caller's read snapshot or write lock with
+// membership/role checks. Never ask callers to discover a conversation first.
+async fn find_global(
+    conn: &mut SqliteConnection,
+    message: MessageId,
+) -> Result<Option<Message>, MessageStoreError> {
+    sqlx::query("SELECT id, conversation_id, sender_id, content, reply_to_message_id, created_at, edited_at, deleted_at FROM messages WHERE id = ?")
+        .bind(id_bytes(message)).fetch_optional(conn).await.map_err(storage_error)?
+        .map(|row| read_message(&row)).transpose()
+}
+
 impl MessageStore for SqliteStorage {
     async fn list_messages(
         &self,
@@ -183,27 +194,24 @@ impl MessageStore for SqliteStorage {
     async fn get_message(
         &self,
         actor: UserId,
-        conversation: ConversationId,
         message: MessageId,
     ) -> Result<Get, MessageStoreError> {
         let mut tx = self.pool.begin().await.map_err(storage_error)?;
-        match access(&mut tx, actor, conversation).await? {
-            Access::ConversationNotFound => return Ok(Get::ConversationNotFound),
+        let Some(current) = find_global(&mut tx, message).await? else {
+            return Ok(Get::MessageNotFound);
+        };
+        match access(&mut tx, actor, current.conversation_id()).await? {
+            Access::ConversationNotFound => return Ok(Get::MessageNotFound),
             Access::NotMember => return Ok(Get::NotMember),
             Access::Member { .. } => (),
         }
-        let result = match find(&mut tx, conversation, message).await? {
-            Some(message) => Get::Found(message),
-            None => Get::MessageNotFound,
-        };
         tx.commit().await.map_err(storage_error)?;
-        Ok(result)
+        Ok(Get::Found(current))
     }
 
     async fn edit_message(
         &self,
         actor: UserId,
-        conversation: ConversationId,
         message: MessageId,
         content: &MessageContent,
         now: OffsetDateTime,
@@ -213,14 +221,15 @@ impl MessageStore for SqliteStorage {
             .begin_with("BEGIN IMMEDIATE")
             .await
             .map_err(storage_error)?;
+        let Some(current) = find_global(&mut tx, message).await? else {
+            return Ok(Edit::MessageNotFound);
+        };
+        let conversation = current.conversation_id();
         match access(&mut tx, actor, conversation).await? {
-            Access::ConversationNotFound => return Ok(Edit::ConversationNotFound),
+            Access::ConversationNotFound => return Ok(Edit::MessageNotFound),
             Access::NotMember => return Ok(Edit::NotMember),
             Access::Member { .. } => (),
         }
-        let Some(current) = find(&mut tx, conversation, message).await? else {
-            return Ok(Edit::MessageNotFound);
-        };
         if current.sender_id() != actor {
             return Ok(Edit::NotAuthor);
         }
@@ -243,7 +252,6 @@ impl MessageStore for SqliteStorage {
     async fn delete_message(
         &self,
         actor: UserId,
-        conversation: ConversationId,
         message: MessageId,
         now: OffsetDateTime,
     ) -> Result<Delete, MessageStoreError> {
@@ -252,13 +260,14 @@ impl MessageStore for SqliteStorage {
             .begin_with("BEGIN IMMEDIATE")
             .await
             .map_err(storage_error)?;
+        let Some(current) = find_global(&mut tx, message).await? else {
+            return Ok(Delete::MessageNotFound);
+        };
+        let conversation = current.conversation_id();
         let moderator = match access(&mut tx, actor, conversation).await? {
-            Access::ConversationNotFound => return Ok(Delete::ConversationNotFound),
+            Access::ConversationNotFound => return Ok(Delete::MessageNotFound),
             Access::NotMember => return Ok(Delete::NotMember),
             Access::Member { moderator } => moderator,
-        };
-        let Some(current) = find(&mut tx, conversation, message).await? else {
-            return Ok(Delete::MessageNotFound);
         };
         if current.sender_id() != actor && !moderator {
             return Ok(Delete::NotAuthorized);

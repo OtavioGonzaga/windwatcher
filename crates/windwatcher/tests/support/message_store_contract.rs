@@ -30,10 +30,10 @@ async fn send<S: MessageStore>(
 async fn get<S: MessageStore>(
     store: &S,
     actor: UserId,
-    conversation: ConversationId,
+    _conversation: ConversationId,
     id: MessageId,
 ) -> Message {
-    match store.get_message(actor, conversation, id).await.unwrap() {
+    match store.get_message(actor, id).await.unwrap() {
         GetMessageStoreOutcome::Found(message) => message,
         outcome => panic!("get failed: {outcome:?}"),
     }
@@ -84,7 +84,7 @@ pub async fn run<S: MessageStore + ConversationStore>(
     assert_eq!(first.deleted_at(), None);
     assert_eq!(
         store
-            .edit_message(owner, c, first.id(), first.content().unwrap(), later)
+            .edit_message(owner, first.id(), first.content().unwrap(), later)
             .await
             .unwrap(),
         EditMessageStoreOutcome::Unchanged(first.clone())
@@ -112,20 +112,20 @@ pub async fn run<S: MessageStore + ConversationStore>(
 
     assert_eq!(
         store
-            .edit_message(member, c, first.id(), &content, later)
+            .edit_message(member, first.id(), &content, later)
             .await
             .unwrap(),
         EditMessageStoreOutcome::NotAuthor
     );
     assert_eq!(
         store
-            .delete_message(member, c, first.id(), later)
+            .delete_message(member, first.id(), later)
             .await
             .unwrap(),
         DeleteMessageStoreOutcome::NotAuthorized
     );
     let changed = match store
-        .edit_message(owner, c, second.id(), &content, later)
+        .edit_message(owner, second.id(), &content, later)
         .await
         .unwrap()
     {
@@ -138,7 +138,7 @@ pub async fn run<S: MessageStore + ConversationStore>(
     assert_eq!(changed.reply_to_message_id(), Some(first.id()));
     assert_eq!(
         store
-            .edit_message(owner, c, second.id(), &content, last)
+            .edit_message(owner, second.id(), &content, last)
             .await
             .unwrap(),
         EditMessageStoreOutcome::Unchanged(changed.clone())
@@ -146,7 +146,6 @@ pub async fn run<S: MessageStore + ConversationStore>(
     let changed_again = match store
         .edit_message(
             owner,
-            c,
             second.id(),
             &MessageContent::new("again").unwrap(),
             last,
@@ -178,7 +177,7 @@ pub async fn run<S: MessageStore + ConversationStore>(
         UnreadCountStoreOutcome::Count(1)
     );
     let tombstone = match store
-        .delete_message(owner, c, second.id(), last)
+        .delete_message(owner, second.id(), last)
         .await
         .unwrap()
     {
@@ -196,21 +195,21 @@ pub async fn run<S: MessageStore + ConversationStore>(
     assert_eq!(get(store, member, c, second.id()).await, tombstone);
     assert_eq!(
         store
-            .delete_message(owner, c, second.id(), last + Duration::seconds(10))
+            .delete_message(owner, second.id(), last + Duration::seconds(10))
             .await
             .unwrap(),
         DeleteMessageStoreOutcome::AlreadyDeleted(tombstone)
     );
     assert_eq!(
         store
-            .delete_message(member, c, second.id(), last)
+            .delete_message(member, second.id(), last)
             .await
             .unwrap(),
         DeleteMessageStoreOutcome::NotAuthorized
     );
     assert_eq!(
         store
-            .edit_message(owner, c, second.id(), &content, last)
+            .edit_message(owner, second.id(), &content, last)
             .await
             .unwrap(),
         EditMessageStoreOutcome::Deleted
@@ -283,19 +282,19 @@ pub async fn run<S: MessageStore + ConversationStore>(
         SendMessageStoreOutcome::NotMember
     );
     assert_eq!(
-        store.get_message(outsider, c, first.id()).await.unwrap(),
+        store.get_message(outsider, first.id()).await.unwrap(),
         GetMessageStoreOutcome::NotMember
     );
     assert_eq!(
         store
-            .edit_message(outsider, c, first.id(), &content, now)
+            .edit_message(outsider, first.id(), &content, now)
             .await
             .unwrap(),
         EditMessageStoreOutcome::NotMember
     );
     assert_eq!(
         store
-            .delete_message(outsider, c, first.id(), now)
+            .delete_message(outsider, first.id(), now)
             .await
             .unwrap(),
         DeleteMessageStoreOutcome::NotMember
@@ -314,18 +313,18 @@ pub async fn run<S: MessageStore + ConversationStore>(
 
     let missing = MessageId::new();
     assert_eq!(
-        store.get_message(owner, c, missing).await.unwrap(),
+        store.get_message(owner, missing).await.unwrap(),
         GetMessageStoreOutcome::MessageNotFound
     );
     assert_eq!(
         store
-            .edit_message(owner, c, missing, &content, now)
+            .edit_message(owner, missing, &content, now)
             .await
             .unwrap(),
         EditMessageStoreOutcome::MessageNotFound
     );
     assert_eq!(
-        store.delete_message(owner, c, missing, now).await.unwrap(),
+        store.delete_message(owner, missing, now).await.unwrap(),
         DeleteMessageStoreOutcome::MessageNotFound
     );
     assert_eq!(
@@ -340,22 +339,19 @@ pub async fn run<S: MessageStore + ConversationStore>(
         SendMessageStoreOutcome::ConversationNotFound
     );
     assert_eq!(
-        store.get_message(owner, absent, missing).await.unwrap(),
-        GetMessageStoreOutcome::ConversationNotFound
+        store.get_message(owner, missing).await.unwrap(),
+        GetMessageStoreOutcome::MessageNotFound
     );
     assert_eq!(
         store
-            .edit_message(owner, absent, missing, &content, now)
+            .edit_message(owner, missing, &content, now)
             .await
             .unwrap(),
-        EditMessageStoreOutcome::ConversationNotFound
+        EditMessageStoreOutcome::MessageNotFound
     );
     assert_eq!(
-        store
-            .delete_message(owner, absent, missing, now)
-            .await
-            .unwrap(),
-        DeleteMessageStoreOutcome::ConversationNotFound
+        store.delete_message(owner, missing, now).await.unwrap(),
+        DeleteMessageStoreOutcome::MessageNotFound
     );
     assert_eq!(
         store
@@ -392,25 +388,22 @@ pub async fn run<S: MessageStore + ConversationStore>(
         None
     );
     assert_eq!(
-        store
-            .get_message(owner, c, self_message.id())
-            .await
-            .unwrap(),
-        GetMessageStoreOutcome::MessageNotFound
+        store.get_message(owner, self_message.id()).await.unwrap(),
+        GetMessageStoreOutcome::Found(self_message.clone())
     );
     assert_eq!(
         store
-            .edit_message(owner, c, self_message.id(), &content, now)
+            .edit_message(member, self_message.id(), &content, now)
             .await
             .unwrap(),
-        EditMessageStoreOutcome::MessageNotFound
+        EditMessageStoreOutcome::NotMember
     );
     assert_eq!(
         store
-            .delete_message(owner, c, self_message.id(), now)
+            .delete_message(member, self_message.id(), now)
             .await
             .unwrap(),
-        DeleteMessageStoreOutcome::MessageNotFound
+        DeleteMessageStoreOutcome::NotMember
     );
     assert_eq!(
         store
@@ -440,10 +433,7 @@ pub async fn run<S: MessageStore + ConversationStore>(
         assert_eq!(store.send_message(&message).await.unwrap(), expected);
     }
     let surviving_reply = send(store, owner, c, "active reply", Some(first.id()), last).await;
-    store
-        .delete_message(owner, c, first.id(), last)
-        .await
-        .unwrap();
+    store.delete_message(owner, first.id(), last).await.unwrap();
     assert!(get(store, member, c, first.id()).await.is_deleted());
     assert_eq!(
         get(store, member, c, second.id())
@@ -475,7 +465,7 @@ pub async fn run<S: MessageStore + ConversationStore>(
     for moderator in [owner, admin] {
         assert_eq!(
             store
-                .edit_message(moderator, g, original.id(), &content, now)
+                .edit_message(moderator, original.id(), &content, now)
                 .await
                 .unwrap(),
             EditMessageStoreOutcome::NotAuthor
@@ -484,14 +474,14 @@ pub async fn run<S: MessageStore + ConversationStore>(
     let owner_message = send(store, owner, g, "owner message", None, now).await;
     assert_eq!(
         store
-            .delete_message(member, g, owner_message.id(), now)
+            .delete_message(member, owner_message.id(), now)
             .await
             .unwrap(),
         DeleteMessageStoreOutcome::NotAuthorized
     );
     // A new member joins read through the maximum, including a tombstone.
     store
-        .delete_message(owner, g, owner_message.id(), later)
+        .delete_message(owner, owner_message.id(), later)
         .await
         .unwrap();
     assert_eq!(
@@ -537,7 +527,7 @@ pub async fn run<S: MessageStore + ConversationStore>(
     );
     store.leave_group(g, outsider, last).await.unwrap();
     assert_eq!(
-        store.get_message(outsider, g, original.id()).await.unwrap(),
+        store.get_message(outsider, original.id()).await.unwrap(),
         GetMessageStoreOutcome::NotMember
     );
     assert_eq!(
@@ -569,7 +559,7 @@ pub async fn run<S: MessageStore + ConversationStore>(
     // A regular author can delete their own content.
     assert!(matches!(
         store
-            .delete_message(member, g, after_join.id(), last)
+            .delete_message(member, after_join.id(), last)
             .await
             .unwrap(),
         DeleteMessageStoreOutcome::Deleted(_)
@@ -578,14 +568,14 @@ pub async fn run<S: MessageStore + ConversationStore>(
     // Historical sender need not remain a member for Admin moderation.
     assert!(matches!(
         store
-            .delete_message(admin, g, original.id(), last)
+            .delete_message(admin, original.id(), last)
             .await
             .unwrap(),
         DeleteMessageStoreOutcome::Deleted(_)
     ));
     assert_eq!(
         store
-            .delete_message(outsider, g, original.id(), last)
+            .delete_message(outsider, original.id(), last)
             .await
             .unwrap(),
         DeleteMessageStoreOutcome::NotAuthorized
@@ -593,7 +583,7 @@ pub async fn run<S: MessageStore + ConversationStore>(
     let admin_message = send(store, admin, g, "admin", None, now).await;
     assert!(matches!(
         store
-            .delete_message(owner, g, admin_message.id(), last)
+            .delete_message(owner, admin_message.id(), last)
             .await
             .unwrap(),
         DeleteMessageStoreOutcome::Deleted(_)
@@ -613,8 +603,8 @@ pub async fn run<S: MessageStore + ConversationStore>(
     }
     for id in [a.id(), b.id(), original.id()] {
         assert_eq!(
-            store.get_message(owner, g, id).await.unwrap(),
-            GetMessageStoreOutcome::ConversationNotFound
+            store.get_message(owner, id).await.unwrap(),
+            GetMessageStoreOutcome::MessageNotFound
         );
     }
 
@@ -745,7 +735,7 @@ async fn pagination_contract<S: MessageStore + ConversationStore>(
     // A newer insertion stays above the boundary and does not enter continuation.
     let newer = send(store, owner, c, "new", None, now).await;
     assert!(newer.id() > ids[0]);
-    store.delete_message(owner, c, ids[2], now).await.unwrap();
+    store.delete_message(owner, ids[2], now).await.unwrap();
     let second = ListMessages::new(store)
         .execute(
             member,

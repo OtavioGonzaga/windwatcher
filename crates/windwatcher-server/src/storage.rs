@@ -171,37 +171,31 @@ impl MessageStore for Storage {
     async fn get_message(
         &self,
         actor: UserId,
-        conversation: ConversationId,
         message: MessageId,
     ) -> Result<GetMessageStoreOutcome, MessageStoreError> {
         match self {
-            Self::Sqlite(s) => s.get_message(actor, conversation, message).await,
+            Self::Sqlite(s) => s.get_message(actor, message).await,
         }
     }
     async fn edit_message(
         &self,
         actor: UserId,
-        conversation: ConversationId,
         message: MessageId,
         content: &MessageContent,
         now: OffsetDateTime,
     ) -> Result<EditMessageStoreOutcome, MessageStoreError> {
         match self {
-            Self::Sqlite(s) => {
-                s.edit_message(actor, conversation, message, content, now)
-                    .await
-            }
+            Self::Sqlite(s) => s.edit_message(actor, message, content, now).await,
         }
     }
     async fn delete_message(
         &self,
         actor: UserId,
-        conversation: ConversationId,
         message: MessageId,
         now: OffsetDateTime,
     ) -> Result<DeleteMessageStoreOutcome, MessageStoreError> {
         match self {
-            Self::Sqlite(s) => s.delete_message(actor, conversation, message, now).await,
+            Self::Sqlite(s) => s.delete_message(actor, message, now).await,
         }
     }
     async fn mark_read_through(
