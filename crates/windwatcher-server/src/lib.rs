@@ -5,10 +5,12 @@ mod commands;
 mod config;
 mod error;
 mod logging;
+mod password;
 mod paths;
 mod storage;
 
 pub use config::http::{RawCors, RawHttp, RawRateLimit, RawRateLimitPolicy, ResolvedHttpConfig};
+pub use password::TokioPasswordHasher;
 
 use clap::Parser;
 use cli::{Cli, Command, MigrateCommand};
