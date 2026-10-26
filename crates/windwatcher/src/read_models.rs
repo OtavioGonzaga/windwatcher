@@ -1,6 +1,9 @@
 use time::OffsetDateTime;
 
-use crate::{Message, MessageContent, MessageId, UserId, Username};
+use crate::{
+    Conversation, ConversationId, ConversationMember, MembershipRole, Message, MessageContent,
+    MessageId, UserId, Username,
+};
 
 /// Public identity attribution, independent of credentials and enabled state.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -53,4 +56,50 @@ pub struct ConversationReadState {
     pub last_read_message_id: Option<MessageId>,
     /// Active non-own messages above the watermark.
     pub unread_count: u64,
+}
+
+/// Consumer-ready inbox/detail item, separate from conversation domain state.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConversationSummary {
+    /// Persisted conversation metadata.
+    pub conversation: Conversation,
+    /// Group title or actor-relative Direct peer username.
+    pub title: String,
+    /// Only the current actor's membership and read watermark.
+    pub membership: ConversationMember,
+    /// Current actor's derived unread count.
+    pub unread_count: u64,
+    /// Highest-ID message, including a structural tombstone.
+    pub last_message: Option<MessageView>,
+    /// Effective activity used for keyset ordering, not persisted metadata.
+    pub activity_at: OffsetDateTime,
+}
+
+/// Public member attribution without another member's read state.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConversationMemberSummary {
+    /// Existing user attribution, including disabled users.
+    pub user: UserSummary,
+    /// Current membership role.
+    pub role: MembershipRole,
+    /// Original membership insertion time.
+    pub joined_at: OffsetDateTime,
+}
+
+/// Exclusive descending inbox keyset boundary; adapters preserve full precision.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ConversationBoundary {
+    /// Effective activity timestamp.
+    pub activity_at: OffsetDateTime,
+    /// Deterministic descending tie-breaker.
+    pub conversation_id: ConversationId,
+}
+
+/// Exclusive ascending member keyset boundary, scoped separately by conversation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MemberBoundary {
+    /// Original membership insertion time.
+    pub joined_at: OffsetDateTime,
+    /// Deterministic ascending tie-breaker.
+    pub user_id: UserId,
 }

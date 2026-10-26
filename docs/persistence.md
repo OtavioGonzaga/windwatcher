@@ -1,5 +1,18 @@
 # Persistence
 
+## Consumer query projections
+
+`MessagingQueryStore` loads exact enabled-user discovery, inbox/detail and public
+member projections. SQLite inbox reads use one keyset query plus one bulk
+last-message hydration query in a normal read transaction. Detail and member
+queries likewise authorize within the same read snapshot. Query counts do not
+grow with page size; identities and reply targets are joined, not loaded per item.
+
+Migration 0004 adds `(conversation_id, joined_at, user_id)` for member pagination.
+Derived inbox activity uses primary conversation/message timestamps; query-plan
+tests verify indexed message probes without adding redundant message indexes or
+a materialized activity column.
+
 ## Ports and adapters
 
 `IdentityStore`, `SessionStore`, `ConversationStore`, and `MessageStore` are

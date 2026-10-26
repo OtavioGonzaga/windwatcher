@@ -92,6 +92,12 @@ and a shallow current reply preview. SQLite joins attribution and reply state in
 the same snapshot/transaction as the message operation; `Message` itself remains
 unchanged and transport-independent.
 
+`MessagingQueryStore` supplies reusable consumer queries: exact enabled username
+discovery, actor inbox/detail summaries and public member lists. Projections are
+application models rather than enriched domain entities. SQLite batches inbox
+hydration within one read snapshot; cursors remain application-owned and typed
+boundaries remain independent of transport and storage encoding.
+
 Ports return native Rust `Send` futures and impose no executor. The initial
 Argon2id adapter performs CPU-bound work on the polling thread; hosts can wrap
 the port with runtime-specific blocking-pool execution. See

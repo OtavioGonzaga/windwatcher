@@ -8,6 +8,7 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 
 mod messages;
+mod queries;
 
 use crate::{
     AddMemberStoreOutcome, ChangeStoreOutcome, Conversation, ConversationId, ConversationKind,

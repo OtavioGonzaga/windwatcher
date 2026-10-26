@@ -176,7 +176,7 @@ fn migrations_are_explicit_and_user_provisioning_uses_current_schema() {
         .arg("migrate")
         .assert()
         .success()
-        .stdout(predicate::str::contains("Applied 3 migration(s)."));
+        .stdout(predicate::str::contains("Applied 4 migration(s)."));
     command(&config)
         .args(["migrate", "status"])
         .assert()

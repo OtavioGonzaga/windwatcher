@@ -19,6 +19,61 @@ pub enum Storage {
     /// Official SQLite persistence adapter.
     Sqlite(SqliteStorage),
 }
+
+impl windwatcher::MessagingQueryStore for Storage {
+    async fn find_users(
+        &self,
+        username: &Username,
+    ) -> Result<Vec<windwatcher::UserSummary>, windwatcher::QueryStoreError> {
+        match self {
+            Self::Sqlite(s) => s.find_users(username).await,
+        }
+    }
+    async fn list_conversations(
+        &self,
+        actor: UserId,
+        before: Option<windwatcher::ConversationBoundary>,
+        limit: windwatcher::PageLimit,
+    ) -> Result<
+        windwatcher::QuerySlice<windwatcher::ConversationSummary>,
+        windwatcher::QueryStoreError,
+    > {
+        match self {
+            Self::Sqlite(s) => s.list_conversations(actor, before, limit).await,
+        }
+    }
+    async fn get_conversation_summary(
+        &self,
+        actor: UserId,
+        conversation: ConversationId,
+    ) -> Result<
+        windwatcher::ConversationQueryOutcome<windwatcher::ConversationSummary>,
+        windwatcher::QueryStoreError,
+    > {
+        match self {
+            Self::Sqlite(s) => s.get_conversation_summary(actor, conversation).await,
+        }
+    }
+    async fn list_conversation_members(
+        &self,
+        actor: UserId,
+        conversation: ConversationId,
+        after: Option<windwatcher::MemberBoundary>,
+        limit: windwatcher::PageLimit,
+    ) -> Result<
+        windwatcher::ConversationQueryOutcome<
+            windwatcher::QuerySlice<windwatcher::ConversationMemberSummary>,
+        >,
+        windwatcher::QueryStoreError,
+    > {
+        match self {
+            Self::Sqlite(s) => {
+                s.list_conversation_members(actor, conversation, after, limit)
+                    .await
+            }
+        }
+    }
+}
 impl Storage {
     /// Opens the configured storage without applying migrations implicitly.
     pub async fn connect(options: SqliteStorageOptions) -> Result<Self, SqliteStorageError> {

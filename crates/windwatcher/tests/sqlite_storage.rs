@@ -101,6 +101,15 @@ async fn new_memberships_require_enabled_users_but_existing_state_survives() {
 }
 
 #[tokio::test]
+async fn sqlite_satisfies_portable_consumer_query_contract() {
+    let (_directory, storage) = store().await;
+    let owner = persisted_user(&storage, "query_owner").await;
+    let peer = persisted_user(&storage, "query_peer").await;
+    let outsider = persisted_user(&storage, "query_outsider").await;
+    support::query_store_contract::run(&storage, owner, peer, outsider).await;
+}
+
+#[tokio::test]
 async fn direct_creation_observes_disable_committed_by_another_writer() {
     let (directory, storage) = store().await;
     let owner = persisted_user(&storage, "race_owner").await;
@@ -199,8 +208,8 @@ async fn migration_is_explicit_idempotent_and_reports_status() {
 
     let status = storage.migration_status().await.unwrap();
     assert_eq!(status.current_version(), None);
-    assert_eq!(status.latest_version(), Some(3));
-    assert_eq!(status.pending(), 3);
+    assert_eq!(status.latest_version(), Some(4));
+    assert_eq!(status.pending(), 4);
     assert!(!status.is_current());
     let inspector = sqlx::SqlitePool::connect(&url).await.unwrap();
     let tables: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sqlite_master WHERE name = 'users'")
@@ -212,7 +221,7 @@ async fn migration_is_explicit_idempotent_and_reports_status() {
     storage.migrate().await.unwrap();
     storage.migrate().await.unwrap();
     let status = storage.check_schema().await.unwrap();
-    assert_eq!(status.current_version(), Some(3));
+    assert_eq!(status.current_version(), Some(4));
     assert!(status.is_current());
 
     assert!(matches!(

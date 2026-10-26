@@ -24,6 +24,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `MessagingQueryStore`, exact enabled-user discovery and consumer-ready
+  conversation/detail/member projections with bounded snapshot-based SQLite
+  loading, derived activity and actor/conversation-scoped keyset cursors.
+- SQLite migration 0004 with a member-pagination index, without new message
+  indexes or a persisted conversation activity timestamp.
+
 - `GetUser` application lookup by identity ID, independent of authentication and
   authorization and without exposing credentials.
 - Semantic `SessionStoreError::OwnerDisabled`/`OwnerNotFound` creation rejections

@@ -1,7 +1,99 @@
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::{Deserialize, Serialize};
 
+use crate::{ConversationBoundary, MemberBoundary, UserId};
 use crate::{ConversationId, MessageId};
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OrderedCursorV1 {
+    v: u32,
+    kind: String,
+    scope: String,
+    at_nanos: String,
+    id: String,
+}
+
+fn encode_ordered(kind: &str, scope: String, at: time::OffsetDateTime, id: String) -> String {
+    URL_SAFE_NO_PAD.encode(
+        serde_json::to_vec(&OrderedCursorV1 {
+            v: 1,
+            kind: kind.into(),
+            scope,
+            at_nanos: at.unix_timestamp_nanos().to_string(),
+            id,
+        })
+        .expect("string cursor serialization"),
+    )
+}
+
+fn decode_ordered(
+    token: &str,
+    kind: &str,
+    scope: &str,
+) -> Result<(time::OffsetDateTime, String), CursorError> {
+    let bytes = URL_SAFE_NO_PAD
+        .decode(token)
+        .map_err(|_| CursorError::Malformed)?;
+    let payload: OrderedCursorV1 =
+        serde_json::from_slice(&bytes).map_err(|_| CursorError::Malformed)?;
+    if payload.v != 1 {
+        return Err(CursorError::UnsupportedVersion);
+    }
+    if payload.kind != kind {
+        return Err(CursorError::WrongResource);
+    }
+    if payload.scope != scope {
+        return Err(CursorError::WrongScope);
+    }
+    let nanos = payload
+        .at_nanos
+        .parse()
+        .map_err(|_| CursorError::Malformed)?;
+    let at = time::OffsetDateTime::from_unix_timestamp_nanos(nanos)
+        .map_err(|_| CursorError::Malformed)?;
+    Ok((at, payload.id))
+}
+
+pub(crate) fn encode_conversation(actor: UserId, boundary: ConversationBoundary) -> String {
+    encode_ordered(
+        "conversations",
+        actor.to_string(),
+        boundary.activity_at,
+        boundary.conversation_id.to_string(),
+    )
+}
+
+pub(crate) fn decode_conversation(
+    token: &str,
+    actor: UserId,
+) -> Result<ConversationBoundary, CursorError> {
+    let (activity_at, id) = decode_ordered(token, "conversations", &actor.to_string())?;
+    Ok(ConversationBoundary {
+        activity_at,
+        conversation_id: id.parse().map_err(|_| CursorError::Malformed)?,
+    })
+}
+
+pub(crate) fn encode_member(conversation: ConversationId, boundary: MemberBoundary) -> String {
+    encode_ordered(
+        "members",
+        conversation.to_string(),
+        boundary.joined_at,
+        boundary.user_id.to_string(),
+    )
+}
+
+pub(crate) fn decode_member(
+    token: &str,
+    conversation: ConversationId,
+) -> Result<MemberBoundary, CursorError> {
+    let (joined_at, id) = decode_ordered(token, "members", &conversation.to_string())?;
+    Ok(MemberBoundary {
+        joined_at,
+        user_id: id.parse().map_err(|_| CursorError::Malformed)?,
+    })
+}
 
 /// A continuation token could not be used. Errors never contain supplied tokens.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
@@ -73,6 +165,55 @@ pub(crate) fn decode_message(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ordered_cursors_preserve_precision_and_enforce_kind_scope_and_strictness() {
+        let actor = UserId::new();
+        let conversation = ConversationId::new();
+        let at = time::OffsetDateTime::UNIX_EPOCH + time::Duration::nanoseconds(123456789);
+        let boundary = ConversationBoundary {
+            activity_at: at,
+            conversation_id: conversation,
+        };
+        let token = encode_conversation(actor, boundary);
+        assert_eq!(decode_conversation(&token, actor), Ok(boundary));
+        assert_eq!(
+            decode_conversation(&token, UserId::new()),
+            Err(CursorError::WrongScope)
+        );
+        assert_eq!(
+            decode_member(&token, conversation),
+            Err(CursorError::WrongResource)
+        );
+        let member = MemberBoundary {
+            joined_at: at,
+            user_id: actor,
+        };
+        let token = encode_member(conversation, member);
+        assert_eq!(decode_member(&token, conversation), Ok(member));
+        assert_eq!(
+            decode_member(&token, ConversationId::new()),
+            Err(CursorError::WrongScope)
+        );
+        for (field, value, expected) in [
+            ("v", serde_json::json!(2), CursorError::UnsupportedVersion),
+            ("extra", serde_json::json!(true), CursorError::Malformed),
+            (
+                "at_nanos",
+                serde_json::json!("not a timestamp"),
+                CursorError::Malformed,
+            ),
+            ("id", serde_json::json!("not an ID"), CursorError::Malformed),
+        ] {
+            let mut payload: serde_json::Value =
+                serde_json::from_slice(&URL_SAFE_NO_PAD.decode(&token).unwrap()).unwrap();
+            payload[field] = value;
+            assert_eq!(
+                decode_member(&URL_SAFE_NO_PAD.encode(payload.to_string()), conversation),
+                Err(expected)
+            );
+        }
+    }
 
     const SCOPE: &str = "018f6f34-0000-7000-8000-000000000000";
     const BOUNDARY: &str = "018f6f35-0000-7000-8000-000000000001";

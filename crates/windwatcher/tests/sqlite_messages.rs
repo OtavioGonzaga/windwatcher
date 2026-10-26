@@ -686,7 +686,7 @@ async fn migration_upgrades_existing_memberships_without_backfill() {
     let store = SqliteStorage::connect(SqliteStorageOptions::new(path.display().to_string()))
         .await
         .unwrap();
-    assert_eq!(store.migration_status().await.unwrap().pending(), 1);
+    assert_eq!(store.migration_status().await.unwrap().pending(), 2);
     store.migrate().await.unwrap();
     assert_eq!(
         store
