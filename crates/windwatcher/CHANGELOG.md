@@ -12,6 +12,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `GetUser` application lookup by identity ID, independent of authentication and
   authorization and without exposing credentials.
 
+### Fixed
+
+- SQLite session creation atomically rejects missing or disabled owners, preventing
+  a disable-during-login race from creating a new active session.
+
+### Added
+
 - Reusable opaque cursor pagination with `PageRequest`, `Page<T>`, and validated
   `PageLimit` (default 50, maximum 100).
 - `ListMessages` paginated history using newest-first UUIDv7 keyset ordering,

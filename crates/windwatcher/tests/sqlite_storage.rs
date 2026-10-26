@@ -58,6 +58,40 @@ async fn persisted_user(storage: &SqliteStorage, name: &str) -> User {
 }
 
 #[tokio::test]
+async fn session_creation_rejects_owner_disabled_after_authentication() {
+    let (_directory, storage) = store().await;
+    let mut owner = persisted_user(&storage, "racing_owner").await;
+    let now = timestamp(1_700_000_100);
+    let session = Session::new(SessionId::new(), owner.id(), now, now + Duration::days(1)).unwrap();
+    let provider = OsRefreshTokenProvider;
+    let hash = provider.hash(&provider.generate().unwrap());
+    owner.disable(now);
+    storage.update_user(&owner).await.unwrap();
+    assert!(matches!(
+        storage.create_session(&session, &hash).await,
+        Err(windwatcher::SessionStoreError::Conflict)
+    ));
+    assert!(
+        storage
+            .find_by_refresh_token_hash(&hash)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let missing = Session::new(
+        SessionId::new(),
+        UserId::new(),
+        now,
+        now + Duration::days(1),
+    )
+    .unwrap();
+    assert!(matches!(
+        storage.create_session(&missing, &hash).await,
+        Err(windwatcher::SessionStoreError::Conflict)
+    ));
+}
+
+#[tokio::test]
 async fn sqlite_satisfies_portable_message_contract() {
     let (_directory, storage) = store().await;
     let owner = persisted_user(&storage, "message_owner").await;

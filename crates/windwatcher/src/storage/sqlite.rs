@@ -548,12 +548,18 @@ impl SessionStore for SqliteStorage {
         session: &Session,
         hash: &RefreshTokenHash,
     ) -> Result<(), SessionStoreError> {
-        sqlx::query("INSERT INTO sessions (id, user_id, refresh_token_hash, created_at, expires_at, revoked_at) VALUES (?, ?, ?, ?, ?, ?)")
+        // A user may have been disabled after credential authentication. The
+        // condition and insertion share one SQLite statement/write snapshot.
+        let result = sqlx::query("INSERT INTO sessions (id, user_id, refresh_token_hash, created_at, expires_at, revoked_at) SELECT ?, ?, ?, ?, ?, ? FROM users WHERE id = ? AND disabled_at IS NULL")
             .bind(id_bytes(session.id())).bind(id_bytes(session.user_id())).bind(hash.as_bytes().to_vec())
             .bind(to_micros(session.created_at()).map_err(unexpected_session)?)
             .bind(to_micros(session.expires_at()).map_err(unexpected_session)?)
             .bind(session.revoked_at().map(to_micros).transpose().map_err(unexpected_session)?)
+            .bind(id_bytes(session.user_id()))
             .execute(&self.pool).await.map_err(session_error)?;
+        if result.rows_affected() == 0 {
+            return Err(SessionStoreError::Conflict);
+        }
         Ok(())
     }
     async fn find_by_refresh_token_hash(

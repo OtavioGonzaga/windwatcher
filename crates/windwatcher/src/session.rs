@@ -360,6 +360,8 @@ pub enum SessionStoreError {
 /// Application-driven asynchronous session persistence operations.
 pub trait SessionStore: Sync {
     /// Atomically stores a session and its first refresh fingerprint, or neither.
+    /// The official SQLite adapter rejects a missing or currently disabled owner
+    /// with `SessionStoreError::Conflict`, including races after authentication.
     fn create_session(
         &self,
         session: &Session,
