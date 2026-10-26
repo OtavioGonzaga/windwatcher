@@ -43,7 +43,7 @@ workflows belong there rather than in the reusable crate.
 The reusable `windwatcher` crate contains UUIDv7 identifiers, the user identity
 model, conversation and membership application services, local identity
 application services, session lifecycle use cases, and core text-message and
-read-state use cases.
+read-state use cases, and reusable pagination infrastructure with message history.
 Registration, authentication, and user state depend on `IdentityStore` and
 `PasswordHasher`; session creation, refresh, and revocation depend on
 `SessionStore`, `RefreshTokenProvider`, and `AccessTokenCodec`. The optional
@@ -70,7 +70,22 @@ markers. Membership owns read state and unread counts are derived. The server
 resolves its message configuration to the reusable library policy and delegates
 the message port through concrete storage enum dispatch. See
 [messages](messages.md) and [ADR 0008](adr/0008-message-lifecycle-and-read-state.md).
-No HTTP, pagination, realtime, events or workers are implemented by this delivery.
+No HTTP, realtime, events or workers are implemented by this delivery.
+
+`PageRequest`, `PageLimit` and `Page<T>` are shared, transport-independent
+application pagination infrastructure. `ListMessages` is the first consumer:
+
+```text
+ListMessages → decode/validate opaque cursor → MessageStore keyset query
+            → encode next cursor → Page<Message> (newest first)
+```
+
+Only the application knows cursor encoding. The persistence port receives a
+typed `MessageId` boundary and validated limit, and returns a message slice plus
+lookahead information. Ordering remains resource-specific, while representation
+is reusable. Authorization is independent of cursor possession and shares the
+storage read snapshot. See [pagination](pagination.md) and
+[ADR 0009](adr/0009-opaque-keyset-pagination.md).
 
 Ports return native Rust `Send` futures and impose no executor. The initial
 Argon2id adapter performs CPU-bound work on the polling thread; hosts can wrap

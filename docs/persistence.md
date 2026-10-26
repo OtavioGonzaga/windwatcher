@@ -98,4 +98,25 @@ without adopting SQLite-specific physical assertions.
 
 Only SQLite is implemented. There is no automatic startup migration or other
 database adapter. Configuration and explicit migration CLI commands belong to
-the server, not the reusable library. Message pagination remains future work.
+the server, not the reusable library.
+
+## Paginated message history
+
+`MessageStore::list_messages` receives an actor, conversation, optional decoded
+`MessageId` boundary and validated `PageLimit`. It returns `MessagePageSlice`
+with at most the requested size, strictly descending IDs in the requested
+conversation, including tombstones. `has_more` means an older item actually
+exists; an exactly-full final slice does not imply continuation. Boundaries need
+not reference physical rows. Listing never changes read state.
+
+Adapters must check conversation existence and current membership in the same
+logical read as history. Missing conversations and nonmembers are separate
+outcomes. These portable semantics contain no SQL or cursor encoding assumptions.
+
+SQLite uses a deferred read transaction for authorization and retrieval, without
+`BEGIN IMMEDIATE`. It queries `WHERE conversation_id = ?`, optionally adding
+`AND id < ?`, then `ORDER BY id DESC LIMIT ?` with `limit + 1` rows. The extra
+row determines `has_more` and is removed. No deletion filter excludes tombstones.
+The existing unique `(conversation_id, id)` key supports this access path; no
+migration was required. Cursor validation and encoding belong to `ListMessages`,
+not SQLite. See [pagination](pagination.md).

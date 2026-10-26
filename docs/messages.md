@@ -109,7 +109,7 @@ a later insertion with an ID below a watermark does not become unread.
 
 ## Persistence behavior
 
-The executor-independent `MessageStore` port owns semantic atomic send, get,
+The executor-independent `MessageStore` port owns semantic atomic send, get, list,
 edit, delete, mark-read and count operations. Use cases expose their own focused
 errors/outcomes rather than store outcomes. SQLite implements this port with
 same-conversation reply integrity, tombstone checks and write transactions that
@@ -120,7 +120,19 @@ messages, including reply relationships. See [persistence](persistence.md) and
 
 ## Current limitations
 
-There is no message listing API yet. Future paginated history must include
-tombstones in canonical ID order, unlike unread counts. This delivery has no
-pagination, HTTP, realtime, events, queues, attachments, reactions, threads,
+This delivery has no HTTP, realtime, events, queues, attachments, reactions, threads,
 search, edit history, undelete or message purge.
+
+## Paginated history
+
+`ListMessages::new(&storage).execute(actor, conversation_id, PageRequest::default())`
+returns `Page<Message>` newest-first by UUIDv7 `MessageId::Ord`. Active messages
+and tombstones both appear. `next_cursor()` continues toward older history using
+`PageRequest::new(limit).with_cursor(cursor)`; the last page has no cursor even
+when exactly full. Listing does not mark read or apply the current write policy.
+
+Every page requires current membership, including Direct and self Direct.
+Leaving a Group invalidates access with an earlier cursor; deleting the
+conversation yields not-found. Cursor scope validation does not replace
+authorization. See [pagination](pagination.md) for limits, cursor opacity,
+versioning and consistency between requests.

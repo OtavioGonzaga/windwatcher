@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Reusable opaque cursor pagination with `PageRequest`, `Page<T>`, and validated
+  `PageLimit` (default 50, maximum 100).
+- `ListMessages` paginated history using newest-first UUIDv7 keyset ordering,
+  versioned scope-bound cursors, current membership checks and tombstones.
+
 - Text message model and exact portable content, with configurable new-write
   `MessagePolicy` (128 KiB default measured in UTF-8 bytes).
 - Send, single-message retrieval, lightweight replies, author editing and

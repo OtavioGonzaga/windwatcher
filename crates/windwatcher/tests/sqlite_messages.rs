@@ -72,6 +72,37 @@ async fn send(f: &Fixture, reply: Option<MessageId>) -> Message {
 }
 
 #[tokio::test]
+async fn pagination_reads_without_acquiring_the_writer_lock() {
+    let f = fixture().await;
+    let message = send(&f, None).await;
+    let mut writer = f.pool.begin_with("BEGIN IMMEDIATE").await.unwrap();
+    sqlx::query("DELETE FROM conversation_members WHERE conversation_id = ? AND user_id = ?")
+        .bind(bytes(f.conversation))
+        .bind(bytes(f.peer))
+        .execute(&mut *writer)
+        .await
+        .unwrap();
+    // An uncommitted writer must not prevent an authorized read of committed history.
+    let ListMessagesStoreOutcome::Page(page) = f
+        .store
+        .list_messages(f.peer, f.conversation, None, PageLimit::DEFAULT)
+        .await
+        .unwrap()
+    else {
+        panic!("expected committed membership snapshot")
+    };
+    assert_eq!(page.items, [message]);
+    writer.commit().await.unwrap();
+    assert_eq!(
+        f.store
+            .list_messages(f.peer, f.conversation, None, PageLimit::DEFAULT)
+            .await
+            .unwrap(),
+        ListMessagesStoreOutcome::NotMember
+    );
+}
+
+#[tokio::test]
 async fn schema_enforces_physical_types_checks_and_reply_integrity() {
     let f = fixture().await;
     let strict: i64 =
@@ -256,6 +287,40 @@ async fn blob_order_matches_message_id_ord_and_read_queries() {
     assert_eq!(
         persisted,
         ids.iter().copied().map(bytes).collect::<Vec<_>>()
+    );
+    let ListMessagesStoreOutcome::Page(page) = f
+        .store
+        .list_messages(f.peer, f.conversation, None, PageLimit::MAX)
+        .await
+        .unwrap()
+    else {
+        panic!("expected page")
+    };
+    assert_eq!(
+        page.items.iter().map(Message::id).collect::<Vec<_>>(),
+        ids.iter().rev().copied().collect::<Vec<_>>()
+    );
+    let ListMessagesStoreOutcome::Page(page) = f
+        .store
+        .list_messages(
+            f.peer,
+            f.conversation,
+            Some(ids[2]),
+            PageLimit::new(1).unwrap(),
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("expected page")
+    };
+    assert_eq!(page.items[0].id(), ids[1]);
+    assert!(page.has_more);
+    let plan: Vec<String> = sqlx::query("EXPLAIN QUERY PLAN SELECT id FROM messages WHERE conversation_id = ? AND id < ? ORDER BY id DESC LIMIT ?")
+        .bind(bytes(f.conversation)).bind(bytes(ids[2])).bind(2_i64).fetch_all(&f.pool).await.unwrap()
+        .iter().map(|row| row.get("detail")).collect();
+    assert!(
+        plan.iter()
+            .any(|detail| detail.contains("SEARCH") && detail.contains("INDEX"))
     );
     f.store
         .mark_read_through(f.peer, f.conversation, ids[1])

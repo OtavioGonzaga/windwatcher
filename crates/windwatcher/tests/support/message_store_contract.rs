@@ -48,6 +48,7 @@ pub async fn run<S: MessageStore + ConversationStore>(
     member: UserId,
     outsider: UserId,
 ) {
+    pagination_contract(store, owner, member, outsider).await;
     let now =
         OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap() + Duration::microseconds(123);
     let later = now + Duration::seconds(1);
@@ -636,4 +637,220 @@ pub async fn run<S: MessageStore + ConversationStore>(
             .last_read_message_id(),
         None
     );
+}
+
+async fn slice<S: MessageStore>(
+    store: &S,
+    actor: UserId,
+    c: ConversationId,
+    before: Option<MessageId>,
+    limit: usize,
+) -> MessagePageSlice {
+    let ListMessagesStoreOutcome::Page(page) = store
+        .list_messages(actor, c, before, PageLimit::new(limit).unwrap())
+        .await
+        .unwrap()
+    else {
+        panic!("expected authorized page")
+    };
+    assert!(page.items.len() <= limit);
+    assert!(
+        page.items
+            .windows(2)
+            .all(|pair| pair[0].id() > pair[1].id())
+    );
+    assert!(
+        page.items
+            .iter()
+            .all(|m| m.conversation_id() == c && before.is_none_or(|b| m.id() < b))
+    );
+    assert!(!page.has_more || !page.items.is_empty());
+    page
+}
+
+async fn pagination_contract<S: MessageStore + ConversationStore>(
+    store: &S,
+    owner: UserId,
+    member: UserId,
+    outsider: UserId,
+) {
+    let now = OffsetDateTime::UNIX_EPOCH;
+    let group = Conversation::new_group(
+        ConversationId::new(),
+        GroupTitle::new("pagination").unwrap(),
+        now,
+    );
+    let c = group.id();
+    store.create_group(&group, owner, &[member]).await.unwrap();
+    let empty = slice(store, member, c, None, 50).await;
+    assert!(empty.items.is_empty() && !empty.has_more);
+    assert_eq!(
+        store
+            .list_messages(outsider, c, None, PageLimit::DEFAULT)
+            .await
+            .unwrap(),
+        ListMessagesStoreOutcome::NotMember
+    );
+    assert_eq!(
+        store
+            .list_messages(owner, ConversationId::new(), None, PageLimit::DEFAULT)
+            .await
+            .unwrap(),
+        ListMessagesStoreOutcome::ConversationNotFound
+    );
+    // Deliberately deterministic keys, inserted out of order, not generated-clock timing.
+    let mut ids = Vec::new();
+    for number in [3, 1, 5, 2, 4] {
+        let id: MessageId = format!("018f6f34-0000-7000-8000-{number:012x}")
+            .parse()
+            .unwrap();
+        let message = Message::new(
+            id,
+            c,
+            owner,
+            MessageContent::new("history").unwrap(),
+            None,
+            now,
+        )
+        .unwrap();
+        assert!(matches!(
+            store.send_message(&message).await.unwrap(),
+            SendMessageStoreOutcome::Sent(_)
+        ));
+        ids.push(id);
+        if ids.len() == 1 {
+            let page = slice(store, member, c, None, 50).await;
+            assert_eq!(page.items.len(), 1);
+            assert!(!page.has_more);
+        }
+    }
+    ids.sort_by(|a, b| b.cmp(a));
+    let marker = store
+        .find_member(c, member)
+        .await
+        .unwrap()
+        .unwrap()
+        .last_read_message_id();
+    let full = slice(store, member, c, None, 50).await;
+    assert_eq!(full.items.len(), 5);
+    assert!(!full.has_more);
+    let first = ListMessages::new(store)
+        .execute(member, c, PageRequest::new(PageLimit::new(2).unwrap()))
+        .await
+        .unwrap();
+    assert_eq!(
+        first.items().iter().map(Message::id).collect::<Vec<_>>(),
+        ids[..2]
+    );
+    // A newer insertion stays above the boundary and does not enter continuation.
+    let newer = send(store, owner, c, "new", None, now).await;
+    assert!(newer.id() > ids[0]);
+    store.delete_message(owner, c, ids[2], now).await.unwrap();
+    let second = ListMessages::new(store)
+        .execute(
+            member,
+            c,
+            PageRequest::new(PageLimit::new(2).unwrap()).with_cursor(first.next_cursor().unwrap()),
+        )
+        .await
+        .unwrap();
+    assert!(second.has_more());
+    assert!(second.items()[0].is_deleted());
+    let third = ListMessages::new(store)
+        .execute(
+            member,
+            c,
+            PageRequest::new(PageLimit::new(2).unwrap()).with_cursor(second.next_cursor().unwrap()),
+        )
+        .await
+        .unwrap();
+    assert!(!third.has_more());
+    assert_eq!(third.items().len(), 1);
+    let traversed: Vec<_> = first
+        .items()
+        .iter()
+        .chain(second.items())
+        .chain(third.items())
+        .map(Message::id)
+        .collect();
+    assert_eq!(traversed, ids);
+    assert_eq!(
+        store
+            .find_member(c, member)
+            .await
+            .unwrap()
+            .unwrap()
+            .last_read_message_id(),
+        marker
+    );
+    // A typed boundary need not identify a stored row.
+    let fabricated = "018f6f34-0000-7000-8000-000000000006".parse().unwrap();
+    assert_eq!(
+        slice(store, member, c, Some(fabricated), 50)
+            .await
+            .items
+            .len(),
+        5
+    );
+    store.leave_group(c, member, now).await.unwrap();
+    assert!(matches!(
+        ListMessages::new(store)
+            .execute(
+                member,
+                c,
+                PageRequest::default().with_cursor(first.next_cursor().unwrap())
+            )
+            .await,
+        Err(ListMessagesError::NotMember)
+    ));
+    store.add_group_member(c, owner, member, now).await.unwrap();
+    assert_eq!(slice(store, member, c, None, 50).await.items.len(), 6);
+    store.leave_group(c, member, now).await.unwrap();
+    store.leave_group(c, owner, now).await.unwrap();
+    assert!(matches!(
+        ListMessages::new(store)
+            .execute(
+                owner,
+                c,
+                PageRequest::default().with_cursor(first.next_cursor().unwrap())
+            )
+            .await,
+        Err(ListMessagesError::ConversationNotFound)
+    ));
+
+    // Exact-limit and lookahead edge, using a self Direct.
+    let direct = Conversation::new_direct(ConversationId::new(), now);
+    let c = match store
+        .get_or_create_direct(&direct, outsider, outsider)
+        .await
+        .unwrap()
+    {
+        StartDirectStoreOutcome::Created(c) | StartDirectStoreOutcome::Existing(c) => c.id(),
+    };
+    for _ in 0..50 {
+        send(store, outsider, c, "self", None, now).await;
+    }
+    let exact = ListMessages::new(store)
+        .execute(outsider, c, PageRequest::default())
+        .await
+        .unwrap();
+    assert_eq!(exact.items().len(), 50);
+    assert_eq!(exact.next_cursor(), None);
+    send(store, outsider, c, "51", None, now).await;
+    let page = ListMessages::new(store)
+        .execute(outsider, c, PageRequest::default())
+        .await
+        .unwrap();
+    assert_eq!(page.items().len(), 50);
+    assert!(page.has_more());
+    let final_page = ListMessages::new(store)
+        .execute(
+            outsider,
+            c,
+            PageRequest::default().with_cursor(page.next_cursor().unwrap()),
+        )
+        .await
+        .unwrap();
+    assert_eq!(final_page.items().len(), 1);
+    assert!(!final_page.has_more());
 }

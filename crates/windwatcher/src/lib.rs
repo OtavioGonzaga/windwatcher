@@ -6,6 +6,7 @@ mod authentication;
 mod conversation;
 mod conversation_store;
 mod conversations;
+mod cursor;
 mod id;
 mod identity;
 mod identity_store;
@@ -13,6 +14,7 @@ mod local_users;
 mod message;
 mod message_store;
 mod messages;
+mod pagination;
 mod password;
 mod session;
 #[cfg(feature = "sqlite")]
@@ -36,6 +38,7 @@ pub use conversations::{
     StartDirectConversationError, StartDirectConversationOutcome, TransferGroupOwnership,
     TransferGroupOwnershipError,
 };
+pub use cursor::CursorError;
 pub use identity_store::{IdentityStore, IdentityStoreError, LocalAuthentication};
 pub use local_users::{
     CreateLocalUser, CreateLocalUserError, DisableUser, EnableUser, ManageUserError,
@@ -46,15 +49,16 @@ pub use message::{
 };
 pub use message_store::{
     DeleteMessageStoreOutcome, EditMessageStoreOutcome, GetMessageStoreOutcome,
-    MarkReadStoreOutcome, MessageStore, MessageStoreError, SendMessageStoreOutcome,
-    UnreadCountStoreOutcome,
+    ListMessagesStoreOutcome, MarkReadStoreOutcome, MessagePageSlice, MessageStore,
+    MessageStoreError, SendMessageStoreOutcome, UnreadCountStoreOutcome,
 };
 pub use messages::{
     DeleteMessage, DeleteMessageError, DeleteMessageOutcome, EditMessage, EditMessageError,
     EditMessageOutcome, GetMessage, GetMessageError, GetUnreadCount, GetUnreadCountError,
-    MarkConversationReadError, MarkConversationReadThrough, MarkReadOutcome, SendMessage,
-    SendMessageError,
+    ListMessages, ListMessagesError, MarkConversationReadError, MarkConversationReadThrough,
+    MarkReadOutcome, SendMessage, SendMessageError,
 };
+pub use pagination::{Page, PageLimit, PageLimitError, PageRequest};
 pub use password::{
     Argon2idPasswordHasher, PasswordHash, PasswordHashError, PasswordHasher, PasswordPolicyError,
     SecretPassword,

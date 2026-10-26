@@ -1,5 +1,7 @@
 use time::OffsetDateTime;
 
+use crate::{CursorError, ListMessagesStoreOutcome, Page, PageRequest, cursor};
+
 use crate::{
     ConversationId, DeleteMessageStoreOutcome as Delete, EditMessageStoreOutcome as Edit,
     GetMessageStoreOutcome as Get, MarkReadStoreOutcome as Read, Message, MessageContent,
@@ -36,6 +38,77 @@ operation_error!(SendMessageError, "A message could not be sent.", {
 operation_error!(GetMessageError, "A message could not be retrieved.", {
     MessageNotFound => "message not found in conversation",
 });
+operation_error!(ListMessagesError, "Message history could not be listed.", {
+    InvalidCursor(CursorError) => "invalid pagination cursor",
+});
+
+/// Lists newest-first history, including tombstones, without marking it read.
+///
+/// ```no_run
+/// use windwatcher::{ConversationId, ListMessages, MessageStore, PageRequest, UserId};
+/// # async fn example<S: MessageStore>(storage: &S, actor: UserId,
+/// # conversation: ConversationId) -> Result<(), Box<dyn std::error::Error>> {
+/// let page = ListMessages::new(storage)
+///     .execute(actor, conversation, PageRequest::default()).await?;
+/// for message in page.items() {
+///     // Items are newest to oldest, including tombstones.
+///     let _ = message.id();
+/// }
+/// if let Some(cursor) = page.next_cursor() {
+///     let next = ListMessages::new(storage)
+///         .execute(actor, conversation, PageRequest::default().with_cursor(cursor)).await?;
+/// }
+/// # Ok(())
+/// # }
+/// ```
+pub struct ListMessages<'a, S> {
+    store: &'a S,
+}
+
+impl<'a, S: MessageStore> ListMessages<'a, S> {
+    /// Uses the given persistence port.
+    pub fn new(store: &'a S) -> Self {
+        Self { store }
+    }
+
+    /// Validates a cursor before storage and independently requires current membership.
+    /// Continuations move toward older IDs; page size may change between requests.
+    pub async fn execute(
+        &self,
+        actor: UserId,
+        conversation: ConversationId,
+        request: PageRequest,
+    ) -> Result<Page<Message>, ListMessagesError> {
+        let before = request
+            .cursor()
+            .map(|token| cursor::decode_message(token, conversation))
+            .transpose()
+            .map_err(ListMessagesError::InvalidCursor)?;
+        match self
+            .store
+            .list_messages(actor, conversation, before, request.limit())
+            .await?
+        {
+            ListMessagesStoreOutcome::ConversationNotFound => {
+                Err(ListMessagesError::ConversationNotFound)
+            }
+            ListMessagesStoreOutcome::NotMember => Err(ListMessagesError::NotMember),
+            ListMessagesStoreOutcome::Page(slice) => {
+                let next = if slice.has_more {
+                    let last = slice.items.last().ok_or_else(|| {
+                        MessageStoreError::Unexpected(Box::new(std::io::Error::other(
+                            "empty message slice with more history",
+                        )))
+                    })?;
+                    Some(cursor::encode_message(conversation, last.id()))
+                } else {
+                    None
+                };
+                Ok(Page::new(slice.items, next))
+            }
+        }
+    }
+}
 operation_error!(EditMessageError, "A message could not be edited.", {
     MessageNotFound => "message not found in conversation",
     NotAuthor => "only the author may edit a message",
