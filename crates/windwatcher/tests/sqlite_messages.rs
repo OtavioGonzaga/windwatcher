@@ -186,6 +186,93 @@ async fn keyed_sends_are_atomic_concurrent_persistent_and_store_only_hashes() {
 }
 
 #[tokio::test]
+async fn keyed_groups_are_concurrent_atomic_and_cleanup_keeps_active_records() {
+    let f = fixture().await;
+    let key = IdempotencyKey::new("group-concurrency").unwrap();
+    let create = CreateConversation::new(&f.store);
+    let request = || ConversationCreateRequest::Group {
+        title: "one group".into(),
+        participant_ids: vec![f.peer],
+    };
+    let (a, b) = tokio::join!(
+        create.execute(f.owner, request(), Some(&key), now()),
+        create.execute(f.owner, request(), Some(&key), now())
+    );
+    let a = a.unwrap();
+    let b = b.unwrap();
+    assert_eq!(a.value, b.value);
+    assert_ne!(a.disposition, b.disposition);
+    let count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM conversations WHERE title = 'one group'")
+            .fetch_one(&f.pool)
+            .await
+            .unwrap();
+    assert_eq!(count, 1);
+    sqlx::query("CREATE TRIGGER reject_group_record BEFORE INSERT ON idempotency_records BEGIN SELECT RAISE(ABORT, 'test failure'); END").execute(&f.pool).await.unwrap();
+    let failed_key = IdempotencyKey::new("group-rollback").unwrap();
+    assert!(
+        create
+            .execute(f.owner, request(), Some(&failed_key), now())
+            .await
+            .is_err()
+    );
+    let count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM conversations WHERE title = 'one group'")
+            .fetch_one(&f.pool)
+            .await
+            .unwrap();
+    assert_eq!(count, 1);
+    sqlx::query("DROP TRIGGER reject_group_record")
+        .execute(&f.pool)
+        .await
+        .unwrap();
+    create
+        .execute(
+            f.owner,
+            request(),
+            Some(&failed_key),
+            now() + time::Duration::hours(1),
+        )
+        .await
+        .unwrap();
+    let renewed = create
+        .execute(
+            f.owner,
+            request(),
+            Some(&key),
+            now() + time::Duration::days(1),
+        )
+        .await
+        .unwrap();
+    assert_ne!(renewed.value, a.value);
+    let active: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM idempotency_records WHERE key_hash = ?")
+            .bind(failed_key.hash().as_slice())
+            .fetch_one(&f.pool)
+            .await
+            .unwrap();
+    assert_eq!(active, 1);
+    let plan =
+        sqlx::query("EXPLAIN QUERY PLAN DELETE FROM idempotency_records WHERE expires_at <= ?")
+            .bind(0_i64)
+            .fetch_all(&f.pool)
+            .await
+            .unwrap()
+            .iter()
+            .map(|r| r.get::<String, _>("detail"))
+            .collect::<Vec<_>>()
+            .join("\n");
+    assert!(plan.contains("idempotency_records_expires"), "{plan}");
+    // Raw client key strings never enter the database; only fixed-size hashes do.
+    let key_type: String =
+        sqlx::query_scalar("SELECT typeof(key_hash) FROM idempotency_records LIMIT 1")
+            .fetch_one(&f.pool)
+            .await
+            .unwrap();
+    assert_eq!(key_type, "blob");
+}
+
+#[tokio::test]
 async fn pagination_reads_without_acquiring_the_writer_lock() {
     let f = fixture().await;
     let message = send(&f, None).await;

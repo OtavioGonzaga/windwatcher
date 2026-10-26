@@ -235,6 +235,11 @@ pub async fn run<S: MessagingQueryStore + ConversationStore + MessageStore + Ide
     );
     peer.disable(now);
     store.update_user(&peer).await.unwrap();
+    let historical = GetMessage::new(store)
+        .execute(actor, message.id())
+        .await
+        .unwrap();
+    assert_eq!(historical.sender_username, *peer.username());
     assert!(
         FindUsers::new(store)
             .execute(peer.username().as_str())
@@ -277,5 +282,174 @@ pub async fn run<S: MessagingQueryStore + ConversationStore + MessageStore + Ide
             .items()
             .len(),
         1
+    );
+    peer.enable(now);
+    store.update_user(&peer).await.unwrap();
+    activity_and_unread(
+        store,
+        actor,
+        outsider.id(),
+        peer.id(),
+        now + Duration::seconds(100),
+    )
+    .await;
+}
+
+async fn activity_and_unread<S: MessagingQueryStore + ConversationStore + MessageStore>(
+    store: &S,
+    actor: UserId,
+    other: UserId,
+    joining: UserId,
+    now: OffsetDateTime,
+) {
+    let a = Conversation::new_group(
+        ConversationId::new(),
+        GroupTitle::new("activity a").unwrap(),
+        now,
+    );
+    let b = Conversation::new_group(
+        ConversationId::new(),
+        GroupTitle::new("activity b").unwrap(),
+        now,
+    );
+    store.create_group(&a, actor, &[other]).await.unwrap();
+    store.create_group(&b, actor, &[other]).await.unwrap();
+    let first = ListConversations::new(store)
+        .execute(actor, PageRequest::new(PageLimit::new(1).unwrap()))
+        .await
+        .unwrap();
+    assert_eq!(first.items()[0].conversation.id(), a.id().max(b.id()));
+    assert_eq!(first.items()[0].activity_at, now);
+    let policy = MessagePolicy::default();
+    let own = SendMessage::new(store, &policy)
+        .execute(actor, a.id(), "own", None, now + Duration::seconds(1))
+        .await
+        .unwrap();
+    assert_eq!(
+        GetConversationSummary::new(store)
+            .execute(actor, a.id())
+            .await
+            .unwrap()
+            .unread_count,
+        0
+    );
+    assert_eq!(
+        GetConversationSummary::new(store)
+            .execute(other, a.id())
+            .await
+            .unwrap()
+            .unread_count,
+        1
+    );
+    let incoming = SendMessage::new(store, &policy)
+        .execute(other, a.id(), "incoming", None, now + Duration::seconds(2))
+        .await
+        .unwrap();
+    assert_eq!(
+        GetConversationSummary::new(store)
+            .execute(actor, a.id())
+            .await
+            .unwrap()
+            .unread_count,
+        1
+    );
+    store
+        .add_group_member(a.id(), actor, joining, now + Duration::seconds(3))
+        .await
+        .unwrap();
+    let joined = GetConversationSummary::new(store)
+        .execute(joining, a.id())
+        .await
+        .unwrap();
+    assert_eq!(
+        joined.membership.last_read_message_id(),
+        Some(incoming.id())
+    );
+    assert_eq!(joined.unread_count, 0);
+    let latest = SendMessage::new(store, &policy)
+        .execute(actor, a.id(), "latest", None, now + Duration::seconds(4))
+        .await
+        .unwrap();
+    assert_eq!(
+        GetConversationSummary::new(store)
+            .execute(joining, a.id())
+            .await
+            .unwrap()
+            .unread_count,
+        1
+    );
+    store
+        .delete_message(actor, latest.id(), now + Duration::seconds(5))
+        .await
+        .unwrap();
+    store
+        .mark_read_through(actor, a.id(), incoming.id())
+        .await
+        .unwrap();
+    EditMessage::new(store, &policy)
+        .execute(actor, own.id(), "old edit", now + Duration::seconds(6))
+        .await
+        .unwrap();
+    let summary = GetConversationSummary::new(store)
+        .execute(actor, a.id())
+        .await
+        .unwrap();
+    assert_eq!(summary.activity_at, latest.created_at());
+    assert_eq!(
+        summary.conversation.updated_at(),
+        now + Duration::seconds(3)
+    );
+    assert!(summary.last_message.unwrap().is_deleted());
+    assert_eq!(summary.unread_count, 0);
+    assert_eq!(
+        GetConversationSummary::new(store)
+            .execute(joining, a.id())
+            .await
+            .unwrap()
+            .unread_count,
+        0
+    );
+    store
+        .rename_group(
+            b.id(),
+            actor,
+            &GroupTitle::new("metadata activity").unwrap(),
+            now + Duration::seconds(10),
+        )
+        .await
+        .unwrap();
+    let refreshed = ListConversations::new(store)
+        .execute(actor, PageRequest::new(PageLimit::new(1).unwrap()))
+        .await
+        .unwrap();
+    assert_eq!(refreshed.items()[0].conversation.id(), b.id());
+    let newly_active = Conversation::new_group(
+        ConversationId::new(),
+        GroupTitle::new("new after first page").unwrap(),
+        now + Duration::seconds(20),
+    );
+    store.create_group(&newly_active, actor, &[]).await.unwrap();
+    let continuation = ListConversations::new(store)
+        .execute(
+            actor,
+            PageRequest::default().with_cursor(refreshed.next_cursor().unwrap()),
+        )
+        .await
+        .unwrap();
+    assert!(
+        continuation
+            .items()
+            .iter()
+            .all(|s| s.conversation.id() != newly_active.id() && s.conversation.id() != b.id())
+    );
+    store.leave_group(a.id(), joining, now).await.unwrap();
+    assert!(
+        ListConversations::new(store)
+            .execute(joining, PageRequest::default())
+            .await
+            .unwrap()
+            .items()
+            .iter()
+            .all(|s| s.conversation.id() != a.id())
     );
 }

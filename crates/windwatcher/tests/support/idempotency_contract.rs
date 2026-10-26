@@ -47,6 +47,20 @@ pub async fn run<S: CreateCommandStore + ConversationStore + MessageStore>(
             .await,
         Err(CreateCommandError::KeyReused)
     ));
+    assert!(matches!(
+        create
+            .execute(
+                actor,
+                ConversationCreateRequest::Group {
+                    title: "Engineering".into(),
+                    participant_ids: vec![]
+                },
+                Some(&key),
+                now
+            )
+            .await,
+        Err(CreateCommandError::KeyReused)
+    ));
     let policy = MessagePolicy::default();
     let send = SendMessageCommand::new(store, &policy);
     let sent = send
@@ -131,6 +145,30 @@ pub async fn run<S: CreateCommandStore + ConversationStore + MessageStore>(
         .await
         .unwrap();
     assert_ne!(independent.value.id(), sent.value.id());
+    let second_group = create
+        .execute(
+            actor,
+            ConversationCreateRequest::Group {
+                title: "another scope".into(),
+                participant_ids: vec![],
+            },
+            None,
+            now,
+        )
+        .await
+        .unwrap();
+    let scoped = send
+        .execute(
+            actor,
+            second_group.value,
+            "different payload in another scope",
+            None,
+            Some(&key),
+            now,
+        )
+        .await
+        .unwrap();
+    assert_eq!(scoped.disposition, CreateDisposition::Created);
     let failed_key = IdempotencyKey::new("failed-key").unwrap();
     assert!(matches!(
         send.execute(
@@ -216,6 +254,12 @@ pub async fn run<S: CreateCommandStore + ConversationStore + MessageStore>(
             .await,
         Err(CreateCommandError::ResultUnavailable)
     ));
+    let replacement = create
+        .execute(actor, request(), Some(&group_key), now + Duration::days(1))
+        .await
+        .unwrap();
+    assert_eq!(replacement.disposition, CreateDisposition::Created);
+    assert_ne!(replacement.value, group.value);
     // A failed create does not establish the key mapping.
     let unused = IdempotencyKey::new("failed-group").unwrap();
     assert!(matches!(

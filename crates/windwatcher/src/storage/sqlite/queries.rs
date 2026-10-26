@@ -299,6 +299,79 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    async fn consumer_projection_reads_do_not_take_the_writer_lock() {
+        let directory = tempfile::TempDir::new().unwrap();
+        let store = SqliteStorage::connect(super::super::SqliteStorageOptions::new(format!(
+            "sqlite://{}",
+            directory.path().join("read-lock.db").display()
+        )))
+        .await
+        .unwrap();
+        store.migrate().await.unwrap();
+        let actor = UserId::new();
+        sqlx::query(
+            "INSERT INTO users (id, username, created_at, updated_at) VALUES (?, 'reader', 0, 0)",
+        )
+        .bind(id_bytes(actor))
+        .execute(&store.pool)
+        .await
+        .unwrap();
+        let conversation = crate::Conversation::new_group(
+            ConversationId::new(),
+            crate::GroupTitle::new("read snapshot").unwrap(),
+            time::OffsetDateTime::UNIX_EPOCH,
+        );
+        crate::ConversationStore::create_group(&store, &conversation, actor, &[])
+            .await
+            .unwrap();
+        let policy = crate::MessagePolicy::default();
+        crate::SendMessage::new(&store, &policy)
+            .execute(
+                actor,
+                conversation.id(),
+                "history",
+                None,
+                time::OffsetDateTime::UNIX_EPOCH,
+            )
+            .await
+            .unwrap();
+        let writer = store.pool.begin_with("BEGIN IMMEDIATE").await.unwrap();
+        let reads = tokio::time::timeout(std::time::Duration::from_millis(500), async {
+            let page = store
+                .list_conversations(actor, None, PageLimit::DEFAULT)
+                .await
+                .unwrap();
+            assert_eq!(page.items.len(), 1);
+            assert!(page.items[0].last_message.is_some());
+            assert!(matches!(
+                store
+                    .get_conversation_summary(actor, conversation.id())
+                    .await
+                    .unwrap(),
+                Outcome::Found(_)
+            ));
+            assert!(matches!(
+                store
+                    .list_conversation_members(actor, conversation.id(), None, PageLimit::DEFAULT)
+                    .await
+                    .unwrap(),
+                Outcome::Found(_)
+            ));
+            assert_eq!(
+                store
+                    .find_users(&"reader".parse().unwrap())
+                    .await
+                    .unwrap()
+                    .len(),
+                1
+            );
+        })
+        .await;
+        writer.rollback().await.unwrap();
+        reads.expect("pure projections must not wait for the writer lock");
+    }
+
+    #[tokio::test]
     async fn derived_activity_and_member_plans_use_existing_lookup_indexes() {
         let directory = tempfile::TempDir::new().unwrap();
         let store = SqliteStorage::connect(super::super::SqliteStorageOptions::new(format!(

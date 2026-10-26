@@ -198,6 +198,18 @@ fn openapi_messaging_surface_has_explicit_security_pages_discriminator_and_heade
         false
     );
     assert_eq!(schemas["CreateGroupRequest"]["additionalProperties"], false);
+    assert_eq!(
+        schemas["CreateDirectRequest"]["properties"]["participant_id"]["format"],
+        "uuid"
+    );
+    assert_eq!(
+        schemas["CreateGroupRequest"]["properties"]["participant_ids"]["items"]["type"],
+        "string"
+    );
+    assert_eq!(
+        schemas["CreateGroupRequest"]["properties"]["participant_ids"]["items"]["format"],
+        "uuid"
+    );
     for (path, schema) in [
         ("/v1/users", "UserSummaryResponse"),
         ("/v1/conversations", "ConversationResponse"),
@@ -578,7 +590,7 @@ async fn group_lifecycle_and_disabled_participants_preserve_contracts() {
     let f = Fixture::open().await;
     let (owner, token) = participant(&f, "owner").await;
     let (mut peer, peer_token) = participant(&f, "member").await;
-    let (target, _) = participant(&f, "target").await;
+    let (target, target_token) = participant(&f, "target").await;
     let request = json!({"kind":"group","title":"Engineering","participant_ids":[peer.id().to_string(),peer.id().to_string(),owner.id().to_string()]});
     let group = send(
         &f.router,
@@ -595,6 +607,59 @@ async fn group_lifecycle_and_disabled_participants_preserve_contracts() {
     assert_eq!(replay.1["idempotency-replayed"], "true");
     let base = format!("/v1/conversations/{}", group.2["id"].as_str().unwrap());
     let members = send(&f.router, bearer("GET", &format!("{base}/members"), &token)).await;
+    let member_page = send(
+        &f.router,
+        bearer("GET", &format!("{base}/members?limit=1"), &token),
+    )
+    .await;
+    let old_cursor = member_page.2["next_cursor"].as_str().unwrap().to_owned();
+    let renamed = send(
+        &f.router,
+        authorized("PATCH", &base, &token, json!({"title":"Renamed"})),
+    )
+    .await;
+    assert_eq!(renamed.0, StatusCode::OK);
+    assert_eq!(
+        send(
+            &f.router,
+            authorized("PATCH", &base, &token, json!({"title":"Renamed"}))
+        )
+        .await
+        .2,
+        renamed.2
+    );
+    problem(
+        &send(
+            &f.router,
+            authorized("PATCH", &base, &token, json!({"title":"  "})),
+        )
+        .await,
+        422,
+        "conversation.invalid_title",
+    );
+    problem(
+        &send(
+            &f.router,
+            authorized("PATCH", &base, &peer_token, json!({"title":"Denied"})),
+        )
+        .await,
+        403,
+        "conversation.insufficient_permissions",
+    );
+    assert_eq!(
+        send(
+            &f.router,
+            authorized(
+                "PUT",
+                &format!("{base}/owner"),
+                &token,
+                json!({"user_id":owner.id().to_string()})
+            )
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
     assert_eq!(members.0, StatusCode::OK);
     page(&members.2);
     for member in members.2["items"].as_array().unwrap() {
@@ -621,6 +686,106 @@ async fn group_lifecycle_and_disabled_participants_preserve_contracts() {
     )
     .await;
     assert_eq!(role.2["role"], "admin");
+    problem(
+        &send(
+            &f.router,
+            bearer(
+                "DELETE",
+                &format!("{base}/members/{}", owner.id()),
+                &target_token,
+            ),
+        )
+        .await,
+        409,
+        "conversation.owner_protected",
+    );
+    problem(
+        &send(
+            &f.router,
+            authorized(
+                "PATCH",
+                &format!("{base}/members/{}", owner.id()),
+                &token,
+                json!({"role":"member"}),
+            ),
+        )
+        .await,
+        409,
+        "conversation.owner_protected",
+    );
+    problem(
+        &send(
+            &f.router,
+            authorized(
+                "PUT",
+                &format!("{base}/owner"),
+                &target_token,
+                json!({"user_id":target.id().to_string()}),
+            ),
+        )
+        .await,
+        403,
+        "conversation.insufficient_permissions",
+    );
+    problem(
+        &send(
+            &f.router,
+            authorized("PATCH", &target_path, &token, json!({"role":"owner"})),
+        )
+        .await,
+        400,
+        "request.invalid_json",
+    );
+    let missing_member = format!("{base}/members/{}", UserId::new());
+    problem(
+        &send(
+            &f.router,
+            authorized("PATCH", &missing_member, &token, json!({"role":"admin"})),
+        )
+        .await,
+        404,
+        "conversation.member_not_found",
+    );
+    problem(
+        &send(&f.router, bearer("DELETE", &missing_member, &token)).await,
+        404,
+        "conversation.member_not_found",
+    );
+    problem(
+        &send(
+            &f.router,
+            authorized(
+                "PUT",
+                &format!("{base}/owner"),
+                &token,
+                json!({"user_id":UserId::new().to_string()}),
+            ),
+        )
+        .await,
+        404,
+        "conversation.member_not_found",
+    );
+    let original = send(
+        &f.router,
+        authorized(
+            "POST",
+            &format!("{base}/messages"),
+            &peer_token,
+            json!({"content":"moderate"}),
+        ),
+    )
+    .await;
+    let moderation = send(
+        &f.router,
+        bearer(
+            "DELETE",
+            &format!("/v1/messages/{}", original.2["id"].as_str().unwrap()),
+            &target_token,
+        ),
+    )
+    .await;
+    assert_eq!(moderation.0, StatusCode::OK);
+    assert!(moderation.2["deleted_at"].is_string());
     assert_eq!(
         send(
             &f.router,
@@ -718,6 +883,24 @@ async fn group_lifecycle_and_disabled_participants_preserve_contracts() {
         .await
         .0,
         StatusCode::NO_CONTENT
+    );
+    problem(
+        &send(&f.router, bearer("GET", &base, &token)).await,
+        404,
+        "conversation.not_found",
+    );
+    problem(
+        &send(
+            &f.router,
+            bearer(
+                "GET",
+                &format!("{base}/members?cursor={old_cursor}"),
+                &token,
+            ),
+        )
+        .await,
+        404,
+        "conversation.not_found",
     );
     assert_eq!(
         send(
