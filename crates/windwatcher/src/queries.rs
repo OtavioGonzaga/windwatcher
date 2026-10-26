@@ -43,6 +43,18 @@ pub enum QueryStoreError {
 /// Each operation must use one consistent read snapshot and a bounded number of
 /// queries independent of page size. Current membership is rechecked every page.
 pub trait MessagingQueryStore: Sync {
+    /// Public attribution for one existing member, consistently authorized.
+    fn get_conversation_member(
+        &self,
+        actor: UserId,
+        conversation: ConversationId,
+        target: UserId,
+    ) -> impl Future<
+        Output = Result<
+            ConversationQueryOutcome<Option<ConversationMemberSummary>>,
+            QueryStoreError,
+        >,
+    > + Send;
     /// Exact canonical username lookup, enabled users only, at most one result.
     fn find_users(
         &self,
@@ -82,6 +94,9 @@ pub trait MessagingQueryStore: Sync {
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum MessagingQueryError {
+    /// Target is not an existing conversation member.
+    #[error("conversation member not found")]
+    MemberNotFound,
     /// Username is not a valid canonicalizable identity.
     #[error("invalid username")]
     InvalidUsername(#[source] UsernameError),
@@ -190,6 +205,29 @@ impl<'a, S: MessagingQueryStore> GetConversationSummary<'a, S> {
         conversation: ConversationId,
     ) -> Result<ConversationSummary, MessagingQueryError> {
         authorized(self.0.get_conversation_summary(actor, conversation).await?)
+    }
+}
+
+/// Loads public attribution for one existing member without leaking read state.
+pub struct GetConversationMember<'a, S>(&'a S);
+impl<'a, S: MessagingQueryStore> GetConversationMember<'a, S> {
+    /// Uses semantic query persistence.
+    pub fn new(store: &'a S) -> Self {
+        Self(store)
+    }
+    /// Requires current actor membership in the same snapshot as the lookup.
+    pub async fn execute(
+        &self,
+        actor: UserId,
+        conversation: ConversationId,
+        target: UserId,
+    ) -> Result<ConversationMemberSummary, MessagingQueryError> {
+        authorized(
+            self.0
+                .get_conversation_member(actor, conversation, target)
+                .await?,
+        )?
+        .ok_or(MessagingQueryError::MemberNotFound)
     }
 }
 

@@ -73,8 +73,9 @@ pub use password::{
     SecretPassword,
 };
 pub use queries::{
-    ConversationQueryOutcome, FindUsers, GetConversationSummary, ListConversationMembers,
-    ListConversations, MessagingQueryError, MessagingQueryStore, QuerySlice, QueryStoreError,
+    ConversationQueryOutcome, FindUsers, GetConversationMember, GetConversationSummary,
+    ListConversationMembers, ListConversations, MessagingQueryError, MessagingQueryStore,
+    QuerySlice, QueryStoreError,
 };
 pub use read_models::{
     ConversationBoundary, ConversationMemberSummary, ConversationReadState, ConversationSummary,

@@ -848,7 +848,11 @@ impl ConversationStore for SqliteStorage {
         member: UserId,
         now: OffsetDateTime,
     ) -> Result<ChangeStoreOutcome, ConversationStoreError> {
-        let mut tx = self.pool.begin().await.map_err(conversation_error)?;
+        let mut tx = self
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .map_err(conversation_error)?;
         let authorized: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM conversations c JOIN conversation_members m ON m.conversation_id = c.id WHERE c.id = ? AND c.kind = 'group' AND m.user_id = ? AND m.role IN ('owner', 'admin')").bind(id_bytes(id)).bind(id_bytes(actor)).fetch_one(&mut *tx).await.map_err(conversation_error)?;
         if authorized == 0 {
             tx.rollback().await.map_err(conversation_error)?;
@@ -883,7 +887,11 @@ impl ConversationStore for SqliteStorage {
             GroupRole::Member => "member",
             GroupRole::Owner => return Err(ConversationStoreError::InvalidGroupRole),
         };
-        let mut tx = self.pool.begin().await.map_err(conversation_error)?;
+        let mut tx = self
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .map_err(conversation_error)?;
         let authorized: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM conversations c JOIN conversation_members m ON m.conversation_id = c.id WHERE c.id = ? AND c.kind = 'group' AND m.user_id = ? AND m.role IN ('owner', 'admin')").bind(id_bytes(id)).bind(id_bytes(actor)).fetch_one(&mut *tx).await.map_err(conversation_error)?;
         if authorized == 0 {
             tx.rollback().await.map_err(conversation_error)?;
@@ -912,14 +920,19 @@ impl ConversationStore for SqliteStorage {
         target: UserId,
         now: OffsetDateTime,
     ) -> Result<ChangeStoreOutcome, ConversationStoreError> {
-        if actor == target {
-            return Ok(ChangeStoreOutcome::Unchanged);
-        }
-        let mut tx = self.pool.begin().await.map_err(conversation_error)?;
+        let mut tx = self
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .map_err(conversation_error)?;
         let authorized: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM conversations c JOIN conversation_members m ON m.conversation_id = c.id WHERE c.id = ? AND c.kind = 'group' AND m.user_id = ? AND m.role = 'owner'").bind(id_bytes(id)).bind(id_bytes(actor)).fetch_one(&mut *tx).await.map_err(conversation_error)?;
         if authorized == 0 {
             tx.rollback().await.map_err(conversation_error)?;
             return Ok(ChangeStoreOutcome::NotAuthorized);
+        }
+        if actor == target {
+            tx.commit().await.map_err(conversation_error)?;
+            return Ok(ChangeStoreOutcome::Unchanged);
         }
         let demoted = sqlx::query("UPDATE conversation_members SET role = 'admin' WHERE conversation_id = ? AND user_id = ? AND role = 'owner'").bind(id_bytes(id)).bind(id_bytes(actor)).execute(&mut *tx).await.map_err(conversation_error)?;
         if demoted.rows_affected() == 0 {
@@ -946,7 +959,11 @@ impl ConversationStore for SqliteStorage {
         actor: UserId,
         now: OffsetDateTime,
     ) -> Result<LeaveStoreOutcome, ConversationStoreError> {
-        let mut tx = self.pool.begin().await.map_err(conversation_error)?;
+        let mut tx = self
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .map_err(conversation_error)?;
         let kind: Option<String> =
             sqlx::query_scalar("SELECT kind FROM conversations WHERE id = ?")
                 .bind(id_bytes(id))
@@ -1011,11 +1028,18 @@ impl ConversationStore for SqliteStorage {
         title: &GroupTitle,
         now: OffsetDateTime,
     ) -> Result<ChangeStoreOutcome, ConversationStoreError> {
-        let result = sqlx::query("UPDATE conversations SET title = ?, updated_at = ? WHERE id = ? AND kind = 'group' AND title <> ? AND EXISTS (SELECT 1 FROM conversation_members m WHERE m.conversation_id = conversations.id AND m.user_id = ? AND m.role IN ('owner', 'admin'))").bind(title.as_str()).bind(to_micros(now).map_err(unexpected_conversation)?).bind(id_bytes(id)).bind(title.as_str()).bind(id_bytes(actor)).execute(&self.pool).await.map_err(conversation_error)?;
+        let mut tx = self
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .map_err(conversation_error)?;
+        let result = sqlx::query("UPDATE conversations SET title = ?, updated_at = ? WHERE id = ? AND kind = 'group' AND title <> ? AND EXISTS (SELECT 1 FROM conversation_members m WHERE m.conversation_id = conversations.id AND m.user_id = ? AND m.role IN ('owner', 'admin'))").bind(title.as_str()).bind(to_micros(now).map_err(unexpected_conversation)?).bind(id_bytes(id)).bind(title.as_str()).bind(id_bytes(actor)).execute(&mut *tx).await.map_err(conversation_error)?;
         if result.rows_affected() == 1 {
+            tx.commit().await.map_err(conversation_error)?;
             return Ok(ChangeStoreOutcome::Changed);
         }
-        let authorized: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM conversations c JOIN conversation_members m ON m.conversation_id = c.id WHERE c.id = ? AND c.kind = 'group' AND m.user_id = ? AND m.role IN ('owner', 'admin')").bind(id_bytes(id)).bind(id_bytes(actor)).fetch_one(&self.pool).await.map_err(conversation_error)?;
+        let authorized: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM conversations c JOIN conversation_members m ON m.conversation_id = c.id WHERE c.id = ? AND c.kind = 'group' AND m.user_id = ? AND m.role IN ('owner', 'admin')").bind(id_bytes(id)).bind(id_bytes(actor)).fetch_one(&mut *tx).await.map_err(conversation_error)?;
+        tx.commit().await.map_err(conversation_error)?;
         Ok(if authorized == 0 {
             ChangeStoreOutcome::NotAuthorized
         } else {

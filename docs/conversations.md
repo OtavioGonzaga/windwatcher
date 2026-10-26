@@ -29,6 +29,9 @@ Activity is derived from primary state, not a persisted `last_activity_at` colum
 `ListConversationMembers` supports both kinds, sorting by joined_at ASC, UserId
 ASC. It includes disabled existing users but never exposes other members' read
 markers. Every page rechecks current actor membership in the read snapshot.
+`GetConversationMember` provides the same public attribution for mutation results
+without listing all members. Group mutations acquire the SQLite writer lock
+before checking authorization, including successful self-transfer no-ops.
 
 ## Conversation kinds
 

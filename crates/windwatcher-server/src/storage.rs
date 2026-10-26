@@ -45,6 +45,19 @@ impl windwatcher::CreateCommandStore for Storage {
 }
 
 impl windwatcher::MessagingQueryStore for Storage {
+    async fn get_conversation_member(
+        &self,
+        actor: UserId,
+        conversation: ConversationId,
+        target: UserId,
+    ) -> Result<
+        windwatcher::ConversationQueryOutcome<Option<windwatcher::ConversationMemberSummary>>,
+        windwatcher::QueryStoreError,
+    > {
+        match self {
+            Self::Sqlite(s) => s.get_conversation_member(actor, conversation, target).await,
+        }
+    }
     async fn find_users(
         &self,
         username: &Username,

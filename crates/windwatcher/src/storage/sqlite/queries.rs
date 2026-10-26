@@ -111,6 +111,41 @@ async fn summaries(
 }
 
 impl MessagingQueryStore for SqliteStorage {
+    async fn get_conversation_member(
+        &self,
+        actor: UserId,
+        conversation: ConversationId,
+        target: UserId,
+    ) -> Result<Outcome<Option<ConversationMemberSummary>>, QueryStoreError> {
+        let mut tx = self.pool.begin().await.map_err(failure)?;
+        match access(&mut tx, actor, conversation).await? {
+            None => return Ok(Outcome::ConversationNotFound),
+            Some(false) => return Ok(Outcome::NotMember),
+            Some(true) => (),
+        }
+        let row = sqlx::query("SELECT m.conversation_id, m.user_id, m.role, m.joined_at, m.last_read_message_id, u.username FROM conversation_members m JOIN users u ON u.id = m.user_id WHERE m.conversation_id = ? AND m.user_id = ?")
+            .bind(id_bytes(conversation)).bind(id_bytes(target)).fetch_optional(&mut *tx).await.map_err(failure)?;
+        let member = row
+            .map(|row| {
+                let member =
+                    read_member(&row).map_err(|e| QueryStoreError::Unexpected(Box::new(e)))?;
+                Ok::<_, QueryStoreError>(ConversationMemberSummary {
+                    user: UserSummary {
+                        id: target,
+                        username: row
+                            .try_get::<String, _>("username")
+                            .map_err(failure)?
+                            .parse()
+                            .map_err(|_| corrupt("invalid projected username"))?,
+                    },
+                    role: member.role(),
+                    joined_at: member.joined_at(),
+                })
+            })
+            .transpose()?;
+        tx.commit().await.map_err(failure)?;
+        Ok(Outcome::Found(member))
+    }
     async fn find_users(&self, username: &Username) -> Result<Vec<UserSummary>, QueryStoreError> {
         sqlx::query("SELECT id, username FROM users WHERE username = ? AND disabled_at IS NULL")
             .bind(username.as_str())

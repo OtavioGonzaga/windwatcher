@@ -38,7 +38,7 @@ pub struct MessageView {
     /// Current canonical sender username, even when the sender is disabled.
     pub sender_username: Username,
     /// Current shallow target state, if this message is a reply.
-    pub reply_to: Option<ReplyPreview>,
+    pub reply_to: Option<Box<ReplyPreview>>,
 }
 
 impl std::ops::Deref for MessageView {

@@ -118,7 +118,7 @@ pub(super) fn read_view(row: &SqliteRow) -> Result<MessageView, MessageStoreErro
     Ok(MessageView {
         message,
         sender_username: username("sender_username")?,
-        reply_to,
+        reply_to: reply_to.map(Box::new),
     })
 }
 

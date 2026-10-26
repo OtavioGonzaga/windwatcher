@@ -101,30 +101,30 @@ impl CreateCommandStore for SqliteStorage {
             request_hash: command.fingerprint(),
             now,
         });
-        if let Some(record) = &record {
-            if let Some(resource) = record.lookup(&mut tx).await? {
-                let id = uuid::Uuid::from_slice(&resource)
-                    .ok()
-                    .and_then(|id| ConversationId::try_from(id).ok())
-                    .ok_or_else(|| corrupt("invalid idempotent conversation ID"))?;
-                let exists: bool =
-                    sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM conversations WHERE id = ?)")
-                        .bind(&resource)
-                        .fetch_one(&mut *tx)
-                        .await
-                        .map_err(failure)?;
-                if !exists {
-                    return Err(Error::ResultUnavailable);
-                }
-                if !is_member(&mut tx, command.actor, id).await? {
-                    return Err(Error::NotMember);
-                }
-                tx.commit().await.map_err(failure)?;
-                return Ok(CreateResult {
-                    value: id,
-                    disposition: Disposition::Replayed,
-                });
+        if let Some(record) = &record
+            && let Some(resource) = record.lookup(&mut tx).await?
+        {
+            let id = uuid::Uuid::from_slice(&resource)
+                .ok()
+                .and_then(|id| ConversationId::try_from(id).ok())
+                .ok_or_else(|| corrupt("invalid idempotent conversation ID"))?;
+            let exists: bool =
+                sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM conversations WHERE id = ?)")
+                    .bind(&resource)
+                    .fetch_one(&mut *tx)
+                    .await
+                    .map_err(failure)?;
+            if !exists {
+                return Err(Error::ResultUnavailable);
             }
+            if !is_member(&mut tx, command.actor, id).await? {
+                return Err(Error::NotMember);
+            }
+            tx.commit().await.map_err(failure)?;
+            return Ok(CreateResult {
+                value: id,
+                disposition: Disposition::Replayed,
+            });
         }
         let (id, disposition) = match command.conversation.kind() {
             ConversationKind::Direct => {
@@ -180,28 +180,28 @@ impl CreateCommandStore for SqliteStorage {
             request_hash: message_request_fingerprint(message),
             now,
         });
-        if let Some(record) = &record {
-            if let Some(resource) = record.lookup(&mut tx).await? {
-                let id = uuid::Uuid::from_slice(&resource)
-                    .ok()
-                    .and_then(|id| MessageId::try_from(id).ok())
-                    .ok_or_else(|| corrupt("invalid idempotent message ID"))?;
-                let view = super::messages::find_global(&mut tx, id)
-                    .await
-                    .map_err(Error::Message)?
-                    .ok_or(Error::ResultUnavailable)?;
-                if view.conversation_id() != message.conversation_id() {
-                    return Err(corrupt("idempotent message scope mismatch"));
-                }
-                if !is_member(&mut tx, message.sender_id(), view.conversation_id()).await? {
-                    return Err(Error::NotMember);
-                }
-                tx.commit().await.map_err(failure)?;
-                return Ok(CreateResult {
-                    value: view,
-                    disposition: Disposition::Replayed,
-                });
+        if let Some(record) = &record
+            && let Some(resource) = record.lookup(&mut tx).await?
+        {
+            let id = uuid::Uuid::from_slice(&resource)
+                .ok()
+                .and_then(|id| MessageId::try_from(id).ok())
+                .ok_or_else(|| corrupt("invalid idempotent message ID"))?;
+            let view = super::messages::find_global(&mut tx, id)
+                .await
+                .map_err(Error::Message)?
+                .ok_or(Error::ResultUnavailable)?;
+            if view.conversation_id() != message.conversation_id() {
+                return Err(corrupt("idempotent message scope mismatch"));
             }
+            if !is_member(&mut tx, message.sender_id(), view.conversation_id()).await? {
+                return Err(Error::NotMember);
+            }
+            tx.commit().await.map_err(failure)?;
+            return Ok(CreateResult {
+                value: view,
+                disposition: Disposition::Replayed,
+            });
         }
         let view = match super::messages::send_in(&mut tx, message)
             .await

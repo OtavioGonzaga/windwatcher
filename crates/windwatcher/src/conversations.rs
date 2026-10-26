@@ -241,14 +241,15 @@ async fn group_actor<S: ConversationStore>(
         .await
         .map_err(GroupActorError::Storage)?
         .ok_or(GroupActorError::ConversationNotFound)?;
-    if conversation.kind() == ConversationKind::Direct {
-        return Err(GroupActorError::DirectOperationNotSupported);
-    }
-    store
+    let member = store
         .find_member(id, actor)
         .await
         .map_err(GroupActorError::Storage)?
-        .ok_or(GroupActorError::NotMember)
+        .ok_or(GroupActorError::NotMember)?;
+    if conversation.kind() == ConversationKind::Direct {
+        return Err(GroupActorError::DirectOperationNotSupported);
+    }
+    Ok(member)
 }
 fn manager(member: &ConversationMember) -> bool {
     matches!(
@@ -327,13 +328,13 @@ impl<'a, S: ConversationStore> RemoveGroupMember<'a, S> {
         target: UserId,
         now: OffsetDateTime,
     ) -> Result<MutationOutcome, RemoveGroupMemberError> {
-        if actor == target {
-            return Err(RemoveGroupMemberError::InsufficientPermissions);
-        }
         let member = group_error!(
             group_actor(self.store, id, actor).await,
             RemoveGroupMemberError
         )?;
+        if actor == target {
+            return Err(RemoveGroupMemberError::InsufficientPermissions);
+        }
         if !manager(&member) {
             return Err(RemoveGroupMemberError::InsufficientPermissions);
         }
