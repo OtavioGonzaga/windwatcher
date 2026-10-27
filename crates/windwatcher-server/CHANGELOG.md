@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Ticket issuance rejects sessions that expire after lookup and never inserts an
+  already-expired grant, including at the exact expiration boundary.
+
 - Member removal/leave preserves the known terminal recipient even when current
   audience hydration fails or dispatch times out.
 

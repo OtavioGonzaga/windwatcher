@@ -68,6 +68,18 @@ impl RealtimeService {
         let _lifecycle = self.0.lifecycle.read().await;
         let active = self.validate(user, session).await?;
         let now = OffsetDateTime::now_utc();
+        self.issue_validated(&active, now)
+    }
+    fn issue_validated(
+        &self,
+        active: &Session,
+        now: OffsetDateTime,
+    ) -> Result<(String, OffsetDateTime), Error> {
+        if !active.is_active(now) {
+            return Err(Error::SessionInactive);
+        }
+        let user = active.user_id();
+        let session = active.id();
         let expires_at = now
             .checked_add(
                 time::Duration::try_from(self.0.config.ticket_ttl).map_err(|_| Error::Random)?,
@@ -87,7 +99,10 @@ impl RealtimeService {
                 },
                 now,
             )
-            .map_err(|_| Error::Random)?;
+            .map_err(|error| match error {
+                ticket::IssueError::Expired => Error::SessionInactive,
+                ticket::IssueError::Random => Error::Random,
+            })?;
         // A revoke racing issuance still cannot authenticate: preparation revalidates persistence.
         tracing::info!(user_id = %user, session_id = %session, "ticket_issued");
         Ok((ticket.expose().to_owned(), expires_at))
@@ -253,6 +268,36 @@ pub(super) mod tests {
                 .hub
                 .publish(&[session.user_id()], Arc::from("gone")),
             0
+        );
+    }
+
+    #[tokio::test]
+    async fn ticket_issuance_rechecks_expiration_after_validation() {
+        let (_directory, service, session) = fixture().await;
+        let active = service
+            .validate(session.user_id(), session.id())
+            .await
+            .unwrap();
+        for now in [
+            active.expires_at(),
+            active.expires_at() + time::Duration::NANOSECOND,
+        ] {
+            assert!(matches!(
+                service.issue_validated(&active, now),
+                Err(Error::SessionInactive)
+            ));
+        }
+        let now = active.expires_at() - time::Duration::NANOSECOND;
+        let (raw, expires_at) = service.issue_validated(&active, now).unwrap();
+        assert_eq!(expires_at, active.expires_at());
+        assert!(
+            service
+                .0
+                .tickets
+                .lock()
+                .unwrap()
+                .consume(&raw, now)
+                .is_some()
         );
     }
 }

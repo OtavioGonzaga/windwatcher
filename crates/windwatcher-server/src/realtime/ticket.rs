@@ -32,6 +32,14 @@ pub(super) struct Grant {
 
 #[derive(Default)]
 pub(super) struct Tickets(HashMap<[u8; 32], Grant>);
+
+#[derive(Debug, thiserror::Error)]
+pub(super) enum IssueError {
+    #[error("ticket grant expired")]
+    Expired,
+    #[error("ticket generation failed")]
+    Random,
+}
 impl Tickets {
     fn hash(raw: &str) -> [u8; 32] {
         Sha256::digest(raw.as_bytes()).into()
@@ -40,9 +48,12 @@ impl Tickets {
         &mut self,
         grant: Grant,
         now: OffsetDateTime,
-    ) -> Result<Ticket, rand_core::Error> {
+    ) -> Result<Ticket, IssueError> {
         self.0.retain(|_, grant| grant.expires_at > now);
-        let ticket = Ticket::generate()?;
+        if grant.expires_at <= now {
+            return Err(IssueError::Expired);
+        }
+        let ticket = Ticket::generate().map_err(|_| IssueError::Random)?;
         self.0.insert(Self::hash(ticket.expose()), grant);
         Ok(ticket)
     }
@@ -119,5 +130,24 @@ mod tests {
                 .sum::<usize>(),
             1
         );
+    }
+    #[test]
+    fn expired_grants_are_never_inserted() {
+        let now = OffsetDateTime::UNIX_EPOCH;
+        let mut tickets = Tickets::default();
+        for expires_at in [now - time::Duration::NANOSECOND, now] {
+            assert!(matches!(
+                tickets.issue(
+                    Grant {
+                        user: UserId::new(),
+                        session: SessionId::new(),
+                        expires_at
+                    },
+                    now
+                ),
+                Err(IssueError::Expired)
+            ));
+            assert!(tickets.0.is_empty());
+        }
     }
 }
