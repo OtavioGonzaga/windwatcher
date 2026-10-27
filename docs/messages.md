@@ -138,9 +138,16 @@ messages, including reply relationships. See [persistence](persistence.md) and
 
 ## Current limitations
 
-This delivery has no realtime, events, queues, attachments, reactions, threads,
+The engine has no realtime transport, domain events, queues, attachments, reactions, threads,
 search, edit history, undelete or message purge.
 The [HTTP API](http-api.md) exposes the messaging journey without a listener.
+
+The server adds best-effort [realtime notifications](realtime.md) after fresh sends,
+actual edits and first deletions. Each event carries the complete current message
+projection, including HTTP-equivalent reply previews and tombstones. Replays and
+no-ops emit nothing. Own read-state changes synchronize only the actor's sockets,
+not peers; these are not read receipts. HTTP remains authoritative after missed,
+duplicated or ambiguously ordered notifications.
 
 ## Paginated history
 

@@ -1,5 +1,14 @@
 # Local credentials and authentication
 
+## Realtime transport credentials
+
+The server's [realtime transport](realtime.md) exchanges a Bearer access token for
+a one-use, short-lived random ticket tied to an active persisted session. The JWT
+never goes in the WebSocket URL. Local logout invalidates outstanding tickets and
+connections for that session. Access-token expiry does not terminate an established
+socket, but session expiry/revocation does. Ordinary HTTP access-token revocation
+semantics are unchanged. The reusable library owns none of these ticket/socket DTOs.
+
 All local identity behavior lives in the reusable `windwatcher` library.
 `RegisterLocalUser`, `CreateLocalUser`, `AuthenticateLocalUser`, `DisableUser`, and `EnableUser`
 are application services wired to caller-provided ports. Authentication returns

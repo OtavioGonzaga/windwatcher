@@ -1,5 +1,20 @@
 # Sessions and tokens
 
+## Long-lived realtime connections
+
+An access JWT is a short transport credential; the session is the authority behind
+a long-lived [realtime socket](realtime.md). `SessionStore::find_session` and
+`ValidateSession` provide transport-independent ownership/lifecycle validation,
+collapsing missing, wrong-owner, revoked and expired sessions to an inactive result
+while preserving storage failures separately. A session at its expiration is inactive.
+
+The server validates at ticket issuance and again during handshake preparation.
+Local logout invalidates tickets and pending/active connections of that session;
+other sessions remain connected. Session expiry is a socket deadline. Periodic
+revalidation detects external revocation and fails closed on storage failure.
+Ordinary HTTP still accepts an already-issued valid JWT until its expiration;
+neither that policy nor refresh rotation changes for realtime.
+
 ## Session lifecycle
 
 `Session` is first-class application state. A user may hold multiple concurrent

@@ -105,3 +105,7 @@ construction; cloned routers share the runtime. See [realtime](realtime.md).
 is `compact`, `pretty`, or `json`. Logs and warnings go to stderr; command results
 go to stdout. `--log-filter` and `--log-format` override the configured values.
 Configuration debug output redacts direct JWT secrets.
+Raw Tungstenite protocol diagnostics are suppressed even under a broad trace
+filter because they can contain message frames and handshake secrets. Embedding
+hosts that install their own logger must likewise disable `tungstenite` and
+`tokio_tungstenite` targets and avoid URI-query/body logging.

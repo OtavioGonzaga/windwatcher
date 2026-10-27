@@ -137,3 +137,27 @@ HTTP status codes, headers, framework types and error representations never ente
 the reusable engine. Its Argon2 adapter remains runtime-independent; the server's
 bounded blocking wrapper handles HTTP hashing/verification. See [HTTP API](http-api.md)
 and [ADR 0010](adr/0010-http-v1-transport-and-contracts.md).
+
+## Realtime adapter
+
+WebSocket transport also belongs entirely to `windwatcher-server`. A shared
+`RealtimeService` holds resolved policy, in-memory hashed tickets, a multi-socket
+connection hub and the notifier. HTTP mutation handlers preserve committed
+change/no-op outcomes and invoke best-effort publication explicitly. The hub accepts
+explicit user audiences; it does not authorize mutations or read the database.
+The notifier resolves current membership and constructs stable state-oriented
+events. Session validation and member-ID lookup are the only new reusable engine
+capabilities. No transport type or runtime dependency enters the library.
+
+The hub is process-local, with guarded pending/active registration, bounded queues,
+separate close signals, native heartbeat, session deadlines and persistence-backed
+revocation rechecks. Local logout coordinates primary revocation and realtime cleanup
+against handshake activation. Slow sockets cannot block HTTP or healthy sockets.
+Database plus HTTP remain authoritative; sockets offer no replay, ACK, durable
+snapshot boundary or domain ordering. Clients reconcile through HTTP after reconnect.
+
+`RealtimeEvent` is not `DomainEvent`. A future server-side mapper/reaction may
+replace explicit handler hooks without equating internal domain payloads with the
+wire protocol. There is still no production listener, `serve`, health/readiness or
+process shutdown lifecycle. See [realtime](realtime.md) and
+[ADR 0012](adr/0012-websocket-realtime-transport.md).
