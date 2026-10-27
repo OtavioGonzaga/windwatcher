@@ -53,6 +53,8 @@ fn realtime_config_defaults_toml_environment_and_validation() {
         "heartbeat_timeout = '0s'",
         "heartbeat_timeout = '30s'",
         "session_recheck_interval = '0s'",
+        "dispatch_timeout = '0s'",
+        "dispatch_concurrency = 0",
         "unknown = 1",
     ] {
         fs::write(&path, format!("{base}\n[realtime]\n{settings}\n")).unwrap();

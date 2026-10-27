@@ -143,7 +143,10 @@ and [ADR 0010](adr/0010-http-v1-transport-and-contracts.md).
 WebSocket transport also belongs entirely to `windwatcher-server`. A shared
 `RealtimeService` holds resolved policy, in-memory hashed tickets, a multi-socket
 connection hub and the notifier. HTTP mutation handlers preserve committed
-change/no-op outcomes and invoke best-effort publication explicitly. The hub accepts
+change/no-op outcomes and submit best-effort publication explicitly, without
+awaiting notification hydration or dispatch. A bounded number of tasks use a
+whole-job deadline independent of heartbeat; saturation drops work rather than
+creating unbounded permit waiters. The hub accepts
 explicit user audiences; it does not authorize mutations or read the database.
 The notifier resolves current membership and constructs stable state-oriented
 events. Session validation and member-ID lookup are the only new reusable engine

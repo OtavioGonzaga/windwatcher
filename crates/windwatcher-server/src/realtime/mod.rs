@@ -1,4 +1,5 @@
 mod connection;
+mod dispatch;
 pub(crate) mod event;
 mod hub;
 mod notifier;
@@ -19,6 +20,7 @@ struct Inner {
     tickets: Mutex<Tickets>,
     hub: Hub,
     lifecycle: tokio::sync::RwLock<()>,
+    dispatch: dispatch::Dispatch,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -41,6 +43,7 @@ pub(crate) struct Prepared {
 impl RealtimeService {
     pub(crate) fn new(storage: Storage, config: ResolvedRealtimeConfig) -> Self {
         Self(Arc::new(Inner {
+            dispatch: dispatch::Dispatch::new(config.dispatch_concurrency, config.dispatch_timeout),
             storage,
             config,
             tickets: Mutex::new(Tickets::default()),

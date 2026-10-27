@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Realtime notification hydration and fan-out run in bounded best-effort tasks,
+  outside HTTP response latency, with independent dispatch concurrency/deadline policy.
+
 - Bearer challenges are returned only for access-token authentication failures,
   not for invalid login or refresh credentials.
 

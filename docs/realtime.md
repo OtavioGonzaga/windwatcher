@@ -208,13 +208,21 @@ member added during that interval may receive a notification for readable state.
 Existing disabled members are included in the storage lookup; session revocation
 independently controls connection eligibility.
 
-Handlers publish only after successful primary commit and only for real changes.
+Handlers submit notifications only after successful primary commit and only for real changes.
 Existing Directs, idempotency replays, same-title/role/content updates, existing
 member additions, self ownership transfer, repeated deletion, and older/equal read
 watermarks emit nothing. Failures emit nothing. Notifier failures are logged and
 swallowed: successful HTTP operations never become fake rollbacks. There is no
 atomic transaction spanning database effects and fan-out. Process exit or request
 cancellation after commit may lose a notification.
+
+Submission reserves task capacity without waiting, before spawning. Projection
+hydration, audience lookup, serialization and publication run outside the HTTP
+response path. At most `dispatch_concurrency` jobs run (default 32); excess
+notifications are dropped and logged, not queued behind waiting tasks. A separate
+`dispatch_timeout` (default 5 seconds) bounds the whole job, including hydration.
+It does not reuse `heartbeat_timeout`. These limits apply to notification work,
+not connection count, and introduce no durable job/retry mechanism.
 
 ## Connections and control frames
 

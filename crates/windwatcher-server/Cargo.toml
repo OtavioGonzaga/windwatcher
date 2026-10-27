@@ -43,6 +43,7 @@ windwatcher = { path = "../windwatcher", version = "0.1.0", features = ["sqlite"
 zeroize = { version = "1", features = ["serde"] }
 
 [dev-dependencies]
+tokio = { version = "1", features = ["test-util"] }
 log = "0.4"
 tracing-log = "0.2"
 assert_cmd = "2"

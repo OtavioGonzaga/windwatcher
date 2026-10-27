@@ -7,6 +7,82 @@ use time::OffsetDateTime;
 use windwatcher::{ConversationId, ConversationStore, IdentityStore, MembershipRole, UserId};
 
 impl RealtimeService {
+    pub(crate) fn notify_member(
+        &self,
+        conversation: ConversationId,
+        user: UserId,
+        role: MembershipRole,
+        added: bool,
+        now: OffsetDateTime,
+    ) {
+        let service = self.clone();
+        let event_type = if added {
+            "conversation.member.added"
+        } else {
+            "conversation.member.updated"
+        };
+        self.0.dispatch.submit(
+            event_type,
+            async move {
+                service
+                    .dispatch_member(conversation, user, role, added, now)
+                    .await;
+            },
+            || {},
+        );
+    }
+
+    pub(crate) fn notify_owner(
+        &self,
+        conversation: ConversationId,
+        previous: UserId,
+        next: UserId,
+        now: OffsetDateTime,
+    ) {
+        let service = self.clone();
+        self.0.dispatch.submit(
+            "conversation.owner.transferred",
+            async move {
+                service
+                    .dispatch_owner(conversation, previous, next, now)
+                    .await;
+            },
+            || {},
+        );
+    }
+
+    pub(crate) fn notify(
+        &self,
+        conversation: ConversationId,
+        data: EventData,
+        now: OffsetDateTime,
+        extra: &[UserId],
+    ) {
+        let service = self.clone();
+        let event_type = data.event_type();
+        let extra = extra.to_vec();
+        self.0.dispatch.submit(
+            event_type,
+            async move {
+                service
+                    .dispatch_conversation(conversation, data, now, &extra)
+                    .await;
+            },
+            || {},
+        );
+    }
+
+    pub(crate) fn notify_users(&self, recipients: &[UserId], data: EventData, now: OffsetDateTime) {
+        let service = self.clone();
+        let recipients = recipients.to_vec();
+        self.0.dispatch.submit(
+            data.event_type(),
+            async move {
+                service.publish_users(&recipients, data, now);
+            },
+            || {},
+        );
+    }
     async fn member_payload(
         &self,
         conversation: ConversationId,
@@ -37,7 +113,7 @@ impl RealtimeService {
         };
         Some(summary.into())
     }
-    pub(crate) async fn notify_member(
+    async fn dispatch_member(
         &self,
         conversation: ConversationId,
         user: UserId,
@@ -59,9 +135,10 @@ impl RealtimeService {
         } else {
             EventData::MemberUpdated(change)
         };
-        self.notify(conversation, data, now, &[]).await;
+        self.dispatch_conversation(conversation, data, now, &[])
+            .await;
     }
-    pub(crate) async fn notify_owner(
+    async fn dispatch_owner(
         &self,
         conversation: ConversationId,
         previous: UserId,
@@ -88,7 +165,7 @@ impl RealtimeService {
             tracing::warn!(conversation_id = %conversation, "event_projection_failure");
             return;
         };
-        self.notify(
+        self.dispatch_conversation(
             conversation,
             EventData::OwnerTransferred {
                 conversation_id: conversation.to_string(),
@@ -101,7 +178,7 @@ impl RealtimeService {
         )
         .await;
     }
-    pub(crate) async fn notify(
+    async fn dispatch_conversation(
         &self,
         conversation: ConversationId,
         data: EventData,
@@ -109,22 +186,17 @@ impl RealtimeService {
         extra: &[UserId],
     ) {
         let event_type = data.event_type();
-        match tokio::time::timeout(
-            self.0.config.heartbeat_timeout,
-            self.0.storage.member_ids(conversation),
-        )
-        .await
-        {
-            Ok(Ok(mut recipients)) => {
+        match self.0.storage.member_ids(conversation).await {
+            Ok(mut recipients) => {
                 recipients.extend_from_slice(extra);
-                self.notify_users(&recipients, data, now);
+                self.publish_users(&recipients, data, now);
             }
             _ => {
                 tracing::warn!(conversation_id = %conversation, event_type, "audience_lookup_failure")
             }
         }
     }
-    pub(crate) fn notify_users(&self, recipients: &[UserId], data: EventData, now: OffsetDateTime) {
+    fn publish_users(&self, recipients: &[UserId], data: EventData, now: OffsetDateTime) {
         let event_type = data.event_type();
         let event = RealtimeEvent {
             event_id: uuid::Uuid::now_v7().to_string(),

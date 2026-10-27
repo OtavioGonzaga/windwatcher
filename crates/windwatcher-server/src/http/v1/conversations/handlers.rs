@@ -131,18 +131,15 @@ pub(super) async fn create(
         .await
         .map_err(|e| ApiProblem::command(context, e))?;
     if result.disposition == CreateDisposition::Created {
-        state
-            .realtime
-            .notify(
-                result.value,
-                EventData::ConversationCreated {
-                    conversation_id: result.value.to_string(),
-                    kind,
-                },
-                now,
-                &[],
-            )
-            .await;
+        state.realtime.notify(
+            result.value,
+            EventData::ConversationCreated {
+                conversation_id: result.value.to_string(),
+                kind,
+            },
+            now,
+            &[],
+        );
     }
     let (status, headers, id) = create_response(result);
     Ok((
@@ -184,19 +181,16 @@ pub(super) async fn update(
         .await
         .map_err(|e| rename_error(context, e))?;
     if outcome == MutationOutcome::Changed {
-        state
-            .realtime
-            .notify(
-                id,
-                EventData::ConversationUpdated {
-                    conversation_id: id.to_string(),
-                    title,
-                    updated_at: now,
-                },
-                now,
-                &[],
-            )
-            .await;
+        state.realtime.notify(
+            id,
+            EventData::ConversationUpdated {
+                conversation_id: id.to_string(),
+                title,
+                updated_at: now,
+            },
+            now,
+            &[],
+        );
     }
     detail(&state, actor.user_id, id, context).await
 }
@@ -235,16 +229,13 @@ pub(super) async fn add_member(
         .await
         .map_err(|e| add_error(context, e))?;
     if outcome == AddGroupMemberOutcome::Added {
-        state
-            .realtime
-            .notify_member(
-                id,
-                target,
-                MembershipRole::Group(GroupRole::Member),
-                true,
-                now,
-            )
-            .await;
+        state.realtime.notify_member(
+            id,
+            target,
+            MembershipRole::Group(GroupRole::Member),
+            true,
+            now,
+        );
     }
     let status = if outcome == AddGroupMemberOutcome::Added {
         StatusCode::CREATED
@@ -276,8 +267,7 @@ pub(super) async fn update_member(
     if outcome == MutationOutcome::Changed {
         state
             .realtime
-            .notify_member(id, target, MembershipRole::Group(role), false, now)
-            .await;
+            .notify_member(id, target, MembershipRole::Group(role), false, now);
     }
     member(&state, actor.user_id, id, target, context).await
 }
@@ -297,19 +287,16 @@ pub(super) async fn remove_member(
         .await
         .map_err(|e| remove_error(context, e))?;
     if outcome == MutationOutcome::Changed {
-        state
-            .realtime
-            .notify(
-                id,
-                EventData::MemberRemoved {
-                    conversation_id: id.to_string(),
-                    user_id: target.to_string(),
-                    conversation_updated_at: now,
-                },
-                now,
-                &[target],
-            )
-            .await;
+        state.realtime.notify(
+            id,
+            EventData::MemberRemoved {
+                conversation_id: id.to_string(),
+                user_id: target.to_string(),
+                conversation_updated_at: now,
+            },
+            now,
+            &[target],
+        );
     }
     Ok(StatusCode::NO_CONTENT)
 }
@@ -330,10 +317,7 @@ pub(super) async fn transfer_owner(
         .await
         .map_err(|e| owner_error(context, e))?;
     if outcome == MutationOutcome::Changed {
-        state
-            .realtime
-            .notify_owner(id, actor.user_id, target, now)
-            .await;
+        state.realtime.notify_owner(id, actor.user_id, target, now);
     }
     detail(&state, actor.user_id, id, context).await
 }
@@ -352,21 +336,16 @@ pub(super) async fn leave(
         .await
         .map_err(|e| leave_error(context, e))?;
     match outcome {
-        LeaveGroupOutcome::Left => {
-            state
-                .realtime
-                .notify(
-                    id,
-                    EventData::MemberRemoved {
-                        conversation_id: id.to_string(),
-                        user_id: actor.user_id.to_string(),
-                        conversation_updated_at: now,
-                    },
-                    now,
-                    &[actor.user_id],
-                )
-                .await
-        }
+        LeaveGroupOutcome::Left => state.realtime.notify(
+            id,
+            EventData::MemberRemoved {
+                conversation_id: id.to_string(),
+                user_id: actor.user_id.to_string(),
+                conversation_updated_at: now,
+            },
+            now,
+            &[actor.user_id],
+        ),
         LeaveGroupOutcome::ConversationDeleted => state.realtime.notify_users(
             &[actor.user_id],
             EventData::ConversationDeleted {

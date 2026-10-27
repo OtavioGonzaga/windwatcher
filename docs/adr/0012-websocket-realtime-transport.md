@@ -16,6 +16,10 @@ Keep database plus HTTP authoritative. Add WebSocket entirely in
 `windwatcher-server`, with explicit post-commit handler publication of successful
 real mutations. No-ops and idempotency replays do not publish. Notification failure
 is logged and swallowed, never reported as rollback of a committed primary action.
+Submission reserves concurrency without waiting and spawns only after obtaining
+capacity. The entire notification job has a dispatch-specific deadline; neither
+hydration nor audience lookup delays the authoritative HTTP response. Saturation
+drops new work instead of creating unbounded tasks or a persistent queue.
 
 Use one-use, short-lived 256-bit random tickets issued through authenticated HTTP;
 never put access JWTs in URLs. Keep only ticket SHA-256 hashes and grants in memory.

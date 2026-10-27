@@ -15,6 +15,10 @@ pub struct RawRealtime {
     pub heartbeat_timeout: String,
     /// Persistence-backed session validation interval.
     pub session_recheck_interval: String,
+    /// Maximum concurrently running notification jobs; saturation drops new jobs.
+    pub dispatch_concurrency: usize,
+    /// Whole notification deadline, including projection and audience hydration.
+    pub dispatch_timeout: String,
 }
 
 impl Default for RawRealtime {
@@ -25,6 +29,8 @@ impl Default for RawRealtime {
             heartbeat_interval: "30s".into(),
             heartbeat_timeout: "10s".into(),
             session_recheck_interval: "30s".into(),
+            dispatch_concurrency: 32,
+            dispatch_timeout: "5s".into(),
         }
     }
 }
@@ -37,6 +43,8 @@ pub struct ResolvedRealtimeConfig {
     pub(crate) heartbeat_interval: Duration,
     pub(crate) heartbeat_timeout: Duration,
     pub(crate) session_recheck_interval: Duration,
+    pub(crate) dispatch_concurrency: usize,
+    pub(crate) dispatch_timeout: Duration,
 }
 
 impl RawRealtime {
@@ -64,6 +72,8 @@ impl RawRealtime {
                 "session_recheck_interval",
                 &self.session_recheck_interval,
             )?,
+            dispatch_concurrency: self.dispatch_concurrency,
+            dispatch_timeout: duration("dispatch_timeout", &self.dispatch_timeout)?,
         };
         if config.outgoing_buffer == 0
             || config.outgoing_buffer > tokio::sync::Semaphore::MAX_PERMITS
@@ -74,6 +84,14 @@ impl RawRealtime {
         }
         if config.heartbeat_timeout >= config.heartbeat_interval {
             return Err("realtime.heartbeat_timeout must be less than heartbeat_interval".into());
+        }
+        if config.dispatch_concurrency == 0
+            || config.dispatch_concurrency > tokio::sync::Semaphore::MAX_PERMITS
+        {
+            return Err(
+                "realtime.dispatch_concurrency must be positive and supported by the semaphore"
+                    .into(),
+            );
         }
         Ok(config)
     }
@@ -93,6 +111,7 @@ mod tests {
             "heartbeat_interval",
             "heartbeat_timeout",
             "session_recheck_interval",
+            "dispatch_timeout",
         ] {
             let mut value = serde_json::to_value(&defaults).unwrap();
             value[field] = "0s".into();
@@ -115,6 +134,14 @@ mod tests {
             RawRealtime {
                 heartbeat_timeout: "30s".into(),
                 ..defaults
+            }
+            .resolve()
+            .is_err()
+        );
+        assert!(
+            RawRealtime {
+                dispatch_concurrency: 0,
+                ..RawRealtime::default()
             }
             .resolve()
             .is_err()

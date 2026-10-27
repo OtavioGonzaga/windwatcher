@@ -46,6 +46,8 @@ outgoing_buffer = 32
 heartbeat_interval = "30s"
 heartbeat_timeout = "10s"
 session_recheck_interval = "30s"
+dispatch_concurrency = 32
+dispatch_timeout = "5s"
 
 [logging]
 filter = "info"

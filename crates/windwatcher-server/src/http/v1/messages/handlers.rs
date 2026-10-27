@@ -75,17 +75,14 @@ pub(super) async fn send(
         .map_err(|e| ApiProblem::command(context, e))?;
     let (status, headers, message) = super::super::conversations::handlers::create_response(result);
     if status == StatusCode::CREATED {
-        state
-            .realtime
-            .notify(
-                message.conversation_id(),
-                EventData::MessageCreated {
-                    message: message.clone().into(),
-                },
-                message.created_at(),
-                &[],
-            )
-            .await;
+        state.realtime.notify(
+            message.conversation_id(),
+            EventData::MessageCreated {
+                message: message.clone().into(),
+            },
+            message.created_at(),
+            &[],
+        );
     }
     Ok((status, headers, Json(message.into())))
 }
@@ -140,17 +137,14 @@ pub(super) async fn edit(
             ApiProblem::new(kind, context)
         })?;
     if let EditMessageOutcome::Changed(ref message) = result {
-        state
-            .realtime
-            .notify(
-                message.conversation_id(),
-                EventData::MessageUpdated {
-                    message: message.clone().into(),
-                },
-                now,
-                &[],
-            )
-            .await;
+        state.realtime.notify(
+            message.conversation_id(),
+            EventData::MessageUpdated {
+                message: message.clone().into(),
+            },
+            now,
+            &[],
+        );
     }
     let (EditMessageOutcome::Changed(message) | EditMessageOutcome::Unchanged(message)) = result;
     Ok(Json(message.into()))
@@ -178,17 +172,14 @@ pub(super) async fn delete(
             ApiProblem::new(kind, context)
         })?;
     if let DeleteMessageOutcome::Deleted(ref message) = result {
-        state
-            .realtime
-            .notify(
-                message.conversation_id(),
-                EventData::MessageDeleted {
-                    message: message.clone().into(),
-                },
-                now,
-                &[],
-            )
-            .await;
+        state.realtime.notify(
+            message.conversation_id(),
+            EventData::MessageDeleted {
+                message: message.clone().into(),
+            },
+            now,
+            &[],
+        );
     }
     let (DeleteMessageOutcome::Deleted(message) | DeleteMessageOutcome::AlreadyDeleted(message)) =
         result;
