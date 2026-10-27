@@ -80,6 +80,25 @@ Environment overrides use Figment array syntax, for example:
 `WINDWATCHER__HTTP__CORS__ALLOWED_ORIGINS='["https://example.com"]'`, and nested
 values such as `WINDWATCHER__HTTP__RATE_LIMIT__AUTH__BURST=20`.
 
+## Realtime behavior
+
+```toml
+[realtime]
+ticket_ttl = "30s"
+outgoing_buffer = 32
+heartbeat_interval = "30s"
+heartbeat_timeout = "10s"
+session_recheck_interval = "30s"
+```
+
+All durations and the per-connection event buffer must be positive and
+representable; heartbeat timeout must be less than heartbeat interval. These are
+operator defaults, not fixed event-contract guarantees. `config check` validates
+the policy without starting a listener. Environment overrides use, for example,
+`WINDWATCHER__REALTIME__OUTGOING_BUFFER=64`. The composition API consumes
+`RawRealtime::resolve()` through `HttpState::with_realtime_config` before router
+construction; cloned routers share the runtime. See [realtime](realtime.md).
+
 ## Logging output
 
 `logging.filter` accepts `tracing_subscriber::EnvFilter` syntax and `logging.format`

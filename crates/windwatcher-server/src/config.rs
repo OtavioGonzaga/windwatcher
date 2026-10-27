@@ -17,7 +17,9 @@ use windwatcher::{
 use crate::{cli::LogFormat, error::AppError, paths::ResolvedPaths};
 
 pub(crate) mod http;
+pub(crate) mod realtime;
 use http::RawHttp;
+use realtime::RawRealtime;
 
 #[derive(Clone, Debug, Serialize)]
 pub struct DurationValue(String);
@@ -42,6 +44,7 @@ pub struct RawConfig {
     pub auth: RawAuth,
     pub messages: RawMessages,
     pub http: RawHttp,
+    pub realtime: RawRealtime,
     pub logging: RawLogging,
 }
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -316,6 +319,7 @@ pub fn resolve_full(raw: &RawConfig, paths: &ResolvedPaths) -> Result<(), AppErr
     resolve_registration(raw)?;
     resolve_session(raw)?;
     raw.http.resolve().map_err(AppError::Config)?;
+    raw.realtime.resolve().map_err(AppError::Config)?;
     let _messages = resolve_messages(raw);
     let _jwt = resolve_jwt(raw)?;
     Ok(())

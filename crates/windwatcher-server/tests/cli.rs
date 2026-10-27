@@ -41,6 +41,41 @@ fn command(config: &Path) -> Command {
 }
 
 #[test]
+fn realtime_config_defaults_toml_environment_and_validation() {
+    let directory = TempDir::new().unwrap();
+    let path = complete_config(&directory, "warn");
+    let base = fs::read_to_string(&path).unwrap();
+    command(&path).args(["config", "check"]).assert().success();
+    for settings in [
+        "ticket_ttl = '0s'",
+        "outgoing_buffer = 0",
+        "heartbeat_interval = '0s'",
+        "heartbeat_timeout = '0s'",
+        "heartbeat_timeout = '30s'",
+        "session_recheck_interval = '0s'",
+        "unknown = 1",
+    ] {
+        fs::write(&path, format!("{base}\n[realtime]\n{settings}\n")).unwrap();
+        command(&path).args(["config", "check"]).assert().failure();
+    }
+    fs::write(
+        &path,
+        format!("{base}\n[realtime]\nheartbeat_timeout = '40s'\n"),
+    )
+    .unwrap();
+    command(&path)
+        .env("WINDWATCHER__REALTIME__HEARTBEAT_INTERVAL", "60s")
+        .args(["config", "check"])
+        .assert()
+        .success();
+    command(&path)
+        .env("WINDWATCHER__REALTIME__OUTGOING_BUFFER", "0")
+        .args(["config", "check"])
+        .assert()
+        .failure();
+}
+
+#[test]
 fn http_config_check_validates_defaults_toml_environment_and_unknown_fields() {
     let directory = TempDir::new().unwrap();
     let path = complete_config(&directory, "warn");

@@ -40,6 +40,13 @@ requests = 10
 period = "1m"
 burst = 10
 
+[realtime]
+ticket_ttl = "30s"
+outgoing_buffer = 32
+heartbeat_interval = "30s"
+heartbeat_timeout = "10s"
+session_recheck_interval = "30s"
+
 [logging]
 filter = "info"
 format = "compact"
