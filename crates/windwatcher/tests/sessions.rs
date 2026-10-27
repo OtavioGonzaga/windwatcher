@@ -57,6 +57,14 @@ struct Sessions {
     create_failure: Mutex<Option<SessionStoreError>>,
 }
 impl SessionStore for Sessions {
+    async fn find_session(&self, id: SessionId) -> Result<Option<Session>, SessionStoreError> {
+        Ok(self
+            .records
+            .lock()
+            .unwrap()
+            .get(&id)
+            .map(|(session, _)| session.clone()))
+    }
     async fn create_session(
         &self,
         session: &Session,

@@ -136,6 +136,11 @@ impl Storage {
     }
 }
 impl ConversationStore for Storage {
+    async fn member_ids(&self, id: ConversationId) -> Result<Vec<UserId>, ConversationStoreError> {
+        match self {
+            Self::Sqlite(s) => s.member_ids(id).await,
+        }
+    }
     async fn get_or_create_direct(
         &self,
         c: &Conversation,
@@ -340,6 +345,11 @@ impl IdentityStore for Storage {
     }
 }
 impl SessionStore for Storage {
+    async fn find_session(&self, id: SessionId) -> Result<Option<Session>, SessionStoreError> {
+        match self {
+            Self::Sqlite(s) => s.find_session(id).await,
+        }
+    }
     async fn create_session(
         &self,
         session: &Session,

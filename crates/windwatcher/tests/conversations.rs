@@ -7,6 +7,9 @@ use windwatcher::{
 
 struct ConversationDouble;
 impl ConversationStore for ConversationDouble {
+    async fn member_ids(&self, _: ConversationId) -> Result<Vec<UserId>, ConversationStoreError> {
+        unreachable!()
+    }
     async fn get_or_create_direct(
         &self,
         _: &Conversation,

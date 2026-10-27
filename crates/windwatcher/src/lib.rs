@@ -86,7 +86,7 @@ pub use session::{
     CreateSessionError, OsRefreshTokenProvider, RefreshRotationResult, RefreshSession,
     RefreshSessionError, RefreshToken, RefreshTokenError, RefreshTokenHash, RefreshTokenProvider,
     RevokeSession, RevokeSessionError, Session, SessionError, SessionGrant, SessionPolicy,
-    SessionPolicyError, SessionStore, SessionStoreError,
+    SessionPolicyError, SessionStore, SessionStoreError, ValidateSession, ValidateSessionError,
 };
 #[cfg(feature = "jwt-hs256")]
 pub use session::{Hs256JwtAccessTokenCodec, Hs256SigningSecret, Hs256SigningSecretError};

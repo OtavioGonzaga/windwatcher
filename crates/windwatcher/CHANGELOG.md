@@ -28,6 +28,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Session lookup and lifecycle validation, and a current conversation-member ID
+  lookup for internal application use. Storage adapters must implement both.
+
 - Optional durable create-command deduplication through `IdempotencyKey`,
   `CreateConversation`, `SendMessageCommand` and `CreateCommandStore`, with
   semantic fingerprints, hashed keys, 24-hour retention and atomic SQLite

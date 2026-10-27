@@ -31,6 +31,17 @@ pub async fn disabled_memberships<S: ConversationStore + windwatcher::IdentitySt
     target.disable(now);
     store.update_user(&peer).await.unwrap();
     store.update_user(&target).await.unwrap();
+    let ids = store.member_ids(group.id()).await.unwrap();
+    assert_eq!(ids.len(), 2);
+    assert!(ids.contains(&owner.id()));
+    assert!(ids.contains(&peer.id())); // Disabled existing members remain recipients.
+    assert!(
+        store
+            .member_ids(ConversationId::new())
+            .await
+            .unwrap()
+            .is_empty()
+    );
     assert!(matches!(
         store
             .get_or_create_direct(&direct, peer.id(), owner.id())

@@ -80,6 +80,12 @@ pub enum LeaveStoreOutcome {
 
 /// Application-driven persistence operations for conversation lifecycles.
 pub trait ConversationStore: Sync {
+    /// Returns unique current member IDs, including disabled users, without actor authorization.
+    /// Missing or deleted conversations have no current members.
+    fn member_ids(
+        &self,
+        conversation_id: ConversationId,
+    ) -> impl Future<Output = Result<Vec<UserId>, ConversationStoreError>> + Send;
     /// Atomically gets or creates the unordered Direct participant pair.
     /// An existing pair is returned even if a participant was later disabled.
     /// New memberships require existing enabled users at persistence time;

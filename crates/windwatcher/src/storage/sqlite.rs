@@ -545,6 +545,17 @@ impl IdentityStore for SqliteStorage {
 }
 
 impl SessionStore for SqliteStorage {
+    async fn find_session(&self, id: SessionId) -> Result<Option<Session>, SessionStoreError> {
+        sqlx::query(
+            "SELECT id, user_id, created_at, expires_at, revoked_at FROM sessions WHERE id = ?",
+        )
+        .bind(id_bytes(id))
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(session_error)?
+        .map(|row| read_session(&row))
+        .transpose()
+    }
     async fn create_session(
         &self,
         session: &Session,
@@ -740,6 +751,23 @@ impl SqliteStorage {
 }
 
 impl ConversationStore for SqliteStorage {
+    async fn member_ids(&self, id: ConversationId) -> Result<Vec<UserId>, ConversationStoreError> {
+        let rows =
+            sqlx::query("SELECT user_id FROM conversation_members WHERE conversation_id = ?")
+                .bind(id_bytes(id))
+                .fetch_all(&self.pool)
+                .await
+                .map_err(conversation_error)?;
+        rows.into_iter()
+            .map(|row| {
+                let bytes: Vec<u8> = row.try_get("user_id").map_err(conversation_error)?;
+                let uuid = Uuid::from_slice(&bytes)
+                    .map_err(|_| unexpected_conversation("invalid persisted user ID"))?;
+                UserId::try_from(uuid)
+                    .map_err(|_| unexpected_conversation("invalid persisted user ID"))
+            })
+            .collect()
+    }
     async fn get_or_create_direct(
         &self,
         conversation: &Conversation,
