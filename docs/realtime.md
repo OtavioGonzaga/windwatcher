@@ -197,6 +197,10 @@ or another member's read watermark.
   member IDs at dispatch-time lookup, without public pagination or per-user queries.
 - Removal reaches remaining members **plus the removed/leaving user**, who can
   remove the conversation locally; subsequent HTTP access is naturally unavailable.
+  If current-audience lookup fails or the dispatch deadline expires, that known
+  terminal recipient is still notified without guessing any remaining members.
+  This fallback does not guarantee delivery when submission is saturated or the
+  recipient's connection is unavailable/slow.
 - Sole-Owner deletion reaches that former Owner.
 - Read-state notifications reach only the actor's connections.
 - Every connected socket of a recipient receives the event, including the device

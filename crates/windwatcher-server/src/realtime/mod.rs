@@ -146,11 +146,11 @@ impl RealtimeService {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use windwatcher::{IdentityStore, RefreshTokenProvider, SessionStore};
 
-    async fn fixture() -> (tempfile::TempDir, RealtimeService, Session) {
+    pub(super) async fn fixture() -> (tempfile::TempDir, RealtimeService, Session) {
         let directory = tempfile::TempDir::new().unwrap();
         let storage = Storage::connect(windwatcher::SqliteStorageOptions::new(
             directory.path().join("race.db").display().to_string(),

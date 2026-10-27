@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Member removal/leave preserves the known terminal recipient even when current
+  audience hydration fails or dispatch times out.
+
 - Realtime notification hydration and fan-out run in bounded best-effort tasks,
   outside HTTP response latency, with independent dispatch concurrency/deadline policy.
 

@@ -725,6 +725,55 @@ async fn audience_lookup_failure_does_not_roll_back_committed_http_mutation() {
 }
 
 #[tokio::test]
+async fn terminal_removal_and_leave_survive_failed_current_audience_lookup() {
+    for leaving in [false, true] {
+        let f = Fixture::new(RawRealtime::default()).await;
+        let owner = f.user("alice").await;
+        let member = f.user("bob").await;
+        let (_, owner_token) = f.session(&owner).await;
+        let (_, member_token) = f.session(&member).await;
+        let mut socket = f.connect(&member_token).await;
+        let group = f.mutate("POST", "/v1/conversations", &owner_token, json!({"kind":"group", "title":"Team", "participant_ids":[member.id().to_string()]}), None).await;
+        event(&mut socket, "conversation.created").await;
+        let id: ConversationId = group["id"].as_str().unwrap().parse().unwrap();
+        let mut db = database(&f).await;
+        sqlx::query("PRAGMA foreign_keys = OFF")
+            .execute(&mut db)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO conversation_members (conversation_id, user_id, role, joined_at) VALUES (?, zeroblob(16), 'member', 0)")
+            .bind(uuid::Uuid::from(id).as_bytes().to_vec()).execute(&mut db).await.unwrap();
+        let (target, token) = if leaving {
+            ("me".into(), &member_token)
+        } else {
+            (member.id().to_string(), &owner_token)
+        };
+        let response = f
+            .request(
+                "DELETE",
+                &format!("/v1/conversations/{id}/members/{target}"),
+                token,
+                json!({}),
+                None,
+            )
+            .await;
+        assert_eq!(response.0, 204, "{}", response.2);
+        let removed = event(&mut socket, "conversation.member.removed").await;
+        assert_eq!(removed["payload"]["user_id"], member.id().to_string());
+        let response = f
+            .request(
+                "GET",
+                &format!("/v1/conversations/{id}"),
+                &member_token,
+                json!({}),
+                None,
+            )
+            .await;
+        assert_eq!(response.0, 404);
+    }
+}
+
+#[tokio::test]
 async fn concurrent_network_upgrades_have_one_ticket_winner_and_expired_ticket_is_rejected() {
     let f = Fixture::new(RawRealtime {
         ticket_ttl: "100ms".into(),

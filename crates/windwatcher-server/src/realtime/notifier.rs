@@ -58,17 +58,52 @@ impl RealtimeService {
         now: OffsetDateTime,
         extra: &[UserId],
     ) {
+        let storage = self.0.storage.clone();
+        self.submit_conversation(conversation, data, now, extra, async move {
+            storage.member_ids(conversation).await
+        });
+    }
+
+    fn submit_conversation(
+        &self,
+        conversation: ConversationId,
+        data: EventData,
+        now: OffsetDateTime,
+        extra: &[UserId],
+        lookup: impl std::future::Future<
+            Output = Result<Vec<UserId>, windwatcher::ConversationStoreError>,
+        > + Send
+        + 'static,
+    ) {
         let service = self.clone();
         let event_type = data.event_type();
+        // Only terminal removal has an explicit audience independent of current membership.
+        let fallback = match &data {
+            EventData::MemberRemoved {
+                conversation_id,
+                user_id,
+                conversation_updated_at,
+            } if !extra.is_empty() => Some(EventData::MemberRemoved {
+                conversation_id: conversation_id.clone(),
+                user_id: user_id.clone(),
+                conversation_updated_at: *conversation_updated_at,
+            }),
+            _ => None,
+        };
+        let terminal_service = self.clone();
+        let terminal_recipients = extra.to_vec();
         let extra = extra.to_vec();
         self.0.dispatch.submit(
             event_type,
             async move {
-                service
-                    .dispatch_conversation(conversation, data, now, &extra)
-                    .await;
+                let recipients = lookup.await;
+                service.publish_conversation(conversation, data, now, &extra, recipients);
             },
-            || {},
+            move || {
+                if let Some(data) = fallback {
+                    terminal_service.publish_users(&terminal_recipients, data, now);
+                }
+            },
         );
     }
 
@@ -185,14 +220,29 @@ impl RealtimeService {
         now: OffsetDateTime,
         extra: &[UserId],
     ) {
+        let recipients = self.0.storage.member_ids(conversation).await;
+        self.publish_conversation(conversation, data, now, extra, recipients);
+    }
+
+    fn publish_conversation(
+        &self,
+        conversation: ConversationId,
+        data: EventData,
+        now: OffsetDateTime,
+        extra: &[UserId],
+        recipients: Result<Vec<UserId>, windwatcher::ConversationStoreError>,
+    ) {
         let event_type = data.event_type();
-        match self.0.storage.member_ids(conversation).await {
+        match recipients {
             Ok(mut recipients) => {
                 recipients.extend_from_slice(extra);
                 self.publish_users(&recipients, data, now);
             }
             _ => {
-                tracing::warn!(conversation_id = %conversation, event_type, "audience_lookup_failure")
+                tracing::warn!(conversation_id = %conversation, event_type, explicit_recipient_count = extra.len(), "audience_lookup_failure");
+                if !extra.is_empty() {
+                    self.publish_users(extra, data, now);
+                }
             }
         }
     }
@@ -213,5 +263,37 @@ impl RealtimeService {
                 tracing::warn!(event_id = %event.event_id, event_type, "event_serialization_failure")
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn terminal_recipient_survives_whole_dispatch_deadline() {
+        let (_directory, service, session) = crate::realtime::tests::fixture().await;
+        let mut connection = service.0.hub.register(session.user_id(), session.id(), 2);
+        service.0.hub.activate(connection.guard.id);
+        tokio::time::pause();
+        let conversation = ConversationId::new();
+        let now = OffsetDateTime::now_utc();
+        let data = EventData::MemberRemoved {
+            conversation_id: conversation.to_string(),
+            user_id: session.user_id().to_string(),
+            conversation_updated_at: now,
+        };
+        let (entered, waiting) = tokio::sync::oneshot::channel();
+        service.submit_conversation(conversation, data, now, &[session.user_id()], async {
+            entered.send(()).unwrap();
+            std::future::pending().await
+        });
+        waiting.await.unwrap();
+        tokio::time::advance(service.0.config.dispatch_timeout).await;
+        let frame = connection.events.recv().await.unwrap();
+        let value: serde_json::Value = serde_json::from_str(&frame).unwrap();
+        assert_eq!(value["type"], "conversation.member.removed");
+        assert_eq!(value["payload"]["user_id"], session.user_id().to_string());
+        assert!(connection.events.try_recv().is_err());
     }
 }
