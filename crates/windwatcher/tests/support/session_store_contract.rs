@@ -151,6 +151,12 @@ pub async fn run<S: SessionStore>(
             .await
             .unwrap()
     );
+    assert!(matches!(
+        validator
+            .execute(user_id, session.id(), timestamp(12))
+            .await,
+        Err(windwatcher::ValidateSessionError::Inactive)
+    ));
     assert!(
         store
             .revoke_session_for_user(user_id, session.id(), timestamp(13))

@@ -151,6 +151,10 @@ pub async fn run<S: ConversationStore>(
         StartDirectStoreOutcome::Created(conversation)
         | StartDirectStoreOutcome::Existing(conversation) => conversation.id(),
     };
+    let direct_members = store.member_ids(direct_id).await.unwrap();
+    assert_eq!(direct_members.len(), 2);
+    assert!(direct_members.contains(&owner));
+    assert!(direct_members.contains(&member));
     let reverse = Conversation::new_direct(ConversationId::new(), now);
     assert_eq!(
         match store
@@ -205,6 +209,7 @@ pub async fn run<S: ConversationStore>(
         StartDirectStoreOutcome::Created(conversation)
         | StartDirectStoreOutcome::Existing(conversation) => conversation.id(),
     };
+    assert_eq!(store.member_ids(self_id).await.unwrap(), vec![owner]);
     assert_eq!(
         store
             .find_member(self_id, owner)
@@ -240,6 +245,13 @@ pub async fn run<S: ConversationStore>(
         .create_group(&group, owner, &[admin, member, member])
         .await
         .unwrap();
+    let group_members = store.member_ids(group.id()).await.unwrap();
+    assert_eq!(group_members.len(), 3);
+    assert!(
+        [owner, admin, member]
+            .iter()
+            .all(|id| group_members.contains(id))
+    );
     assert_eq!(
         store
             .find_member(group.id(), owner)
@@ -367,6 +379,13 @@ pub async fn run<S: ConversationStore>(
             .unwrap(),
         ChangeStoreOutcome::Changed
     );
+    assert!(
+        !store
+            .member_ids(group.id())
+            .await
+            .unwrap()
+            .contains(&outsider)
+    );
     assert_eq!(
         store
             .add_group_member(group.id(), owner, member, now)
@@ -467,4 +486,5 @@ pub async fn run<S: ConversationStore>(
         LeaveStoreOutcome::ConversationDeleted
     );
     assert!(store.find_conversation(group.id()).await.unwrap().is_none());
+    assert!(store.member_ids(group.id()).await.unwrap().is_empty());
 }
