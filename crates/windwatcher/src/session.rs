@@ -365,6 +365,11 @@ pub enum SessionStoreError {
 }
 /// Application-driven asynchronous session persistence operations.
 pub trait SessionStore: Sync {
+    /// Finds a session by its identifier, regardless of lifecycle state.
+    fn find_session(
+        &self,
+        session_id: SessionId,
+    ) -> impl Future<Output = Result<Option<Session>, SessionStoreError>> + Send;
     /// Atomically stores a session and its first refresh fingerprint, or neither.
     /// Atomically require a persisted, enabled owner at insertion time, including
     /// races after authentication. Return `OwnerNotFound` or `OwnerDisabled`
@@ -403,6 +408,44 @@ pub trait SessionStore: Sync {
         user_id: UserId,
         revoked_at: OffsetDateTime,
     ) -> impl Future<Output = Result<(), SessionStoreError>> + Send;
+}
+
+/// Failure to validate the ownership and lifecycle of a session.
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum ValidateSessionError {
+    /// The session is missing, belongs to another user, or is inactive.
+    #[error("session is inactive")]
+    Inactive,
+    /// Session persistence could not be consulted.
+    #[error("session lookup failed")]
+    Storage(#[from] SessionStoreError),
+}
+
+/// Validates an existing session without imposing transport semantics.
+pub struct ValidateSession<'a, S> {
+    store: &'a S,
+}
+
+impl<'a, S: SessionStore> ValidateSession<'a, S> {
+    /// Creates a validator using the supplied session store.
+    pub fn new(store: &'a S) -> Self {
+        Self { store }
+    }
+
+    /// Returns the session if it belongs to the user and is active at `now`.
+    pub async fn execute(
+        &self,
+        user_id: UserId,
+        session_id: SessionId,
+        now: OffsetDateTime,
+    ) -> Result<Session, ValidateSessionError> {
+        self.store
+            .find_session(session_id)
+            .await?
+            .filter(|session| session.user_id() == user_id && session.is_active(now))
+            .ok_or(ValidateSessionError::Inactive)
+    }
 }
 
 /// Successful session establishment result. Debug output redacts both bearer tokens.

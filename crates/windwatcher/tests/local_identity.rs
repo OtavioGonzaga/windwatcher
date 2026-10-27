@@ -138,6 +138,9 @@ impl IdentityStore for FakeStore {
     }
 }
 impl SessionStore for FakeStore {
+    async fn find_session(&self, _: SessionId) -> Result<Option<Session>, SessionStoreError> {
+        Ok(None)
+    }
     async fn create_session(
         &self,
         _: &Session,

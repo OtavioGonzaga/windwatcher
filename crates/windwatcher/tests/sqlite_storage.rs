@@ -310,21 +310,27 @@ async fn conversation_store_supports_directs_groups_and_owner_lifecycle() {
             )
             .await
             .unwrap(),
-        MutationOutcome::Changed
+        MutationOutcome::Changed {
+            updated_at: timestamp(101)
+        }
     );
     assert_eq!(
         TransferGroupOwnership::new(&storage)
             .execute(alice.id(), group.id(), bob.id(), timestamp(102))
             .await
             .unwrap(),
-        MutationOutcome::Changed
+        MutationOutcome::Changed {
+            updated_at: timestamp(102)
+        }
     );
     assert_eq!(
         LeaveGroupConversation::new(&storage)
             .execute(alice.id(), group.id(), timestamp(103))
             .await
             .unwrap(),
-        LeaveGroupOutcome::Left
+        LeaveGroupOutcome::Left {
+            updated_at: timestamp(103)
+        }
     );
     assert_eq!(
         LeaveGroupConversation::new(&storage)
@@ -436,7 +442,9 @@ async fn group_permissions_no_ops_and_direct_rejections_are_enforced() {
             )
             .await
             .unwrap(),
-        MutationOutcome::Changed
+        MutationOutcome::Changed {
+            updated_at: timestamp(301)
+        }
     );
     assert!(matches!(
         AddGroupMember::new(&storage)
@@ -449,7 +457,9 @@ async fn group_permissions_no_ops_and_direct_rejections_are_enforced() {
             .execute(admin.id(), group.id(), outsider.id(), timestamp(302))
             .await
             .unwrap(),
-        windwatcher::AddGroupMemberOutcome::Added
+        windwatcher::AddGroupMemberOutcome::Added {
+            updated_at: timestamp(302)
+        }
     );
     assert!(matches!(
         GetConversation::new(&storage)
@@ -622,7 +632,9 @@ async fn group_management_permission_matrix_and_owner_only_lifecycle_hold() {
             )
             .await
             .unwrap(),
-        MutationOutcome::Changed
+        MutationOutcome::Changed {
+            updated_at: timestamp(601)
+        }
     );
     assert_eq!(
         SetGroupMemberRole::new(&storage)
@@ -635,7 +647,9 @@ async fn group_management_permission_matrix_and_owner_only_lifecycle_hold() {
             )
             .await
             .unwrap(),
-        MutationOutcome::Changed
+        MutationOutcome::Changed {
+            updated_at: timestamp(602)
+        }
     );
     let before = storage
         .find_conversation(group.id())
@@ -670,7 +684,9 @@ async fn group_management_permission_matrix_and_owner_only_lifecycle_hold() {
             .execute(admin.id(), group.id(), target.id(), timestamp(604))
             .await
             .unwrap(),
-        MutationOutcome::Changed
+        MutationOutcome::Changed {
+            updated_at: timestamp(604)
+        }
     );
     assert!(matches!(
         windwatcher::RemoveGroupMember::new(&storage)
@@ -683,7 +699,9 @@ async fn group_management_permission_matrix_and_owner_only_lifecycle_hold() {
             .execute(owner.id(), group.id(), admin.id(), timestamp(605))
             .await
             .unwrap(),
-        MutationOutcome::Changed
+        MutationOutcome::Changed {
+            updated_at: timestamp(605)
+        }
     );
     assert!(matches!(
         LeaveGroupConversation::new(&storage)
@@ -696,7 +714,9 @@ async fn group_management_permission_matrix_and_owner_only_lifecycle_hold() {
             .execute(member.id(), group.id(), timestamp(607))
             .await
             .unwrap(),
-        LeaveGroupOutcome::Left
+        LeaveGroupOutcome::Left {
+            updated_at: timestamp(607)
+        }
     );
 
     let owner_only = CreateGroupConversation::new(&storage)

@@ -19,7 +19,10 @@ pub enum StartDirectConversationOutcome {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AddGroupMemberOutcome {
     /// A new member was added.
-    Added,
+    Added {
+        /// Exact persisted conversation metadata timestamp of this addition.
+        updated_at: OffsetDateTime,
+    },
     /// The user was already a member.
     AlreadyMember,
 }
@@ -28,7 +31,10 @@ pub enum AddGroupMemberOutcome {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MutationOutcome {
     /// A meaningful mutation was persisted.
-    Changed,
+    Changed {
+        /// Exact persisted conversation metadata timestamp of this mutation.
+        updated_at: OffsetDateTime,
+    },
     /// The requested state already existed.
     Unchanged,
 }
@@ -37,7 +43,10 @@ pub enum MutationOutcome {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LeaveGroupOutcome {
     /// The member left the Group.
-    Left,
+    Left {
+        /// Exact persisted metadata timestamp of the remaining conversation.
+        updated_at: OffsetDateTime,
+    },
     /// The owner-only Group was deleted.
     ConversationDeleted,
 }
@@ -302,7 +311,9 @@ impl<'a, S: ConversationStore> AddGroupMember<'a, S> {
                 }
                 error => AddGroupMemberError::Storage(error),
             })? {
-            AddMemberStoreOutcome::Added => Ok(AddGroupMemberOutcome::Added),
+            AddMemberStoreOutcome::Added { updated_at } => {
+                Ok(AddGroupMemberOutcome::Added { updated_at })
+            }
             AddMemberStoreOutcome::AlreadyMember => Ok(AddGroupMemberOutcome::AlreadyMember),
             AddMemberStoreOutcome::NotAuthorized => {
                 Err(AddGroupMemberError::InsufficientPermissions)
@@ -353,7 +364,9 @@ impl<'a, S: ConversationStore> RemoveGroupMember<'a, S> {
             .await
             .map_err(RemoveGroupMemberError::Storage)?
         {
-            ChangeStoreOutcome::Changed => Ok(MutationOutcome::Changed),
+            ChangeStoreOutcome::Changed { updated_at } => {
+                Ok(MutationOutcome::Changed { updated_at })
+            }
             ChangeStoreOutcome::Unchanged => Ok(MutationOutcome::Unchanged),
             ChangeStoreOutcome::NotAuthorized => {
                 Err(RemoveGroupMemberError::InsufficientPermissions)
@@ -405,7 +418,9 @@ impl<'a, S: ConversationStore> SetGroupMemberRole<'a, S> {
             .await
             .map_err(SetGroupMemberRoleError::Storage)?
         {
-            ChangeStoreOutcome::Changed => Ok(MutationOutcome::Changed),
+            ChangeStoreOutcome::Changed { updated_at } => {
+                Ok(MutationOutcome::Changed { updated_at })
+            }
             ChangeStoreOutcome::Unchanged => Ok(MutationOutcome::Unchanged),
             ChangeStoreOutcome::NotAuthorized => {
                 Err(SetGroupMemberRoleError::InsufficientPermissions)
@@ -453,7 +468,9 @@ impl<'a, S: ConversationStore> TransferGroupOwnership<'a, S> {
             .await
             .map_err(TransferGroupOwnershipError::Storage)?
         {
-            ChangeStoreOutcome::Changed => Ok(MutationOutcome::Changed),
+            ChangeStoreOutcome::Changed { updated_at } => {
+                Ok(MutationOutcome::Changed { updated_at })
+            }
             ChangeStoreOutcome::Unchanged => Ok(MutationOutcome::Unchanged),
             ChangeStoreOutcome::NotAuthorized => {
                 Err(TransferGroupOwnershipError::InsufficientPermissions)
@@ -488,7 +505,7 @@ impl<'a, S: ConversationStore> LeaveGroupConversation<'a, S> {
             .await
             .map_err(LeaveGroupConversationError::Storage)?
         {
-            LeaveStoreOutcome::Left => Ok(LeaveGroupOutcome::Left),
+            LeaveStoreOutcome::Left { updated_at } => Ok(LeaveGroupOutcome::Left { updated_at }),
             LeaveStoreOutcome::ConversationDeleted => Ok(LeaveGroupOutcome::ConversationDeleted),
             LeaveStoreOutcome::OwnershipTransferRequired => {
                 Err(LeaveGroupConversationError::OwnershipTransferRequired)
@@ -532,7 +549,9 @@ impl<'a, S: ConversationStore> RenameGroupConversation<'a, S> {
             .await
             .map_err(RenameGroupConversationError::Storage)?
         {
-            ChangeStoreOutcome::Changed => Ok(MutationOutcome::Changed),
+            ChangeStoreOutcome::Changed { updated_at } => {
+                Ok(MutationOutcome::Changed { updated_at })
+            }
             ChangeStoreOutcome::Unchanged => Ok(MutationOutcome::Unchanged),
             ChangeStoreOutcome::NotAuthorized => {
                 Err(RenameGroupConversationError::InsufficientPermissions)

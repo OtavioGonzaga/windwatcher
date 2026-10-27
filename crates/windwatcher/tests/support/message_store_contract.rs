@@ -508,7 +508,7 @@ pub async fn run<S: MessageStore + ConversationStore>(
             .add_group_member(g, owner, outsider, later)
             .await
             .unwrap(),
-        AddMemberStoreOutcome::Added
+        AddMemberStoreOutcome::Added { updated_at: later }
     );
     assert_eq!(
         store

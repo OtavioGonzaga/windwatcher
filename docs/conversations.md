@@ -1,5 +1,21 @@
 # Conversations
 
+## Server realtime notifications
+
+The [realtime transport](realtime.md) publishes actual conversation/member mutations
+after commit. Creation is a small actor-independent notification, not a full inbox
+projection. Initial participants receive one creation event; an existing Direct or
+idempotent replay produces none. Ownership transfer is one atomic event. Removal
+reaches remaining members plus the removed user; sole-Owner deletion reaches the
+former Owner. Normal audiences resolve current membership with
+`ConversationStore::member_ids`: unique IDs, including disabled existing members,
+without actor authorization or public pagination. Deletion yields an empty audience.
+
+Successful Group mutation, member addition and normal leave outcomes carry the
+exact `updated_at` committed by their storage operation. This is portable application
+metadata, not a transport event or an assumption about adapter timestamp precision.
+Later mutations do not replace the timestamp retained in an earlier outcome.
+
 ## Participant eligibility
 
 Creating a new membership requires an existing enabled user, including the Group

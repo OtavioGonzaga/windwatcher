@@ -55,8 +55,20 @@ struct Sessions {
     revoke_all_calls: AtomicUsize,
     fail_revoke_all: AtomicUsize,
     create_failure: Mutex<Option<SessionStoreError>>,
+    find_failure: Mutex<Option<SessionStoreError>>,
 }
 impl SessionStore for Sessions {
+    async fn find_session(&self, id: SessionId) -> Result<Option<Session>, SessionStoreError> {
+        if let Some(error) = self.find_failure.lock().unwrap().take() {
+            return Err(error);
+        }
+        Ok(self
+            .records
+            .lock()
+            .unwrap()
+            .get(&id)
+            .map(|(session, _)| session.clone()))
+    }
     async fn create_session(
         &self,
         session: &Session,
@@ -134,6 +146,22 @@ impl SessionStore for Sessions {
         }
         Ok(())
     }
+}
+
+#[test]
+fn session_validation_propagates_storage_failures() {
+    let store = Sessions::default();
+    *store.find_failure.lock().unwrap() = Some(SessionStoreError::Unavailable(Box::new(
+        std::io::Error::other("unavailable"),
+    )));
+    let result =
+        block_on(ValidateSession::new(&store).execute(UserId::new(), SessionId::new(), now()));
+    assert!(matches!(
+        result,
+        Err(ValidateSessionError::Storage(
+            SessionStoreError::Unavailable(_)
+        ))
+    ));
 }
 
 #[derive(Default)]

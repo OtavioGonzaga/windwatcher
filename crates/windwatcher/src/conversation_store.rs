@@ -47,7 +47,10 @@ pub enum StartDirectStoreOutcome {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AddMemberStoreOutcome {
     /// A new Member was persisted.
-    Added,
+    Added {
+        /// Exact conversation metadata timestamp committed by this operation.
+        updated_at: OffsetDateTime,
+    },
     /// The target was already a member.
     AlreadyMember,
     /// The actor no longer had Group-management permission at mutation time.
@@ -57,7 +60,10 @@ pub enum AddMemberStoreOutcome {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ChangeStoreOutcome {
     /// A meaningful mutation was persisted.
-    Changed,
+    Changed {
+        /// Exact conversation metadata timestamp committed by this operation.
+        updated_at: OffsetDateTime,
+    },
     /// The requested state already existed.
     Unchanged,
     /// The actor no longer had permission at mutation time.
@@ -67,7 +73,10 @@ pub enum ChangeStoreOutcome {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LeaveStoreOutcome {
     /// A non-owner member left.
-    Left,
+    Left {
+        /// Exact remaining conversation metadata timestamp committed by this operation.
+        updated_at: OffsetDateTime,
+    },
     /// The owner-only Group was deleted.
     ConversationDeleted,
     /// The Owner must transfer ownership before leaving.
@@ -80,6 +89,12 @@ pub enum LeaveStoreOutcome {
 
 /// Application-driven persistence operations for conversation lifecycles.
 pub trait ConversationStore: Sync {
+    /// Returns unique current member IDs, including disabled users, without actor authorization.
+    /// Missing or deleted conversations have no current members.
+    fn member_ids(
+        &self,
+        conversation_id: ConversationId,
+    ) -> impl Future<Output = Result<Vec<UserId>, ConversationStoreError>> + Send;
     /// Atomically gets or creates the unordered Direct participant pair.
     /// An existing pair is returned even if a participant was later disabled.
     /// New memberships require existing enabled users at persistence time;

@@ -161,7 +161,9 @@ pub fn problem(response: &(StatusCode, HeaderMap, Value), status: u16, code: &st
     );
     assert!(!response.2["title"].as_str().unwrap().is_empty());
     assert!(!response.2["detail"].as_str().unwrap().is_empty());
-    if status == 401 {
+    if code == "auth.invalid_access_token" {
         assert_eq!(response.1["www-authenticate"], "Bearer");
+    } else if status == 401 {
+        assert!(response.1.get("www-authenticate").is_none());
     }
 }

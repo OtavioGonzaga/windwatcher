@@ -8,9 +8,11 @@ pub mod http;
 mod logging;
 mod password;
 mod paths;
+mod realtime;
 mod storage;
 
 pub use config::http::{RawCors, RawHttp, RawRateLimit, RawRateLimitPolicy, ResolvedHttpConfig};
+pub use config::realtime::{RawRealtime, ResolvedRealtimeConfig};
 pub use password::TokioPasswordHasher;
 
 use clap::Parser;

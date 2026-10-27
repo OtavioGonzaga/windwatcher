@@ -54,6 +54,43 @@ pub async fn run<S: SessionStore>(
     )
     .unwrap();
     store.create_session(&session, &old_hash).await.unwrap();
+    assert_eq!(
+        store.find_session(session.id()).await.unwrap(),
+        Some(session.clone())
+    );
+    assert!(
+        store
+            .find_session(SessionId::new())
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let validator = windwatcher::ValidateSession::new(store);
+    assert_eq!(
+        validator
+            .execute(user_id, session.id(), timestamp(11))
+            .await
+            .unwrap(),
+        session
+    );
+    assert!(matches!(
+        validator
+            .execute(other_user_id, session.id(), timestamp(11))
+            .await,
+        Err(windwatcher::ValidateSessionError::Inactive)
+    ));
+    assert!(matches!(
+        validator
+            .execute(user_id, session.id(), session.expires_at())
+            .await,
+        Err(windwatcher::ValidateSessionError::Inactive)
+    ));
+    assert!(matches!(
+        validator
+            .execute(user_id, SessionId::new(), timestamp(11))
+            .await,
+        Err(windwatcher::ValidateSessionError::Inactive)
+    ));
     // Duplicate session IDs and refresh fingerprints are persistence conflicts,
     // never semantic owner rejections, and must not replace the existing row.
     let independent_hash = provider.hash(&provider.generate().unwrap());
@@ -114,6 +151,12 @@ pub async fn run<S: SessionStore>(
             .await
             .unwrap()
     );
+    assert!(matches!(
+        validator
+            .execute(user_id, session.id(), timestamp(12))
+            .await,
+        Err(windwatcher::ValidateSessionError::Inactive)
+    ));
     assert!(
         store
             .revoke_session_for_user(user_id, session.id(), timestamp(13))

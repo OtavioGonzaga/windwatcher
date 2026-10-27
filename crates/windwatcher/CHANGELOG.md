@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking:** successful Group mutation/addition/leave outcomes now carry the
+  exact committed conversation `updated_at`, preserving adapter timestamp precision
+  without a later current-state lookup.
+
 - **Breaking:** mark-read outcomes now carry authoritative
   `ConversationReadState` (effective watermark and unread count), loaded
   atomically for both advancement and monotonic no-ops.
@@ -27,6 +31,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   no longer include `ConversationNotFound`; parent deletion yields `MessageNotFound`.
 
 ### Added
+
+- Session lookup and lifecycle validation, and a current conversation-member ID
+  lookup for internal application use. Storage adapters must implement both.
 
 - Optional durable create-command deduplication through `IdempotencyKey`,
   `CreateConversation`, `SendMessageCommand` and `CreateCommandStore`, with

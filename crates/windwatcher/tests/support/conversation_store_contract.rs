@@ -31,6 +31,17 @@ pub async fn disabled_memberships<S: ConversationStore + windwatcher::IdentitySt
     target.disable(now);
     store.update_user(&peer).await.unwrap();
     store.update_user(&target).await.unwrap();
+    let ids = store.member_ids(group.id()).await.unwrap();
+    assert_eq!(ids.len(), 2);
+    assert!(ids.contains(&owner.id()));
+    assert!(ids.contains(&peer.id())); // Disabled existing members remain recipients.
+    assert!(
+        store
+            .member_ids(ConversationId::new())
+            .await
+            .unwrap()
+            .is_empty()
+    );
     assert!(matches!(
         store
             .get_or_create_direct(&direct, peer.id(), owner.id())
@@ -140,6 +151,10 @@ pub async fn run<S: ConversationStore>(
         StartDirectStoreOutcome::Created(conversation)
         | StartDirectStoreOutcome::Existing(conversation) => conversation.id(),
     };
+    let direct_members = store.member_ids(direct_id).await.unwrap();
+    assert_eq!(direct_members.len(), 2);
+    assert!(direct_members.contains(&owner));
+    assert!(direct_members.contains(&member));
     let reverse = Conversation::new_direct(ConversationId::new(), now);
     assert_eq!(
         match store
@@ -194,6 +209,7 @@ pub async fn run<S: ConversationStore>(
         StartDirectStoreOutcome::Created(conversation)
         | StartDirectStoreOutcome::Existing(conversation) => conversation.id(),
     };
+    assert_eq!(store.member_ids(self_id).await.unwrap(), vec![owner]);
     assert_eq!(
         store
             .find_member(self_id, owner)
@@ -229,6 +245,13 @@ pub async fn run<S: ConversationStore>(
         .create_group(&group, owner, &[admin, member, member])
         .await
         .unwrap();
+    let group_members = store.member_ids(group.id()).await.unwrap();
+    assert_eq!(group_members.len(), 3);
+    assert!(
+        [owner, admin, member]
+            .iter()
+            .all(|id| group_members.contains(id))
+    );
     assert_eq!(
         store
             .find_member(group.id(), owner)
@@ -252,7 +275,7 @@ pub async fn run<S: ConversationStore>(
             .set_group_member_role(group.id(), owner, admin, GroupRole::Admin, now)
             .await
             .unwrap(),
-        ChangeStoreOutcome::Changed
+        ChangeStoreOutcome::Changed { updated_at: now }
     );
     assert!(matches!(
         store
@@ -288,7 +311,7 @@ pub async fn run<S: ConversationStore>(
             .set_group_member_role(group.id(), owner, admin, GroupRole::Member, later)
             .await
             .unwrap(),
-        ChangeStoreOutcome::Changed
+        ChangeStoreOutcome::Changed { updated_at: later }
     );
     assert_eq!(
         store
@@ -326,7 +349,9 @@ pub async fn run<S: ConversationStore>(
             .set_group_member_role(group.id(), owner, admin, GroupRole::Admin, later_again)
             .await
             .unwrap(),
-        ChangeStoreOutcome::Changed
+        ChangeStoreOutcome::Changed {
+            updated_at: later_again
+        }
     );
     assert_eq!(
         store
@@ -340,7 +365,7 @@ pub async fn run<S: ConversationStore>(
             .add_group_member(group.id(), admin, outsider, now)
             .await
             .unwrap(),
-        AddMemberStoreOutcome::Added
+        AddMemberStoreOutcome::Added { updated_at: now }
     );
     assert_eq!(
         store
@@ -354,7 +379,14 @@ pub async fn run<S: ConversationStore>(
             .remove_group_member(group.id(), admin, outsider, now)
             .await
             .unwrap(),
-        ChangeStoreOutcome::Changed
+        ChangeStoreOutcome::Changed { updated_at: now }
+    );
+    assert!(
+        !store
+            .member_ids(group.id())
+            .await
+            .unwrap()
+            .contains(&outsider)
     );
     assert_eq!(
         store
@@ -375,7 +407,7 @@ pub async fn run<S: ConversationStore>(
             .rename_group(group.id(), admin, &renamed, later)
             .await
             .unwrap(),
-        ChangeStoreOutcome::Changed
+        ChangeStoreOutcome::Changed { updated_at: later }
     );
     let after_rename = store
         .find_conversation(group.id())
@@ -405,7 +437,7 @@ pub async fn run<S: ConversationStore>(
             .set_group_member_role(group.id(), admin, member, GroupRole::Admin, now)
             .await
             .unwrap(),
-        ChangeStoreOutcome::Changed
+        ChangeStoreOutcome::Changed { updated_at: now }
     );
     assert_eq!(
         store
@@ -423,7 +455,7 @@ pub async fn run<S: ConversationStore>(
             .transfer_group_ownership(group.id(), owner, admin, now)
             .await
             .unwrap(),
-        ChangeStoreOutcome::Changed
+        ChangeStoreOutcome::Changed { updated_at: now }
     );
     assert_eq!(
         store
@@ -445,15 +477,129 @@ pub async fn run<S: ConversationStore>(
     );
     assert_eq!(
         store.leave_group(group.id(), member, now).await.unwrap(),
-        LeaveStoreOutcome::Left
+        LeaveStoreOutcome::Left { updated_at: now }
     );
     assert_eq!(
         store.leave_group(group.id(), owner, now).await.unwrap(),
-        LeaveStoreOutcome::Left
+        LeaveStoreOutcome::Left { updated_at: now }
     );
     assert_eq!(
         store.leave_group(group.id(), admin, now).await.unwrap(),
         LeaveStoreOutcome::ConversationDeleted
     );
     assert!(store.find_conversation(group.id()).await.unwrap().is_none());
+    assert!(store.member_ids(group.id()).await.unwrap().is_empty());
+    committed_timestamps(store, owner, admin, outsider).await;
+}
+
+async fn persisted_updated_at<S: ConversationStore>(
+    store: &S,
+    id: ConversationId,
+) -> OffsetDateTime {
+    store
+        .find_conversation(id)
+        .await
+        .unwrap()
+        .unwrap()
+        .updated_at()
+}
+
+/// Each successful mutation captures its own committed metadata precision, even
+/// when a later operation has already replaced the conversation's current timestamp.
+async fn committed_timestamps<S: ConversationStore>(
+    store: &S,
+    owner: UserId,
+    peer: UserId,
+    target: UserId,
+) {
+    let start = OffsetDateTime::UNIX_EPOCH;
+    let group = Conversation::new_group(
+        ConversationId::new(),
+        GroupTitle::new("timestamps").unwrap(),
+        start,
+    );
+    store.create_group(&group, owner, &[peer]).await.unwrap();
+    let first = start + time::Duration::nanoseconds(123_456_789);
+    let second = first + time::Duration::seconds(1);
+    let original = store
+        .rename_group(group.id(), owner, &GroupTitle::new("first").unwrap(), first)
+        .await
+        .unwrap();
+    let first_persisted = persisted_updated_at(store, group.id()).await;
+    assert_eq!(
+        original,
+        ChangeStoreOutcome::Changed {
+            updated_at: first_persisted
+        }
+    );
+    let renamed = store
+        .rename_group(
+            group.id(),
+            owner,
+            &GroupTitle::new("second").unwrap(),
+            second,
+        )
+        .await
+        .unwrap();
+    let second_persisted = persisted_updated_at(store, group.id()).await;
+    assert_eq!(
+        renamed,
+        ChangeStoreOutcome::Changed {
+            updated_at: second_persisted
+        }
+    );
+    assert_ne!(first_persisted, second_persisted);
+    assert_eq!(
+        original,
+        ChangeStoreOutcome::Changed {
+            updated_at: first_persisted
+        }
+    );
+    let added = store
+        .add_group_member(group.id(), owner, target, second)
+        .await
+        .unwrap();
+    assert_eq!(
+        added,
+        AddMemberStoreOutcome::Added {
+            updated_at: persisted_updated_at(store, group.id()).await
+        }
+    );
+    let role = store
+        .set_group_member_role(group.id(), owner, target, GroupRole::Admin, second)
+        .await
+        .unwrap();
+    assert_eq!(
+        role,
+        ChangeStoreOutcome::Changed {
+            updated_at: persisted_updated_at(store, group.id()).await
+        }
+    );
+    let transferred = store
+        .transfer_group_ownership(group.id(), owner, peer, second)
+        .await
+        .unwrap();
+    assert_eq!(
+        transferred,
+        ChangeStoreOutcome::Changed {
+            updated_at: persisted_updated_at(store, group.id()).await
+        }
+    );
+    let removed = store
+        .remove_group_member(group.id(), peer, target, second)
+        .await
+        .unwrap();
+    assert_eq!(
+        removed,
+        ChangeStoreOutcome::Changed {
+            updated_at: persisted_updated_at(store, group.id()).await
+        }
+    );
+    let left = store.leave_group(group.id(), owner, second).await.unwrap();
+    assert_eq!(
+        left,
+        LeaveStoreOutcome::Left {
+            updated_at: persisted_updated_at(store, group.id()).await
+        }
+    );
 }

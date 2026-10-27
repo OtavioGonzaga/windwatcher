@@ -99,3 +99,44 @@ impl From<MessageView> for MessageResponse {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use windwatcher::*;
+    #[test]
+    fn realtime_message_contract_matches_http_including_reply_tombstones() {
+        let now = OffsetDateTime::UNIX_EPOCH;
+        for deleted in [false, true] {
+            let reply_id = MessageId::new();
+            let view = MessageView {
+                message: Message::restore(
+                    MessageId::new(),
+                    ConversationId::new(),
+                    UserId::new(),
+                    (!deleted).then(|| MessageContent::new("hello").unwrap()),
+                    Some(reply_id),
+                    now,
+                    Some(now),
+                    deleted.then_some(now),
+                )
+                .unwrap(),
+                sender_username: "alice".parse().unwrap(),
+                reply_to: Some(Box::new(ReplyPreview {
+                    id: reply_id,
+                    sender: UserSummary {
+                        id: UserId::new(),
+                        username: "bob".parse().unwrap(),
+                    },
+                    content: None,
+                    deleted_at: Some(now),
+                })),
+            };
+            let http = serde_json::to_value(MessageResponse::from(view.clone())).unwrap();
+            let realtime =
+                serde_json::to_value(crate::realtime::event::MessagePayload::from(view)).unwrap();
+            assert_eq!(http, realtime);
+            assert_eq!(http.as_object().unwrap().len(), 9);
+        }
+    }
+}

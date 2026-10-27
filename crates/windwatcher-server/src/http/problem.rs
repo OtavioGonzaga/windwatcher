@@ -39,6 +39,9 @@ macro_rules! catalog {
 }
 
 catalog! {
+    InvalidTicket => (UNAUTHORIZED, "realtime.invalid_ticket", "realtime:invalid-ticket", "Invalid realtime ticket", "The realtime ticket is invalid or unavailable."),
+    SessionInactive => (UNAUTHORIZED, "realtime.session_inactive", "realtime:session-inactive", "Session inactive", "An active session is required."),
+    UpgradeRequired => (UPGRADE_REQUIRED, "realtime.upgrade_required", "realtime:upgrade-required", "WebSocket upgrade required", "A valid WebSocket upgrade request is required."),
     InvalidQuery => (BAD_REQUEST, "request.invalid_query", "request:invalid-query", "Invalid query", "The query must match the expected structure."),
     InvalidPath => (BAD_REQUEST, "request.invalid_path", "request:invalid-path", "Invalid path", "The resource identifiers must be valid UUIDs."),
     InvalidIdentifier => (BAD_REQUEST, "request.invalid_identifier", "request:invalid-identifier", "Invalid identifier", "The supplied identifier must be a valid UUID."),
@@ -142,7 +145,7 @@ impl IntoResponse for ApiProblem {
             header::CONTENT_TYPE,
             header::HeaderValue::from_static("application/problem+json"),
         );
-        if status == StatusCode::UNAUTHORIZED {
+        if matches!(self.kind, ProblemKind::InvalidAccessToken) {
             response.headers_mut().insert(
                 header::WWW_AUTHENTICATE,
                 header::HeaderValue::from_static("Bearer"),

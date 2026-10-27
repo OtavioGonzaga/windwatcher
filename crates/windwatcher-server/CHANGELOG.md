@@ -7,7 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Conversation and membership notification metadata timestamps come from committed
+  mutation outcomes, exactly matching persistence precision rather than handler clocks.
+
+- Ticket issuance rejects sessions that expire after lookup and never inserts an
+  already-expired grant, including at the exact expiration boundary.
+
+- Member removal/leave preserves the known terminal recipient even when current
+  audience hydration fails or dispatch times out.
+
+- Realtime notification hydration and fan-out run in bounded best-effort tasks,
+  outside HTTP response latency, with independent dispatch concurrency/deadline policy.
+
+- Bearer challenges are returned only for access-token authentication failures,
+  not for invalid login or refresh credentials.
+
 ### Added
+
+- Process-local WebSocket realtime transport at `/v1/realtime`, authenticated
+  through short-lived one-use session-bound tickets from `/v1/realtime/tickets`.
+- Stable versioned state-change event contracts and best-effort post-commit
+  notifications for messages, conversations, membership, ownership and own read state.
+- Multiple sockets per user/session, bounded fan-out queues, slow-consumer closure,
+  native heartbeat, session-expiry deadlines, logout cleanup and revocation rechecks.
+- Validated `[realtime]` policy, OpenAPI ticket/upgrade security and frame schemas,
+  and realtime reconciliation documentation. No production listener or migration.
 
 - Authenticated exact user discovery, consumer-ready conversation inbox/detail,
   Group membership/role/ownership lifecycle and message history/send/reply/global

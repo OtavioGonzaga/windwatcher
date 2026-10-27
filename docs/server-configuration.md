@@ -80,9 +80,40 @@ Environment overrides use Figment array syntax, for example:
 `WINDWATCHER__HTTP__CORS__ALLOWED_ORIGINS='["https://example.com"]'`, and nested
 values such as `WINDWATCHER__HTTP__RATE_LIMIT__AUTH__BURST=20`.
 
+## Realtime behavior
+
+```toml
+[realtime]
+ticket_ttl = "30s"
+outgoing_buffer = 32
+heartbeat_interval = "30s"
+heartbeat_timeout = "10s"
+session_recheck_interval = "30s"
+dispatch_concurrency = 32
+dispatch_timeout = "5s"
+```
+
+All durations and the per-connection event buffer must be positive and
+representable; heartbeat timeout must be less than heartbeat interval. These are
+operator defaults, not fixed event-contract guarantees. `config check` validates
+the policy without starting a listener. Environment overrides use, for example,
+`WINDWATCHER__REALTIME__OUTGOING_BUFFER=64`. The composition API consumes
+`RawRealtime::resolve()` through `HttpState::with_realtime_config` before router
+construction; cloned routers share the runtime. See [realtime](realtime.md).
+
+Notification submission is nonblocking. `dispatch_concurrency` bounds running
+best-effort tasks (including hydration and audience lookup), not socket count;
+saturation drops the new notification and logs safe metadata. `dispatch_timeout`
+limits the entire task independently of socket heartbeat policy. Both must be
+positive and representable. There is no queue of tasks waiting for capacity.
+
 ## Logging output
 
 `logging.filter` accepts `tracing_subscriber::EnvFilter` syntax and `logging.format`
 is `compact`, `pretty`, or `json`. Logs and warnings go to stderr; command results
 go to stdout. `--log-filter` and `--log-format` override the configured values.
 Configuration debug output redacts direct JWT secrets.
+Raw Tungstenite protocol diagnostics are suppressed even under a broad trace
+filter because they can contain message frames and handshake secrets. Embedding
+hosts that install their own logger must likewise disable `tungstenite` and
+`tokio_tungstenite` targets and avoid URI-query/body logging.
