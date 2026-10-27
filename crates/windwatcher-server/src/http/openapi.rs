@@ -2,16 +2,27 @@ use utoipa::openapi::{
     InfoBuilder, OpenApi, RefOr, Tag,
     header::HeaderBuilder,
     schema::{KnownFormat, ObjectBuilder, SchemaFormat, Type},
-    security::{HttpAuthScheme, HttpBuilder, SecurityScheme},
+    security::{ApiKey, ApiKeyValue, HttpAuthScheme, HttpBuilder, SecurityScheme},
 };
 
 pub(super) fn finish(mut spec: OpenApi) -> OpenApi {
+    #[derive(utoipa::OpenApi)]
+    #[openapi(components(schemas(crate::realtime::event::RealtimeEvent)))]
+    struct RealtimeSchemas;
+    use utoipa::OpenApi as _;
+    if let Some(components) = RealtimeSchemas::openapi().components {
+        spec.components
+            .get_or_insert_with(Default::default)
+            .schemas
+            .extend(components.schemas);
+    }
     spec.info = InfoBuilder::new().title("Windwatcher API").version(env!("CARGO_PKG_VERSION")).description(Some("Windwatcher HTTP API v1. Tokens are JSON bearer secrets; this protocol is not OAuth or OIDC.")).build();
     spec.tags = Some(vec![
         Tag::new("Users"),
         Tag::new("Sessions"),
         Tag::new("Conversations"),
         Tag::new("Messages"),
+        Tag::new("Realtime"),
     ]);
     spec.components
         .get_or_insert_with(Default::default)
@@ -23,6 +34,13 @@ pub(super) fn finish(mut spec: OpenApi) -> OpenApi {
                     .bearer_format("JWT")
                     .build(),
             ),
+        );
+    spec.components
+        .as_mut()
+        .expect("components")
+        .add_security_scheme(
+            "realtimeTicket",
+            SecurityScheme::ApiKey(ApiKey::Query(ApiKeyValue::new("ticket"))),
         );
     document_response_headers(&mut spec);
     spec

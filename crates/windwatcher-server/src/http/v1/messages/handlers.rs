@@ -17,6 +17,7 @@ use crate::http::{
     page::PageResponse,
     problem::{ApiProblem, ProblemDetails, ProblemKind},
 };
+use crate::realtime::event::EventData;
 
 #[utoipa::path(get, path = "/conversations/{conversation_id}/messages", operation_id = "listMessages", tag = "Messages", security(("bearerAuth" = [])), params(("conversation_id" = String, Path, format = Uuid), PaginationQuery), responses((status = 200, body = PageResponse<MessageResponse>), (status = 400, body = ProblemDetails), (status = 401, body = ProblemDetails), (status = 404, body = ProblemDetails), (status = 422, body = ProblemDetails), (status = 429, body = ProblemDetails), (status = 500, body = ProblemDetails)))]
 pub(super) async fn list(
@@ -73,6 +74,19 @@ pub(super) async fn send(
         .await
         .map_err(|e| ApiProblem::command(context, e))?;
     let (status, headers, message) = super::super::conversations::handlers::create_response(result);
+    if status == StatusCode::CREATED {
+        state
+            .realtime
+            .notify(
+                message.conversation_id(),
+                EventData::MessageCreated {
+                    message: message.clone().into(),
+                },
+                message.created_at(),
+                &[],
+            )
+            .await;
+    }
     Ok((status, headers, Json(message.into())))
 }
 
@@ -103,12 +117,13 @@ pub(super) async fn edit(
     ApiPath(id): ApiPath<String>,
     ApiJson(request): ApiJson<EditMessageRequest>,
 ) -> Result<Json<MessageResponse>, ApiProblem> {
+    let now = OffsetDateTime::now_utc();
     let result = EditMessage::new(&state.storage, &state.messages)
         .execute(
             actor.user_id,
             path_identifier(&id, context)?,
             request.content,
-            OffsetDateTime::now_utc(),
+            now,
         )
         .await
         .map_err(|e| {
@@ -124,6 +139,19 @@ pub(super) async fn edit(
             };
             ApiProblem::new(kind, context)
         })?;
+    if let EditMessageOutcome::Changed(ref message) = result {
+        state
+            .realtime
+            .notify(
+                message.conversation_id(),
+                EventData::MessageUpdated {
+                    message: message.clone().into(),
+                },
+                now,
+                &[],
+            )
+            .await;
+    }
     let (EditMessageOutcome::Changed(message) | EditMessageOutcome::Unchanged(message)) = result;
     Ok(Json(message.into()))
 }
@@ -135,12 +163,9 @@ pub(super) async fn delete(
     actor: AuthenticatedActor,
     ApiPath(id): ApiPath<String>,
 ) -> Result<Json<MessageResponse>, ApiProblem> {
+    let now = OffsetDateTime::now_utc();
     let result = DeleteMessage::new(&state.storage)
-        .execute(
-            actor.user_id,
-            path_identifier(&id, context)?,
-            OffsetDateTime::now_utc(),
-        )
+        .execute(actor.user_id, path_identifier(&id, context)?, now)
         .await
         .map_err(|e| {
             let kind = match &e {
@@ -152,6 +177,19 @@ pub(super) async fn delete(
             };
             ApiProblem::new(kind, context)
         })?;
+    if let DeleteMessageOutcome::Deleted(ref message) = result {
+        state
+            .realtime
+            .notify(
+                message.conversation_id(),
+                EventData::MessageDeleted {
+                    message: message.clone().into(),
+                },
+                now,
+                &[],
+            )
+            .await;
+    }
     let (DeleteMessageOutcome::Deleted(message) | DeleteMessageOutcome::AlreadyDeleted(message)) =
         result;
     Ok(Json(message.into()))
@@ -165,14 +203,15 @@ pub(super) async fn read_state(
     ApiPath(id): ApiPath<String>,
     ApiJson(request): ApiJson<ReadStateRequest>,
 ) -> Result<Json<ReadStateResponse>, ApiProblem> {
-    MarkConversationReadThrough::new(&state.storage)
+    let id = path_identifier(&id, context)?;
+    let now = OffsetDateTime::now_utc();
+    let result = MarkConversationReadThrough::new(&state.storage)
         .execute(
             actor.user_id,
-            path_identifier(&id, context)?,
+            id,
             body_identifier(&request.last_read_message_id, context)?,
         )
         .await
-        .map(|r| Json(r.state().into()))
         .map_err(|e| {
             let kind = match &e {
                 MarkConversationReadError::ConversationNotFound
@@ -181,5 +220,17 @@ pub(super) async fn read_state(
                 _ => return ApiProblem::internal(context, &e),
             };
             ApiProblem::new(kind, context)
-        })
+        })?;
+    if let MarkReadOutcome::Changed(read) = result {
+        state.realtime.notify_users(
+            &[actor.user_id],
+            EventData::ReadStateUpdated {
+                conversation_id: id.to_string(),
+                last_read_message_id: read.last_read_message_id.map(|id| id.to_string()),
+                unread_count: read.unread_count,
+            },
+            now,
+        );
+    }
+    Ok(Json(result.state().into()))
 }

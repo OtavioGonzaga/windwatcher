@@ -132,6 +132,8 @@ pub(super) async fn revoke_current_session(
     context: RequestContext,
     actor: AuthenticatedActor,
 ) -> Result<StatusCode, ApiProblem> {
+    // Serialize local commit+invalidation against handshake activation and issuance.
+    let _lifecycle = state.realtime.revocation_guard().await;
     match RevokeSession::new(&state.storage)
         .execute(actor.user_id, actor.session_id, OffsetDateTime::now_utc())
         .await
@@ -140,5 +142,6 @@ pub(super) async fn revoke_current_session(
         Err(error) => return Err(ApiProblem::internal(context, &error)),
     }
     tracing::info!(user_id = %actor.user_id, session_id = %actor.session_id, "session_revoked");
+    state.realtime.invalidate(actor.session_id);
     Ok(StatusCode::NO_CONTENT)
 }

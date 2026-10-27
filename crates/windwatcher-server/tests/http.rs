@@ -21,7 +21,7 @@ fn openapi_contract_has_exact_routes_security_schemas_and_statuses() {
     assert_eq!(doc["openapi"], "3.1.0");
     assert_eq!(doc["info"]["title"], "Windwatcher API");
     assert_eq!(doc["info"]["version"], env!("CARGO_PKG_VERSION"));
-    assert_eq!(doc["paths"].as_object().unwrap().len(), 14);
+    assert_eq!(doc["paths"].as_object().unwrap().len(), 16);
     let mut ids = std::collections::HashSet::new();
     for (path, method, id, tag, protected, statuses) in [
         (
@@ -163,7 +163,9 @@ fn openapi_contract_documents_runtime_headers_on_every_response() {
                 assert_eq!(request_id["schema"]["type"], "string", "{id} {status}");
                 assert_eq!(request_id["schema"]["format"], "uuid", "{id} {status}");
                 assert!(!request_id["description"].as_str().unwrap().is_empty());
-                if status == "401" && !matches!(id, "createSession" | "refreshSession") {
+                if status == "401"
+                    && !matches!(id, "createSession" | "refreshSession" | "connectRealtime")
+                {
                     assert_eq!(headers["WWW-Authenticate"]["schema"]["type"], "string");
                     assert_eq!(
                         headers["WWW-Authenticate"]["schema"]["enum"],
@@ -182,7 +184,9 @@ fn openapi_contract_documents_runtime_headers_on_every_response() {
                 }
                 if matches!(
                     (id, status.as_str()),
-                    ("createSession", "201") | ("refreshSession", "200")
+                    ("createSession", "201")
+                        | ("refreshSession", "200")
+                        | ("createRealtimeTicket", "201")
                 ) {
                     grants += 1;
                     assert_eq!(headers["Cache-Control"]["schema"]["type"], "string");
@@ -198,7 +202,7 @@ fn openapi_contract_documents_runtime_headers_on_every_response() {
             }
         }
     }
-    assert_eq!(grants, 2);
+    assert_eq!(grants, 3);
 }
 
 #[tokio::test]
@@ -318,6 +322,26 @@ async fn tracing_correlates_requests_without_logging_secrets_or_query_strings() 
         "private-cookie=hidden-cookie-value".parse().unwrap(),
     );
     assert_eq!(send(&fixture.router, protected).await.0, StatusCode::OK);
+    let ticket = send(
+        &fixture.router,
+        bearer(
+            "POST",
+            "/v1/realtime/tickets",
+            response.2["access_token"].as_str().unwrap(),
+        ),
+    )
+    .await;
+    assert_eq!(ticket.0, StatusCode::CREATED);
+    let raw = ticket.2["ticket"].as_str().unwrap();
+    let rejected = send(
+        &fixture.router,
+        Request::builder()
+            .uri(format!("/v1/realtime?ticket={raw}"))
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(rejected.0, StatusCode::UPGRADE_REQUIRED);
     let logs = String::from_utf8(output.lock().unwrap().clone()).unwrap();
     assert!(logs.contains(response.1["x-request-id"].to_str().unwrap()));
     assert!(logs.contains("/v1/sessions"));
@@ -331,6 +355,7 @@ async fn tracing_correlates_requests_without_logging_secrets_or_query_strings() 
         "hidden-query-value",
         response.2["access_token"].as_str().unwrap(),
         response.2["refresh_token"].as_str().unwrap(),
+        raw,
     ] {
         assert!(!logs.contains(secret));
     }

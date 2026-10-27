@@ -17,6 +17,7 @@ use crate::http::{
     page::PageResponse,
     problem::{ApiProblem, ProblemDetails, ProblemKind},
 };
+use crate::realtime::event::{EventData, Kind};
 
 macro_rules! group_error {
     ($name:ident, $error:ident, {$($pattern:pat => $kind:ident),* $(,)?}) => {
@@ -120,15 +121,29 @@ pub(super) async fn create(
             }
         }
     };
+    let kind = match &request {
+        ConversationCreateRequest::Direct { .. } => Kind::Direct,
+        ConversationCreateRequest::Group { .. } => Kind::Group,
+    };
+    let now = OffsetDateTime::now_utc();
     let result = CreateConversation::new(&state.storage)
-        .execute(
-            actor.user_id,
-            request,
-            key.as_ref(),
-            OffsetDateTime::now_utc(),
-        )
+        .execute(actor.user_id, request, key.as_ref(), now)
         .await
         .map_err(|e| ApiProblem::command(context, e))?;
+    if result.disposition == CreateDisposition::Created {
+        state
+            .realtime
+            .notify(
+                result.value,
+                EventData::ConversationCreated {
+                    conversation_id: result.value.to_string(),
+                    kind,
+                },
+                now,
+                &[],
+            )
+            .await;
+    }
     let (status, headers, id) = create_response(result);
     Ok((
         status,
@@ -162,10 +177,27 @@ pub(super) async fn update(
     ApiJson(request): ApiJson<UpdateConversationRequest>,
 ) -> Result<Json<ConversationResponse>, ApiProblem> {
     let id = path_identifier(&id, context)?;
-    RenameGroupConversation::new(&state.storage)
-        .execute(actor.user_id, id, request.title, OffsetDateTime::now_utc())
+    let now = OffsetDateTime::now_utc();
+    let title = request.title.clone();
+    let outcome = RenameGroupConversation::new(&state.storage)
+        .execute(actor.user_id, id, request.title, now)
         .await
         .map_err(|e| rename_error(context, e))?;
+    if outcome == MutationOutcome::Changed {
+        state
+            .realtime
+            .notify(
+                id,
+                EventData::ConversationUpdated {
+                    conversation_id: id.to_string(),
+                    title,
+                    updated_at: now,
+                },
+                now,
+                &[],
+            )
+            .await;
+    }
     detail(&state, actor.user_id, id, context).await
 }
 
@@ -197,10 +229,23 @@ pub(super) async fn add_member(
 ) -> Result<(StatusCode, Json<MemberResponse>), ApiProblem> {
     let id = path_identifier(&id, context)?;
     let target = path_identifier(&target, context)?;
+    let now = OffsetDateTime::now_utc();
     let outcome = AddGroupMember::new(&state.storage)
-        .execute(actor.user_id, id, target, OffsetDateTime::now_utc())
+        .execute(actor.user_id, id, target, now)
         .await
         .map_err(|e| add_error(context, e))?;
+    if outcome == AddGroupMemberOutcome::Added {
+        state
+            .realtime
+            .notify_member(
+                id,
+                target,
+                MembershipRole::Group(GroupRole::Member),
+                true,
+                now,
+            )
+            .await;
+    }
     let status = if outcome == AddGroupMemberOutcome::Added {
         StatusCode::CREATED
     } else {
@@ -222,16 +267,18 @@ pub(super) async fn update_member(
 ) -> Result<Json<MemberResponse>, ApiProblem> {
     let id = path_identifier(&id, context)?;
     let target = path_identifier(&target, context)?;
-    SetGroupMemberRole::new(&state.storage)
-        .execute(
-            actor.user_id,
-            id,
-            target,
-            request.role.into(),
-            OffsetDateTime::now_utc(),
-        )
+    let now = OffsetDateTime::now_utc();
+    let role: GroupRole = request.role.into();
+    let outcome = SetGroupMemberRole::new(&state.storage)
+        .execute(actor.user_id, id, target, role, now)
         .await
         .map_err(|e| role_error(context, e))?;
+    if outcome == MutationOutcome::Changed {
+        state
+            .realtime
+            .notify_member(id, target, MembershipRole::Group(role), false, now)
+            .await;
+    }
     member(&state, actor.user_id, id, target, context).await
 }
 
@@ -242,15 +289,28 @@ pub(super) async fn remove_member(
     actor: AuthenticatedActor,
     ApiPath((id, target)): ApiPath<(String, String)>,
 ) -> Result<StatusCode, ApiProblem> {
-    RemoveGroupMember::new(&state.storage)
-        .execute(
-            actor.user_id,
-            path_identifier(&id, context)?,
-            path_identifier(&target, context)?,
-            OffsetDateTime::now_utc(),
-        )
+    let id = path_identifier(&id, context)?;
+    let target = path_identifier(&target, context)?;
+    let now = OffsetDateTime::now_utc();
+    let outcome = RemoveGroupMember::new(&state.storage)
+        .execute(actor.user_id, id, target, now)
         .await
         .map_err(|e| remove_error(context, e))?;
+    if outcome == MutationOutcome::Changed {
+        state
+            .realtime
+            .notify(
+                id,
+                EventData::MemberRemoved {
+                    conversation_id: id.to_string(),
+                    user_id: target.to_string(),
+                    conversation_updated_at: now,
+                },
+                now,
+                &[target],
+            )
+            .await;
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -263,15 +323,18 @@ pub(super) async fn transfer_owner(
     ApiJson(request): ApiJson<TransferOwnerRequest>,
 ) -> Result<Json<ConversationResponse>, ApiProblem> {
     let id = path_identifier(&id, context)?;
-    TransferGroupOwnership::new(&state.storage)
-        .execute(
-            actor.user_id,
-            id,
-            body_identifier(&request.user_id, context)?,
-            OffsetDateTime::now_utc(),
-        )
+    let target = body_identifier(&request.user_id, context)?;
+    let now = OffsetDateTime::now_utc();
+    let outcome = TransferGroupOwnership::new(&state.storage)
+        .execute(actor.user_id, id, target, now)
         .await
         .map_err(|e| owner_error(context, e))?;
+    if outcome == MutationOutcome::Changed {
+        state
+            .realtime
+            .notify_owner(id, actor.user_id, target, now)
+            .await;
+    }
     detail(&state, actor.user_id, id, context).await
 }
 
@@ -282,13 +345,35 @@ pub(super) async fn leave(
     actor: AuthenticatedActor,
     ApiPath(id): ApiPath<String>,
 ) -> Result<StatusCode, ApiProblem> {
-    LeaveGroupConversation::new(&state.storage)
-        .execute(
-            actor.user_id,
-            path_identifier(&id, context)?,
-            OffsetDateTime::now_utc(),
-        )
+    let id = path_identifier(&id, context)?;
+    let now = OffsetDateTime::now_utc();
+    let outcome = LeaveGroupConversation::new(&state.storage)
+        .execute(actor.user_id, id, now)
         .await
         .map_err(|e| leave_error(context, e))?;
+    match outcome {
+        LeaveGroupOutcome::Left => {
+            state
+                .realtime
+                .notify(
+                    id,
+                    EventData::MemberRemoved {
+                        conversation_id: id.to_string(),
+                        user_id: actor.user_id.to_string(),
+                        conversation_updated_at: now,
+                    },
+                    now,
+                    &[actor.user_id],
+                )
+                .await
+        }
+        LeaveGroupOutcome::ConversationDeleted => state.realtime.notify_users(
+            &[actor.user_id],
+            EventData::ConversationDeleted {
+                conversation_id: id.to_string(),
+            },
+            now,
+        ),
+    }
     Ok(StatusCode::NO_CONTENT)
 }
