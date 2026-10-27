@@ -74,6 +74,13 @@ fn document_response_headers(spec: &mut OpenApi) {
         .flatten()
         .chain(path.additional_operations.values_mut())
         {
+            let bearer_auth = operation.security.as_ref().is_some_and(|requirements| {
+                requirements.iter().any(|requirement| {
+                    serde_json::to_value(requirement)
+                        .ok()
+                        .is_some_and(|value| value.get("bearerAuth").is_some())
+                })
+            });
             if operation.request_body.is_some()
                 && let Some(problem) = operation.responses.responses.get("400").cloned()
             {
@@ -106,7 +113,7 @@ fn document_response_headers(spec: &mut OpenApi) {
                     response
                         .headers
                         .insert("X-Request-Id".into(), request_id.clone().into());
-                    if status == "401" {
+                    if status == "401" && bearer_auth {
                         response
                             .headers
                             .insert("WWW-Authenticate".into(), challenge.clone().into());

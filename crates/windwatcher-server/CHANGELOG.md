@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Bearer challenges are returned only for access-token authentication failures,
+  not for invalid login or refresh credentials.
+
 ### Added
 
 - Authenticated exact user discovery, consumer-ready conversation inbox/detail,

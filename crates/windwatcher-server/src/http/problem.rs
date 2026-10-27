@@ -142,7 +142,7 @@ impl IntoResponse for ApiProblem {
             header::CONTENT_TYPE,
             header::HeaderValue::from_static("application/problem+json"),
         );
-        if status == StatusCode::UNAUTHORIZED {
+        if matches!(self.kind, ProblemKind::InvalidAccessToken) {
             response.headers_mut().insert(
                 header::WWW_AUTHENTICATE,
                 header::HeaderValue::from_static("Bearer"),

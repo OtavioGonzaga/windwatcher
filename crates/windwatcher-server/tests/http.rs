@@ -163,7 +163,7 @@ fn openapi_contract_documents_runtime_headers_on_every_response() {
                 assert_eq!(request_id["schema"]["type"], "string", "{id} {status}");
                 assert_eq!(request_id["schema"]["format"], "uuid", "{id} {status}");
                 assert!(!request_id["description"].as_str().unwrap().is_empty());
-                if status == "401" {
+                if status == "401" && !matches!(id, "createSession" | "refreshSession") {
                     assert_eq!(headers["WWW-Authenticate"]["schema"]["type"], "string");
                     assert_eq!(
                         headers["WWW-Authenticate"]["schema"]["enum"],

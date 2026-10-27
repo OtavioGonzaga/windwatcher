@@ -163,7 +163,7 @@ Missing, invalid, expired and otherwise rejected access credentials produce
 `401 auth.invalid_access_token`. Operational verification failures produce a
 generic 500. The extractor verifies the token's signature and claims without
 consulting identity or session storage. All authentication 401 responses include
-`WWW-Authenticate: Bearer`, without credential/error internals.
+`WWW-Authenticate: Bearer` for access-token authentication failures, without credential/error internals.
 
 Unknown usernames, invalid username syntax, wrong passwords and oversized login
 passwords all produce `401 auth.invalid_credentials`. Correct credentials for a
@@ -255,7 +255,7 @@ runtime routes. Operation IDs and schema names are intentional public contracts.
 registration/login/refresh remain public credential operations.
 
 Response headers are part of the generated contract: every declared response
-includes `X-Request-Id` (UUID), every 401 includes `WWW-Authenticate: Bearer`,
+includes `X-Request-Id` (UUID), access-token authentication failures include `WWW-Authenticate: Bearer`,
 every 429 includes positive integer `Retry-After` seconds, and successful login
 and refresh responses declare `Cache-Control: no-store`. Common headers are
 applied centrally to the generated responses; grant cache policy remains next
