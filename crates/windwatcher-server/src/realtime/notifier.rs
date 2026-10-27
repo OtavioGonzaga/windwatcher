@@ -13,6 +13,7 @@ impl RealtimeService {
         user: UserId,
         role: MembershipRole,
         added: bool,
+        updated_at: OffsetDateTime,
         now: OffsetDateTime,
     ) {
         let service = self.clone();
@@ -25,7 +26,7 @@ impl RealtimeService {
             event_type,
             async move {
                 service
-                    .dispatch_member(conversation, user, role, added, now)
+                    .dispatch_member(conversation, user, role, added, updated_at, now)
                     .await;
             },
             || {},
@@ -37,6 +38,7 @@ impl RealtimeService {
         conversation: ConversationId,
         previous: UserId,
         next: UserId,
+        updated_at: OffsetDateTime,
         now: OffsetDateTime,
     ) {
         let service = self.clone();
@@ -44,7 +46,7 @@ impl RealtimeService {
             "conversation.owner.transferred",
             async move {
                 service
-                    .dispatch_owner(conversation, previous, next, now)
+                    .dispatch_owner(conversation, previous, next, updated_at, now)
                     .await;
             },
             || {},
@@ -154,6 +156,7 @@ impl RealtimeService {
         user: UserId,
         role: MembershipRole,
         added: bool,
+        updated_at: OffsetDateTime,
         now: OffsetDateTime,
     ) {
         let Some(member) = self.member_payload(conversation, user, role, now).await else {
@@ -163,7 +166,7 @@ impl RealtimeService {
         let change = MemberChange {
             conversation_id: conversation.to_string(),
             member,
-            conversation_updated_at: now,
+            conversation_updated_at: updated_at,
         };
         let data = if added {
             EventData::MemberAdded(change)
@@ -178,6 +181,7 @@ impl RealtimeService {
         conversation: ConversationId,
         previous: UserId,
         next: UserId,
+        updated_at: OffsetDateTime,
         now: OffsetDateTime,
     ) {
         use windwatcher::GroupRole;
@@ -206,7 +210,7 @@ impl RealtimeService {
                 conversation_id: conversation.to_string(),
                 previous_owner,
                 new_owner,
-                conversation_updated_at: now,
+                conversation_updated_at: updated_at,
             },
             now,
             &[],

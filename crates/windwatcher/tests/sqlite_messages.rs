@@ -733,7 +733,10 @@ async fn joining_and_sending_share_an_atomic_history_boundary() {
                 .add_group_member(f.conversation, f.owner, f.peer, now()),
             f.store.send_message(&message),
         );
-        assert_eq!(joined.unwrap(), AddMemberStoreOutcome::Added);
+        assert_eq!(
+            joined.unwrap(),
+            AddMemberStoreOutcome::Added { updated_at: now() }
+        );
         assert!(matches!(sent.unwrap(), SendMessageStoreOutcome::Sent(_)));
         let marker = f
             .store

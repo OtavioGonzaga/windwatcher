@@ -774,6 +774,87 @@ async fn terminal_removal_and_leave_survive_failed_current_audience_lookup() {
 }
 
 #[tokio::test]
+async fn conversation_and_membership_event_timestamps_equal_persisted_http_metadata() {
+    let f = Fixture::new(RawRealtime::default()).await;
+    let a = f.user("alice").await;
+    let b = f.user("bob").await;
+    let c = f.user("carol").await;
+    let (_, at) = f.session(&a).await;
+    let (_, bt) = f.session(&b).await;
+    let mut socket = f.connect(&at).await;
+    let group = f
+        .mutate(
+            "POST",
+            "/v1/conversations",
+            &at,
+            json!({"kind":"group", "title":"Team", "participant_ids":[b.id().to_string()]}),
+            None,
+        )
+        .await;
+    event(&mut socket, "conversation.created").await;
+    let path = format!("/v1/conversations/{}", group["id"].as_str().unwrap());
+    let member = format!("{path}/members/{}", c.id());
+    for (method, target, token, body, kind) in [
+        (
+            "PATCH",
+            path.clone(),
+            &at,
+            json!({"title":"Renamed"}),
+            "conversation.updated",
+        ),
+        (
+            "PUT",
+            member.clone(),
+            &at,
+            json!({}),
+            "conversation.member.added",
+        ),
+        (
+            "PATCH",
+            member.clone(),
+            &at,
+            json!({"role":"admin"}),
+            "conversation.member.updated",
+        ),
+        (
+            "PUT",
+            format!("{path}/owner"),
+            &at,
+            json!({"user_id":b.id().to_string()}),
+            "conversation.owner.transferred",
+        ),
+        (
+            "DELETE",
+            member,
+            &bt,
+            json!({}),
+            "conversation.member.removed",
+        ),
+        (
+            "DELETE",
+            format!("{path}/members/me"),
+            &at,
+            json!({}),
+            "conversation.member.removed",
+        ),
+    ] {
+        let response = f.mutate(method, &target, token, body, None).await;
+        let metadata = if response.get("updated_at").is_some() {
+            response
+        } else {
+            f.mutate("GET", &path, &bt, json!({}), None).await
+        };
+        let event = event(&mut socket, kind).await;
+        let field = if kind == "conversation.updated" {
+            "updated_at"
+        } else {
+            "conversation_updated_at"
+        };
+        assert_eq!(event["payload"][field], metadata["updated_at"], "{kind}");
+    }
+}
+
+#[tokio::test]
 async fn concurrent_network_upgrades_have_one_ticket_winner_and_expired_ticket_is_rejected() {
     let f = Fixture::new(RawRealtime {
         ticket_ttl: "100ms".into(),

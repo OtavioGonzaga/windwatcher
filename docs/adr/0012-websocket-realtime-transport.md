@@ -59,7 +59,8 @@ internal event names/payloads need not match public realtime names/payloads.
 ## Consequences
 
 No migration is required. The engine gains only session lookup/validation and a
-current conversation-member-ID query. Tickets/connections are not public library
+current conversation-member-ID query, plus exact committed metadata timestamps in
+Group mutation outcomes. Tickets/connections are not public library
 ports. This design intentionally loses notifications across disconnection, process
 exit and cancellation after primary commit. Attribution hydration or audience
 lookup can fail independently of a successful mutation.

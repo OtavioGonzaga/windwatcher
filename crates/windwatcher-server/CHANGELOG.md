@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Conversation and membership notification metadata timestamps come from committed
+  mutation outcomes, exactly matching persistence precision rather than handler clocks.
+
 - Ticket issuance rejects sessions that expire after lookup and never inserts an
   already-expired grant, including at the exact expiration boundary.
 

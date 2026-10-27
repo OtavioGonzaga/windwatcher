@@ -47,7 +47,10 @@ pub enum StartDirectStoreOutcome {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AddMemberStoreOutcome {
     /// A new Member was persisted.
-    Added,
+    Added {
+        /// Exact conversation metadata timestamp committed by this operation.
+        updated_at: OffsetDateTime,
+    },
     /// The target was already a member.
     AlreadyMember,
     /// The actor no longer had Group-management permission at mutation time.
@@ -57,7 +60,10 @@ pub enum AddMemberStoreOutcome {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ChangeStoreOutcome {
     /// A meaningful mutation was persisted.
-    Changed,
+    Changed {
+        /// Exact conversation metadata timestamp committed by this operation.
+        updated_at: OffsetDateTime,
+    },
     /// The requested state already existed.
     Unchanged,
     /// The actor no longer had permission at mutation time.
@@ -67,7 +73,10 @@ pub enum ChangeStoreOutcome {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LeaveStoreOutcome {
     /// A non-owner member left.
-    Left,
+    Left {
+        /// Exact remaining conversation metadata timestamp committed by this operation.
+        updated_at: OffsetDateTime,
+    },
     /// The owner-only Group was deleted.
     ConversationDeleted,
     /// The Owner must transfer ownership before leaving.

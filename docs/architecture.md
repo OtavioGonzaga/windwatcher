@@ -149,8 +149,10 @@ whole-job deadline independent of heartbeat; saturation drops work rather than
 creating unbounded permit waiters. The hub accepts
 explicit user audiences; it does not authorize mutations or read the database.
 The notifier resolves current membership and constructs stable state-oriented
-events. Session validation and member-ID lookup are the only new reusable engine
-capabilities. No transport type or runtime dependency enters the library.
+events. Session validation, member-ID lookup and committed mutation timestamps
+are reusable engine capabilities. No transport type or runtime dependency enters
+the library. Group outcomes preserve their operation's exact persisted metadata
+timestamp so asynchronous notifications do not borrow a later mutation's value.
 
 The hub is process-local, with guarded pending/active registration, bounded queues,
 separate close signals, native heartbeat, session deadlines and persistence-backed

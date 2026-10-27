@@ -354,6 +354,10 @@ fn from_micros(value: i64) -> Result<OffsetDateTime, &'static str> {
     OffsetDateTime::from_unix_timestamp_nanos(i128::from(value) * 1_000)
         .map_err(|_| "invalid persisted timestamp")
 }
+
+fn conversation_timestamp(now: OffsetDateTime) -> Result<OffsetDateTime, ConversationStoreError> {
+    from_micros(to_micros(now).map_err(unexpected_conversation)?).map_err(unexpected_conversation)
+}
 fn read_user(row: &SqliteRow) -> Result<User, IdentityStoreError> {
     let id = read_user_id(row.try_get("id").map_err(identity_error)?)?;
     let username = Username::from_str(
@@ -836,6 +840,7 @@ impl ConversationStore for SqliteStorage {
         member: UserId,
         now: OffsetDateTime,
     ) -> Result<AddMemberStoreOutcome, ConversationStoreError> {
+        let updated_at = conversation_timestamp(now)?;
         let mut transaction = self
             .pool
             .begin_with("BEGIN IMMEDIATE")
@@ -864,7 +869,7 @@ impl ConversationStore for SqliteStorage {
         }
         transaction.commit().await.map_err(conversation_error)?;
         Ok(if inserted.rows_affected() == 1 {
-            AddMemberStoreOutcome::Added
+            AddMemberStoreOutcome::Added { updated_at }
         } else {
             AddMemberStoreOutcome::AlreadyMember
         })
@@ -876,6 +881,7 @@ impl ConversationStore for SqliteStorage {
         member: UserId,
         now: OffsetDateTime,
     ) -> Result<ChangeStoreOutcome, ConversationStoreError> {
+        let updated_at = conversation_timestamp(now)?;
         let mut tx = self
             .pool
             .begin_with("BEGIN IMMEDIATE")
@@ -897,7 +903,7 @@ impl ConversationStore for SqliteStorage {
         }
         tx.commit().await.map_err(conversation_error)?;
         Ok(if result.rows_affected() == 1 {
-            ChangeStoreOutcome::Changed
+            ChangeStoreOutcome::Changed { updated_at }
         } else {
             ChangeStoreOutcome::Unchanged
         })
@@ -910,6 +916,7 @@ impl ConversationStore for SqliteStorage {
         role: GroupRole,
         now: OffsetDateTime,
     ) -> Result<ChangeStoreOutcome, ConversationStoreError> {
+        let updated_at = conversation_timestamp(now)?;
         let value = match role {
             GroupRole::Admin => "admin",
             GroupRole::Member => "member",
@@ -936,7 +943,7 @@ impl ConversationStore for SqliteStorage {
         }
         tx.commit().await.map_err(conversation_error)?;
         Ok(if result.rows_affected() == 1 {
-            ChangeStoreOutcome::Changed
+            ChangeStoreOutcome::Changed { updated_at }
         } else {
             ChangeStoreOutcome::Unchanged
         })
@@ -948,6 +955,7 @@ impl ConversationStore for SqliteStorage {
         target: UserId,
         now: OffsetDateTime,
     ) -> Result<ChangeStoreOutcome, ConversationStoreError> {
+        let updated_at = conversation_timestamp(now)?;
         let mut tx = self
             .pool
             .begin_with("BEGIN IMMEDIATE")
@@ -979,7 +987,7 @@ impl ConversationStore for SqliteStorage {
             .await
             .map_err(conversation_error)?;
         tx.commit().await.map_err(conversation_error)?;
-        Ok(ChangeStoreOutcome::Changed)
+        Ok(ChangeStoreOutcome::Changed { updated_at })
     }
     async fn leave_group(
         &self,
@@ -987,6 +995,7 @@ impl ConversationStore for SqliteStorage {
         actor: UserId,
         now: OffsetDateTime,
     ) -> Result<LeaveStoreOutcome, ConversationStoreError> {
+        let updated_at = conversation_timestamp(now)?;
         let mut tx = self
             .pool
             .begin_with("BEGIN IMMEDIATE")
@@ -1047,7 +1056,7 @@ impl ConversationStore for SqliteStorage {
             .await
             .map_err(conversation_error)?;
         tx.commit().await.map_err(conversation_error)?;
-        Ok(LeaveStoreOutcome::Left)
+        Ok(LeaveStoreOutcome::Left { updated_at })
     }
     async fn rename_group(
         &self,
@@ -1056,6 +1065,7 @@ impl ConversationStore for SqliteStorage {
         title: &GroupTitle,
         now: OffsetDateTime,
     ) -> Result<ChangeStoreOutcome, ConversationStoreError> {
+        let updated_at = conversation_timestamp(now)?;
         let mut tx = self
             .pool
             .begin_with("BEGIN IMMEDIATE")
@@ -1064,7 +1074,7 @@ impl ConversationStore for SqliteStorage {
         let result = sqlx::query("UPDATE conversations SET title = ?, updated_at = ? WHERE id = ? AND kind = 'group' AND title <> ? AND EXISTS (SELECT 1 FROM conversation_members m WHERE m.conversation_id = conversations.id AND m.user_id = ? AND m.role IN ('owner', 'admin'))").bind(title.as_str()).bind(to_micros(now).map_err(unexpected_conversation)?).bind(id_bytes(id)).bind(title.as_str()).bind(id_bytes(actor)).execute(&mut *tx).await.map_err(conversation_error)?;
         if result.rows_affected() == 1 {
             tx.commit().await.map_err(conversation_error)?;
-            return Ok(ChangeStoreOutcome::Changed);
+            return Ok(ChangeStoreOutcome::Changed { updated_at });
         }
         let authorized: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM conversations c JOIN conversation_members m ON m.conversation_id = c.id WHERE c.id = ? AND c.kind = 'group' AND m.user_id = ? AND m.role IN ('owner', 'admin')").bind(id_bytes(id)).bind(id_bytes(actor)).fetch_one(&mut *tx).await.map_err(conversation_error)?;
         tx.commit().await.map_err(conversation_error)?;

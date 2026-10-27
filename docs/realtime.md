@@ -173,6 +173,10 @@ lookups. Attribution is hydrated after commit; an unavailable/replaced membershi
 can make publication fail best effort rather than produce a partial event.
 `conversation_updated_at` can help avoid obvious stale UI updates but is not a
 global version number or snapshot boundary.
+Both this field and `conversation.updated.payload.updated_at` use the exact
+persisted timestamp returned by the corresponding mutation, not the higher-precision
+handler clock or a subsequent lookup which could observe a later mutation.
+The informational envelope `occurred_at` can still use the supplied mutation time.
 
 ### Own read state
 
