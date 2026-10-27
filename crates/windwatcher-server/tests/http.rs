@@ -241,6 +241,48 @@ async fn missing_peer_fails_closed_only_when_limiting_is_enabled() {
 }
 
 #[tokio::test]
+async fn realtime_requests_share_general_quota_but_not_strict_auth_quota() {
+    let mut cfg = config();
+    cfg.rate_limit.enabled = true;
+    cfg.rate_limit.general.requests = 1;
+    cfg.rate_limit.general.burst = 4;
+    cfg.rate_limit.general.period = "1h".into();
+    cfg.rate_limit.auth.requests = 1;
+    cfg.rate_limit.auth.burst = 1;
+    cfg.rate_limit.auth.period = "1h".into();
+    let fixture = Fixture::new(cfg, RegistrationPolicy::Closed, true).await;
+    fixture.user().await;
+    let grant = fixture.grant().await;
+    let token = grant["access_token"].as_str().unwrap();
+    for _ in 0..2 {
+        assert_eq!(
+            send(
+                &fixture.router,
+                bearer("POST", "/v1/realtime/tickets", token)
+            )
+            .await
+            .0,
+            StatusCode::CREATED
+        );
+    }
+    let request = || {
+        Request::builder()
+            .uri("/v1/realtime?ticket=not-consumed")
+            .body(Body::empty())
+            .unwrap()
+    };
+    assert_eq!(
+        send(&fixture.router, request()).await.0,
+        StatusCode::UPGRADE_REQUIRED
+    );
+    problem(
+        &send(&fixture.router, request()).await,
+        429,
+        "rate_limit.exceeded",
+    );
+}
+
+#[tokio::test]
 async fn expired_refresh_collapses_to_invalid_refresh_without_sleeping() {
     let fixture = Fixture::open().await;
     let user = fixture.user().await;

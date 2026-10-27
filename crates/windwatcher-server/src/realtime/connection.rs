@@ -30,12 +30,11 @@ pub(super) async fn run(service: RealtimeService, socket: WebSocket, prepared: P
     } = prepared;
     let config = &service.0.config;
     let (mut sink, mut source) = socket.split();
-    let expires_in = (session.expires_at() - time::OffsetDateTime::now_utc()).unsigned_abs();
-    let expires = if session.is_expired(time::OffsetDateTime::now_utc()) {
-        Instant::now()
-    } else {
-        Instant::now() + expires_in
-    };
+    let clock = Instant::now();
+    let remaining =
+        std::time::Duration::try_from(session.expires_at() - time::OffsetDateTime::now_utc())
+            .unwrap_or_default();
+    let expires = clock.checked_add(remaining).unwrap_or(clock);
     let mut heartbeat = Instant::now() + config.heartbeat_interval;
     let mut recheck = Instant::now() + config.session_recheck_interval;
     let mut pending: Option<(Vec<u8>, Instant)> = None;

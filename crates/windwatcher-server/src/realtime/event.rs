@@ -25,9 +25,14 @@ pub(crate) enum EventData {
     #[serde(rename = "message.deleted")]
     MessageDeleted { message: MessagePayload },
     #[serde(rename = "conversation.created")]
-    ConversationCreated { conversation_id: String, kind: Kind },
+    ConversationCreated {
+        #[schema(format = Uuid)]
+        conversation_id: String,
+        kind: Kind,
+    },
     #[serde(rename = "conversation.updated")]
     ConversationUpdated {
+        #[schema(format = Uuid)]
         conversation_id: String,
         title: String,
         #[serde(with = "time::serde::rfc3339")]
@@ -35,14 +40,19 @@ pub(crate) enum EventData {
         updated_at: OffsetDateTime,
     },
     #[serde(rename = "conversation.deleted")]
-    ConversationDeleted { conversation_id: String },
+    ConversationDeleted {
+        #[schema(format = Uuid)]
+        conversation_id: String,
+    },
     #[serde(rename = "conversation.member.added")]
     MemberAdded(MemberChange),
     #[serde(rename = "conversation.member.updated")]
     MemberUpdated(MemberChange),
     #[serde(rename = "conversation.member.removed")]
     MemberRemoved {
+        #[schema(format = Uuid)]
         conversation_id: String,
+        #[schema(format = Uuid)]
         user_id: String,
         #[serde(with = "time::serde::rfc3339")]
         #[schema(value_type = String, format = DateTime)]
@@ -50,6 +60,7 @@ pub(crate) enum EventData {
     },
     #[serde(rename = "conversation.owner.transferred")]
     OwnerTransferred {
+        #[schema(format = Uuid)]
         conversation_id: String,
         previous_owner: MemberPayload,
         new_owner: MemberPayload,
@@ -59,7 +70,9 @@ pub(crate) enum EventData {
     },
     #[serde(rename = "conversation.read_state.updated")]
     ReadStateUpdated {
+        #[schema(format = Uuid)]
         conversation_id: String,
+        #[schema(format = Uuid)]
         last_read_message_id: Option<String>,
         unread_count: u64,
     },
@@ -92,6 +105,7 @@ pub(crate) enum Kind {
 
 #[derive(Serialize, ToSchema)]
 pub(crate) struct MemberChange {
+    #[schema(format = Uuid)]
     pub conversation_id: String,
     pub member: MemberPayload,
     #[serde(with = "time::serde::rfc3339")]
@@ -101,6 +115,7 @@ pub(crate) struct MemberChange {
 
 #[derive(Serialize, ToSchema)]
 pub(crate) struct UserPayload {
+    #[schema(format = Uuid)]
     pub id: String,
     pub username: String,
 }
@@ -141,8 +156,11 @@ impl From<windwatcher::ConversationMemberSummary> for MemberPayload {
 
 #[derive(Serialize, ToSchema)]
 pub(crate) struct MessagePayload {
+    #[schema(format = Uuid)]
     pub id: String,
+    #[schema(format = Uuid)]
     pub conversation_id: String,
+    #[schema(format = Uuid)]
     pub sender_id: String,
     pub sender_username: String,
     pub content: Option<String>,
@@ -159,7 +177,9 @@ pub(crate) struct MessagePayload {
 }
 #[derive(Serialize, ToSchema)]
 pub(crate) struct ReplyPayload {
+    #[schema(format = Uuid)]
     pub id: String,
+    #[schema(format = Uuid)]
     pub sender_id: String,
     pub sender_username: String,
     pub content: Option<String>,
@@ -310,6 +330,7 @@ mod tests {
             ),
         ];
         for (data, name, keys) in cases {
+            assert_eq!(data.event_type(), name);
             let event = RealtimeEvent {
                 event_id: id.clone(),
                 schema_version: 1,
