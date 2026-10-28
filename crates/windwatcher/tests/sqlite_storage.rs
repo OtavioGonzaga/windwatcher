@@ -251,7 +251,7 @@ async fn conversation_store_supports_directs_groups_and_owner_lifecycle() {
         .execute(alice.id(), bob.id(), now)
         .await
         .unwrap();
-    let direct_id = match direct {
+    let direct_id = match direct.into_value() {
         StartDirectConversationOutcome::Created(c)
         | StartDirectConversationOutcome::Existing(c) => c.id(),
     };
@@ -260,7 +260,7 @@ async fn conversation_store_supports_directs_groups_and_owner_lifecycle() {
         .await
         .unwrap();
     assert_eq!(
-        match reverse {
+        match reverse.into_value() {
             StartDirectConversationOutcome::Created(c)
             | StartDirectConversationOutcome::Existing(c) => c.id(),
         },
@@ -270,7 +270,7 @@ async fn conversation_store_supports_directs_groups_and_owner_lifecycle() {
         .execute(alice.id(), alice.id(), now)
         .await
         .unwrap();
-    let self_id = match self_direct {
+    let self_id = match self_direct.into_value() {
         StartDirectConversationOutcome::Created(c)
         | StartDirectConversationOutcome::Existing(c) => c.id(),
     };
@@ -393,8 +393,8 @@ async fn concurrent_direct_creation_converges_for_peer_and_self_pairs() {
             StartDirectConversationOutcome::Created(conversation)
             | StartDirectConversationOutcome::Existing(conversation) => conversation.id(),
         };
-        let conversation_id = id(left.await.unwrap());
-        assert_eq!(conversation_id, id(right.await.unwrap()));
+        let conversation_id = id(left.await.unwrap().into_value());
+        assert_eq!(conversation_id, id(right.await.unwrap().into_value()));
         direct_ids.push(conversation_id);
     }
     let url = format!(
@@ -529,7 +529,7 @@ async fn group_permissions_no_ops_and_direct_rejections_are_enforced() {
         .execute(owner.id(), member.id(), now)
         .await
         .unwrap();
-    let direct_id = match direct {
+    let direct_id = match direct.into_value() {
         StartDirectConversationOutcome::Created(c)
         | StartDirectConversationOutcome::Existing(c) => c.id(),
     };
@@ -1021,7 +1021,7 @@ async fn conversation_schema_uses_strict_binary_keys_and_cascading_memberships()
         .execute(alice.id(), bob.id(), timestamp(500))
         .await
         .unwrap();
-    let direct_id = match direct {
+    let direct_id = match direct.into_value() {
         StartDirectConversationOutcome::Created(c)
         | StartDirectConversationOutcome::Existing(c) => c.id(),
     };
@@ -1080,7 +1080,7 @@ async fn malformed_persisted_conversation_memberships_are_rejected() {
         .execute(alice.id(), bob.id(), timestamp(550))
         .await
         .unwrap();
-    let direct_id = match direct {
+    let direct_id = match direct.into_value() {
         StartDirectConversationOutcome::Created(c)
         | StartDirectConversationOutcome::Existing(c) => c.id(),
     };

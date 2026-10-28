@@ -2,8 +2,9 @@ use time::OffsetDateTime;
 
 use crate::{
     AddMemberStoreOutcome, ChangeStoreOutcome, Conversation, ConversationId, ConversationKind,
-    ConversationMember, ConversationStore, ConversationStoreError, GroupRole, GroupTitle,
-    GroupTitleError, LeaveStoreOutcome, MembershipRole, StartDirectStoreOutcome, UserId,
+    ConversationMember, ConversationStore, ConversationStoreError, DomainEvent, GroupRole,
+    GroupTitle, GroupTitleError, LeaveStoreOutcome, MembershipRole, Outcome,
+    StartDirectStoreOutcome, UserId,
 };
 
 /// Whether starting a Direct created it or found its existing semantic pair.
@@ -140,7 +141,7 @@ impl<'a, S: ConversationStore> StartDirectConversation<'a, S> {
         actor: UserId,
         participant_id: UserId,
         now: OffsetDateTime,
-    ) -> Result<StartDirectConversationOutcome, StartDirectConversationError> {
+    ) -> Result<Outcome<StartDirectConversationOutcome>, StartDirectConversationError> {
         match self
             .store
             .get_or_create_direct(
@@ -155,12 +156,17 @@ impl<'a, S: ConversationStore> StartDirectConversation<'a, S> {
                 }
                 error => StartDirectConversationError::Storage(error),
             })? {
-            StartDirectStoreOutcome::Created(conversation) => {
-                Ok(StartDirectConversationOutcome::Created(conversation))
-            }
-            StartDirectStoreOutcome::Existing(conversation) => {
-                Ok(StartDirectConversationOutcome::Existing(conversation))
-            }
+            StartDirectStoreOutcome::Created(conversation) => Ok(Outcome::with_event(
+                StartDirectConversationOutcome::Created(conversation.clone()),
+                DomainEvent::ConversationCreated {
+                    conversation_id: conversation.id(),
+                    kind: ConversationKind::Direct,
+                    occurred_at: conversation.created_at(),
+                },
+            )),
+            StartDirectStoreOutcome::Existing(conversation) => Ok(Outcome::new(
+                StartDirectConversationOutcome::Existing(conversation),
+            )),
         }
     }
 }
@@ -181,7 +187,7 @@ impl<'a, S: ConversationStore> CreateGroupConversation<'a, S> {
         title: impl Into<String>,
         participants: &[UserId],
         now: OffsetDateTime,
-    ) -> Result<Conversation, CreateGroupConversationError> {
+    ) -> Result<Outcome<Conversation>, CreateGroupConversationError> {
         let title = GroupTitle::new(title).map_err(CreateGroupConversationError::InvalidTitle)?;
         let mut unique = Vec::new();
         for id in participants {
@@ -199,7 +205,14 @@ impl<'a, S: ConversationStore> CreateGroupConversation<'a, S> {
                 }
                 error => CreateGroupConversationError::Storage(error),
             })?;
-        Ok(conversation)
+        Ok(Outcome::with_event(
+            conversation.clone(),
+            DomainEvent::ConversationCreated {
+                conversation_id: conversation.id(),
+                kind: ConversationKind::Group,
+                occurred_at: conversation.created_at(),
+            },
+        ))
     }
 }
 
@@ -293,7 +306,7 @@ impl<'a, S: ConversationStore> AddGroupMember<'a, S> {
         id: ConversationId,
         target: UserId,
         now: OffsetDateTime,
-    ) -> Result<AddGroupMemberOutcome, AddGroupMemberError> {
+    ) -> Result<Outcome<AddGroupMemberOutcome>, AddGroupMemberError> {
         let member = group_error!(
             group_actor(self.store, id, actor).await,
             AddGroupMemberError
@@ -311,10 +324,17 @@ impl<'a, S: ConversationStore> AddGroupMember<'a, S> {
                 }
                 error => AddGroupMemberError::Storage(error),
             })? {
-            AddMemberStoreOutcome::Added { updated_at } => {
-                Ok(AddGroupMemberOutcome::Added { updated_at })
+            AddMemberStoreOutcome::Added { updated_at } => Ok(Outcome::with_event(
+                AddGroupMemberOutcome::Added { updated_at },
+                DomainEvent::GroupMemberAdded {
+                    conversation_id: id,
+                    user_id: target,
+                    updated_at,
+                },
+            )),
+            AddMemberStoreOutcome::AlreadyMember => {
+                Ok(Outcome::new(AddGroupMemberOutcome::AlreadyMember))
             }
-            AddMemberStoreOutcome::AlreadyMember => Ok(AddGroupMemberOutcome::AlreadyMember),
             AddMemberStoreOutcome::NotAuthorized => {
                 Err(AddGroupMemberError::InsufficientPermissions)
             }
@@ -338,7 +358,7 @@ impl<'a, S: ConversationStore> RemoveGroupMember<'a, S> {
         id: ConversationId,
         target: UserId,
         now: OffsetDateTime,
-    ) -> Result<MutationOutcome, RemoveGroupMemberError> {
+    ) -> Result<Outcome<MutationOutcome>, RemoveGroupMemberError> {
         let member = group_error!(
             group_actor(self.store, id, actor).await,
             RemoveGroupMemberError
@@ -364,10 +384,15 @@ impl<'a, S: ConversationStore> RemoveGroupMember<'a, S> {
             .await
             .map_err(RemoveGroupMemberError::Storage)?
         {
-            ChangeStoreOutcome::Changed { updated_at } => {
-                Ok(MutationOutcome::Changed { updated_at })
-            }
-            ChangeStoreOutcome::Unchanged => Ok(MutationOutcome::Unchanged),
+            ChangeStoreOutcome::Changed { updated_at } => Ok(Outcome::with_event(
+                MutationOutcome::Changed { updated_at },
+                DomainEvent::GroupMemberRemoved {
+                    conversation_id: id,
+                    user_id: target,
+                    updated_at,
+                },
+            )),
+            ChangeStoreOutcome::Unchanged => Ok(Outcome::new(MutationOutcome::Unchanged)),
             ChangeStoreOutcome::NotAuthorized => {
                 Err(RemoveGroupMemberError::InsufficientPermissions)
             }
@@ -392,7 +417,7 @@ impl<'a, S: ConversationStore> SetGroupMemberRole<'a, S> {
         target: UserId,
         role: GroupRole,
         now: OffsetDateTime,
-    ) -> Result<MutationOutcome, SetGroupMemberRoleError> {
+    ) -> Result<Outcome<MutationOutcome>, SetGroupMemberRoleError> {
         if role == GroupRole::Owner {
             return Err(SetGroupMemberRoleError::OwnerRoleNotAssignable);
         }
@@ -418,10 +443,16 @@ impl<'a, S: ConversationStore> SetGroupMemberRole<'a, S> {
             .await
             .map_err(SetGroupMemberRoleError::Storage)?
         {
-            ChangeStoreOutcome::Changed { updated_at } => {
-                Ok(MutationOutcome::Changed { updated_at })
-            }
-            ChangeStoreOutcome::Unchanged => Ok(MutationOutcome::Unchanged),
+            ChangeStoreOutcome::Changed { updated_at } => Ok(Outcome::with_event(
+                MutationOutcome::Changed { updated_at },
+                DomainEvent::GroupMemberRoleChanged {
+                    conversation_id: id,
+                    user_id: target,
+                    role,
+                    updated_at,
+                },
+            )),
+            ChangeStoreOutcome::Unchanged => Ok(Outcome::new(MutationOutcome::Unchanged)),
             ChangeStoreOutcome::NotAuthorized => {
                 Err(SetGroupMemberRoleError::InsufficientPermissions)
             }
@@ -445,7 +476,7 @@ impl<'a, S: ConversationStore> TransferGroupOwnership<'a, S> {
         id: ConversationId,
         target: UserId,
         now: OffsetDateTime,
-    ) -> Result<MutationOutcome, TransferGroupOwnershipError> {
+    ) -> Result<Outcome<MutationOutcome>, TransferGroupOwnershipError> {
         let member = group_error!(
             group_actor(self.store, id, actor).await,
             TransferGroupOwnershipError
@@ -468,10 +499,16 @@ impl<'a, S: ConversationStore> TransferGroupOwnership<'a, S> {
             .await
             .map_err(TransferGroupOwnershipError::Storage)?
         {
-            ChangeStoreOutcome::Changed { updated_at } => {
-                Ok(MutationOutcome::Changed { updated_at })
-            }
-            ChangeStoreOutcome::Unchanged => Ok(MutationOutcome::Unchanged),
+            ChangeStoreOutcome::Changed { updated_at } => Ok(Outcome::with_event(
+                MutationOutcome::Changed { updated_at },
+                DomainEvent::GroupOwnershipTransferred {
+                    conversation_id: id,
+                    previous_owner_id: actor,
+                    new_owner_id: target,
+                    updated_at,
+                },
+            )),
+            ChangeStoreOutcome::Unchanged => Ok(Outcome::new(MutationOutcome::Unchanged)),
             ChangeStoreOutcome::NotAuthorized => {
                 Err(TransferGroupOwnershipError::InsufficientPermissions)
             }
@@ -494,7 +531,7 @@ impl<'a, S: ConversationStore> LeaveGroupConversation<'a, S> {
         actor: UserId,
         id: ConversationId,
         now: OffsetDateTime,
-    ) -> Result<LeaveGroupOutcome, LeaveGroupConversationError> {
+    ) -> Result<Outcome<LeaveGroupOutcome>, LeaveGroupConversationError> {
         group_error!(
             group_actor(self.store, id, actor).await,
             LeaveGroupConversationError
@@ -505,8 +542,22 @@ impl<'a, S: ConversationStore> LeaveGroupConversation<'a, S> {
             .await
             .map_err(LeaveGroupConversationError::Storage)?
         {
-            LeaveStoreOutcome::Left { updated_at } => Ok(LeaveGroupOutcome::Left { updated_at }),
-            LeaveStoreOutcome::ConversationDeleted => Ok(LeaveGroupOutcome::ConversationDeleted),
+            LeaveStoreOutcome::Left { updated_at } => Ok(Outcome::with_event(
+                LeaveGroupOutcome::Left { updated_at },
+                DomainEvent::GroupMemberRemoved {
+                    conversation_id: id,
+                    user_id: actor,
+                    updated_at,
+                },
+            )),
+            LeaveStoreOutcome::ConversationDeleted => Ok(Outcome::with_event(
+                LeaveGroupOutcome::ConversationDeleted,
+                DomainEvent::GroupDeleted {
+                    conversation_id: id,
+                    former_owner_id: actor,
+                    occurred_at: now,
+                },
+            )),
             LeaveStoreOutcome::OwnershipTransferRequired => {
                 Err(LeaveGroupConversationError::OwnershipTransferRequired)
             }
@@ -534,7 +585,7 @@ impl<'a, S: ConversationStore> RenameGroupConversation<'a, S> {
         id: ConversationId,
         title: impl Into<String>,
         now: OffsetDateTime,
-    ) -> Result<MutationOutcome, RenameGroupConversationError> {
+    ) -> Result<Outcome<MutationOutcome>, RenameGroupConversationError> {
         let member = group_error!(
             group_actor(self.store, id, actor).await,
             RenameGroupConversationError
@@ -549,10 +600,15 @@ impl<'a, S: ConversationStore> RenameGroupConversation<'a, S> {
             .await
             .map_err(RenameGroupConversationError::Storage)?
         {
-            ChangeStoreOutcome::Changed { updated_at } => {
-                Ok(MutationOutcome::Changed { updated_at })
-            }
-            ChangeStoreOutcome::Unchanged => Ok(MutationOutcome::Unchanged),
+            ChangeStoreOutcome::Changed { updated_at } => Ok(Outcome::with_event(
+                MutationOutcome::Changed { updated_at },
+                DomainEvent::GroupRenamed {
+                    conversation_id: id,
+                    title,
+                    updated_at,
+                },
+            )),
+            ChangeStoreOutcome::Unchanged => Ok(Outcome::new(MutationOutcome::Unchanged)),
             ChangeStoreOutcome::NotAuthorized => {
                 Err(RenameGroupConversationError::InsufficientPermissions)
             }
