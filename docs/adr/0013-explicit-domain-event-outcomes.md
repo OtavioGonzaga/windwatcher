@@ -8,8 +8,13 @@
 Mutating library use cases return `Outcome<T>`, containing their ordinary result
 and typed `DomainEvent` facts created only after successful persistence. Events
 are library-owned, non-serialized in-process values. No-ops, semantic reuse and
-idempotency replays emit none.
+idempotency replays emit none. Storage adapters remain unaware of events.
 
-The server maps these facts to its separate `RealtimeEvent` contract through one
-reaction boundary. Reactions remain best effort. This introduces no event bus,
-event storage, outbox, queue, audit log, replay facility or migration.
+The server maps these facts to its separate serialized `RealtimeEvent` contract
+through one reaction boundary. Reactions remain best effort: a primary commit can
+succeed even if process exit or dispatch failure loses its reaction.
+
+This introduces no dispatcher in the engine, event bus, event storage, outbox,
+queue, audit log, integration-event API, replay facility or migration. A later
+queue or durable outbox must define its own selected-job representation rather
+than serialize `DomainEvent` by default.
