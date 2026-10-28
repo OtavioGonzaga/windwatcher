@@ -62,8 +62,13 @@ async fn run() -> Result<(), AppError> {
         } => {
             config::resolve_full(&raw, &paths)?;
             println!(
-                "Configuration valid.\nMode: {}\nStorage: SQLite\nQueue: {}",
+                "Configuration valid.\nMode: {}\nStorage: {}\nQueue: {}",
                 if cli.system { "system" } else { "user" },
+                match config::resolve_storage(&raw, &paths)? {
+                    config::ResolvedStorageProvider::Sqlite { .. } => "SQLite",
+                    config::ResolvedStorageProvider::Postgres(_) => "PostgreSQL",
+                    config::ResolvedStorageProvider::MySql(_) => "MySQL",
+                },
                 if raw.queue.is_some() {
                     config::resolve_queue(&raw, &paths)?.provider.backend_name()
                 } else {
@@ -199,16 +204,31 @@ async fn connect_storage(
     raw: &config::RawConfig,
     paths: &ResolvedPaths,
 ) -> Result<Storage, AppError> {
-    let (options, derived_path, create_if_missing) = config::resolve_sqlite(raw, paths)?;
-    if derived_path && create_if_missing {
-        std::fs::create_dir_all(&paths.data_dir).map_err(|source| AppError::DataDirectory {
-            path: paths.data_dir.clone(),
-            source,
-        })?;
-    }
-    let storage = Storage::connect(options)
-        .await
-        .map_err(|error| AppError::Storage(Box::new(error)))?;
+    let storage = match config::resolve_storage(raw, paths)? {
+        config::ResolvedStorageProvider::Sqlite {
+            options,
+            derived_path,
+            create_if_missing,
+        } => {
+            if derived_path && create_if_missing {
+                std::fs::create_dir_all(&paths.data_dir).map_err(|source| {
+                    AppError::DataDirectory {
+                        path: paths.data_dir.clone(),
+                        source,
+                    }
+                })?;
+            }
+            Storage::connect(options)
+                .await
+                .map_err(|error| AppError::Storage(Box::new(error)))?
+        }
+        provider @ config::ResolvedStorageProvider::Postgres(_)
+        | provider @ config::ResolvedStorageProvider::MySql(_) => {
+            Storage::connect_provider(provider)
+                .await
+                .map_err(AppError::Storage)?
+        }
+    };
     tracing::info!(backend = storage.backend_name(), "storage backend selected");
     Ok(storage)
 }

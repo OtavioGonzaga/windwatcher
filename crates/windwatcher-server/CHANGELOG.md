@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Add runtime primary-storage provider selection for SQLite, PostgreSQL, and
+  MySQL, including configuration and explicit migration/status support.
+
 All notable user-facing changes to this package are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),

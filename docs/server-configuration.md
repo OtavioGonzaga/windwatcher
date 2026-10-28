@@ -25,9 +25,15 @@ not block migration or trusted user provisioning.
 
 ## Storage, auth, and secrets
 
-SQLite is the default storage backend; `[storage.sqlite]` optionally sets `url`,
+`storage.provider` selects primary persistence independently of the queue and
+defaults to `sqlite`. SQLite's `[storage.sqlite]` block optionally sets `url`,
 `create_if_missing`, `max_connections`, and human-readable `busy_timeout`.
-Durations such as `5s`, `15m`, and `30d` are supported.
+Select `postgres` or `mysql` to use `[storage.postgres]` or `[storage.mysql]`;
+the selected network block requires a URL and accepts `max_connections` and
+`acquire_timeout` (for example, `5s`). Network URLs must target dedicated,
+pre-created databases. Keep credentials in secret management, not committed
+configuration. Migrations are explicit and apply only to the selected primary
+provider. Queue provider configuration remains separate; see [jobs](jobs.md).
 
 The durable queue is optional. When `[queue]` is configured, SQLite is currently
 the supported provider and the default file is `queue.db`, separate from

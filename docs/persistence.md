@@ -28,6 +28,27 @@ Official adapters may use different physical representations, but must preserve
 their atomic creation, uniqueness, refresh-token rotation, and revocation
 semantics. The ports remain independent of SQLx and of any async runtime.
 
+## Official SQL adapters
+
+The library provides SQLite, PostgreSQL, and MySQL implementations of all six
+ports: identity, sessions, conversations, messages, messaging queries, and
+atomic create commands. Enable `sqlite`, `postgres`, or `mysql` independently
+on the `windwatcher` crate; the official server enables all three. Selecting a
+primary storage provider is independent of queue provider selection.
+
+Connections never apply migrations implicitly. Each adapter embeds its own
+forward-only migration set and exposes `migrate`, `check_schema`, and
+`migration_status` operations. The server selects its primary adapter with
+`storage.provider` (`sqlite` by default, or `postgres` / `mysql`) and the
+explicit `windwatcher storage migrate` and `storage status` CLI commands apply
+to the selected database. PostgreSQL and MySQL URLs must target dedicated,
+pre-created databases. See [server configuration](server-configuration.md).
+
+The three adapters preserve the same application ports and shared contracts;
+physical representations and locking strategies remain adapter-specific.
+PostgreSQL uses native UUID and bytea values; MySQL uses binary UUID/hash
+columns. Both network adapters store timestamps as signed Unix microseconds.
+
 ## SQLite
 
 SQLite is the first official persistence adapter. Enable it with the `sqlite`
@@ -116,9 +137,8 @@ without adopting SQLite-specific physical assertions.
 
 ## Current limitations
 
-Only SQLite is implemented. There is no automatic startup migration or other
-database adapter. Configuration and explicit migration CLI commands belong to
-the server, not the reusable library.
+There is no automatic startup migration. Configuration and explicit migration
+CLI commands belong to the server, not the reusable library.
 
 ## Paginated message history
 

@@ -85,15 +85,12 @@ pub async fn migrate(storage: &Storage) -> Result<(), AppError> {
     let before = storage
         .migration_status()
         .await
-        .map_err(|error| AppError::MigrationStatus(Box::new(error)))?;
-    storage
-        .migrate()
-        .await
-        .map_err(|error| AppError::Migration(Box::new(error)))?;
+        .map_err(AppError::MigrationStatus)?;
+    storage.migrate().await.map_err(AppError::Migration)?;
     let after = storage
         .migration_status()
         .await
-        .map_err(|error| AppError::MigrationStatus(Box::new(error)))?;
+        .map_err(AppError::MigrationStatus)?;
     if before.pending() == 0 {
         println!("No pending migrations.");
     } else {
@@ -110,7 +107,7 @@ pub async fn migration_status(storage: &Storage) -> Result<(), AppError> {
     let status = storage
         .migration_status()
         .await
-        .map_err(|error| AppError::MigrationStatus(Box::new(error)))?;
+        .map_err(AppError::MigrationStatus)?;
     println!("Storage: {}", storage.backend_name());
     println!(
         "Current version: {}",
@@ -144,7 +141,7 @@ pub async fn create_user(
     let status = storage
         .migration_status()
         .await
-        .map_err(|error| AppError::MigrationStatus(Box::new(error)))?;
+        .map_err(AppError::MigrationStatus)?;
     if !status.is_current() {
         return Err(AppError::SchemaPending);
     }

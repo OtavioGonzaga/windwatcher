@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Add PostgreSQL and MySQL persistence adapters implementing the existing
+  identity, session, conversation, message, query, and create-command contracts.
+- Add independent `postgres` and `mysql` features and engine-specific migrations.
+
 All notable user-facing changes to this package are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
