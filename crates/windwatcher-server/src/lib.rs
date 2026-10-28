@@ -11,6 +11,7 @@ mod paths;
 mod queue;
 mod realtime;
 mod storage;
+mod worker;
 
 pub use config::http::{RawCors, RawHttp, RawRateLimit, RawRateLimitPolicy, ResolvedHttpConfig};
 pub use config::realtime::{RawRealtime, ResolvedRealtimeConfig};
@@ -61,8 +62,13 @@ async fn run() -> Result<(), AppError> {
         } => {
             config::resolve_full(&raw, &paths)?;
             println!(
-                "Configuration valid.\nMode: {}\nStorage: SQLite",
-                if cli.system { "system" } else { "user" }
+                "Configuration valid.\nMode: {}\nStorage: SQLite\nQueue: {}",
+                if cli.system { "system" } else { "user" },
+                if raw.queue.is_some() {
+                    "SQLite"
+                } else {
+                    "disabled"
+                }
             );
             Ok(())
         }
@@ -123,6 +129,11 @@ async fn run() -> Result<(), AppError> {
                 }
             }
             Ok(())
+        }
+        Command::Worker => {
+            let resolved = config::resolve_queue(&raw, &paths)?;
+            let queue = connect_queue(&raw, &paths).await?;
+            worker::run(queue, resolved).await
         }
         Command::User {
             command: cli::UserCommand::Create(args),

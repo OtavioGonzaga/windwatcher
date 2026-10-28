@@ -270,6 +270,32 @@ fn queue_migrations_are_separately_configured_and_targetable() {
 }
 
 #[test]
+fn worker_requires_queue_configuration_and_refuses_pending_schema() {
+    let directory = TempDir::new().unwrap();
+    let config = config(&directory);
+    command(&config)
+        .arg("worker")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("queue is not configured"));
+    let queue_config = format!(
+        "\n[queue]\n\n[queue.sqlite]\npath = {:?}\n",
+        directory.path().join("queue.db").display().to_string()
+    );
+    fs::write(
+        &config,
+        format!("{}{}", fs::read_to_string(&config).unwrap(), queue_config),
+    )
+    .unwrap();
+    command(&config)
+        .arg("worker")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("queue schema is not current"))
+        .stderr(predicate::str::contains("windwatcher migrate --queue"));
+}
+
+#[test]
 fn config_check_resolves_jwt_but_migrate_does_not() {
     let directory = TempDir::new().unwrap();
     let config = config(&directory);

@@ -26,6 +26,8 @@ pub struct Cli {
 pub enum Command {
     /// Apply pending database migrations.
     Migrate(MigrateArgs),
+    /// Run the standalone background worker.
+    Worker,
     /// Manage local users.
     User {
         #[command(subcommand)]

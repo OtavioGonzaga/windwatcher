@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Optional SQLite queue configuration and independently targeted storage/queue
   migration and migration-status commands.
+- Separate `windwatcher worker` process role with bounded execution slots,
+  renewable leases, retry backoff and graceful shutdown.
 
 ### Changed
 

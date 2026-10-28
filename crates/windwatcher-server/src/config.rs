@@ -96,6 +96,15 @@ pub struct RawQueueSqlite {
 
 #[derive(Clone, Debug)]
 pub struct ResolvedQueueConfig {
+    pub concurrency: usize,
+    pub lease_duration: Duration,
+    pub lease_renew_interval: Duration,
+    pub poll_interval: Duration,
+    pub retry_base_delay: Duration,
+    pub retry_max_delay: Duration,
+    pub completed_retention: Duration,
+    pub maintenance_interval: Duration,
+    pub shutdown_grace_period: Duration,
     pub options: SqliteQueueOptions,
     pub create_if_missing: bool,
     pub derived_path: bool,
@@ -453,6 +462,15 @@ pub fn resolve_queue(
         options = options.busy_timeout(timeout);
     }
     Ok(ResolvedQueueConfig {
+        concurrency: queue.concurrency,
+        lease_duration,
+        lease_renew_interval,
+        poll_interval,
+        retry_base_delay,
+        retry_max_delay,
+        completed_retention,
+        maintenance_interval,
+        shutdown_grace_period,
         options,
         create_if_missing,
         derived_path,
