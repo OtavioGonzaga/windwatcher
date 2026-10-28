@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Portable durable-job identifiers, validated job envelope and state types,
   enqueue policy/application operation, and the reusable `QueueStore` contract.
+- Independent `queue-sqlite` adapter with its own schema, migrations, lease and
+  job lifecycle operations, plus a shared portable queue contract test suite.
 
 ### Changed
 
