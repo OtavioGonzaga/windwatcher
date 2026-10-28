@@ -408,7 +408,17 @@ impl QueueStore for RedisQueue {
         let rows: Vec<Hash> = pipeline
             .query_async(&mut self.connection.clone())
             .await
-            .map_err(db)?;
+            .map_err(|error: redis::RedisError| {
+                if error.code() == Some("WRONGTYPE")
+                    || error.clone().into_server_errors().is_some_and(|errors| {
+                        errors.iter().any(|(_, error)| error.code() == "WRONGTYPE")
+                    })
+                {
+                    RedisQueueError::Corrupt("indexed job is not a hash")
+                } else {
+                    db(error)
+                }
+            })?;
         let mut jobs = Vec::with_capacity(rows.len());
         for ((row, id), member) in rows.iter().zip(ids).zip(members) {
             let job = read_job(row)?;

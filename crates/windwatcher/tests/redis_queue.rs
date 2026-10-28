@@ -157,11 +157,29 @@ async fn shared_contract_independent_clients_and_namespace_isolation() {
         .query_async(&mut conn)
         .await
         .unwrap();
-    assert!(
-        a.list(QueueListOptions::new(None, 100).unwrap())
+    for wrong_type in [false, true] {
+        if wrong_type {
+            let _: () = redis::cmd("SET")
+                .arg(format!("{prefix}:job:{}", corrupt.id()))
+                .arg("not a hash")
+                .query_async(&mut conn)
+                .await
+                .unwrap();
+        }
+        let error = a
+            .list(QueueListOptions::new(None, 100).unwrap())
             .await
-            .is_err()
-    );
+            .unwrap_err();
+        assert!(
+            matches!(
+                std::error::Error::source(&error)
+                    .unwrap()
+                    .downcast_ref::<RedisQueueError>(),
+                Some(RedisQueueError::Corrupt(_))
+            ),
+            "wrong_type={wrong_type}: {error:?}"
+        );
+    }
     cleanup(&url, &prefix).await;
     cleanup(&url, &other_prefix).await;
 }
@@ -252,19 +270,26 @@ async fn bounded_cleanup_walks_past_nonexhausted_leases_and_prunes_all_indexes()
         a.unwrap().completed_jobs_pruned() + b.unwrap().completed_jobs_pruned(),
         130
     );
-    let (_, keys): (u64, Vec<String>) = redis::cmd("SCAN")
-        .arg(0)
-        .arg("MATCH")
-        .arg(format!("{prefix}:*"))
-        .arg("COUNT")
-        .arg(1000)
-        .query_async(&mut conn)
-        .await
-        .unwrap();
-    assert!(
-        keys.is_empty(),
-        "completed pruning must leave neither hashes nor index members"
-    );
+    let mut cursor = 0_u64;
+    loop {
+        let (next, keys): (u64, Vec<String>) = redis::cmd("SCAN")
+            .arg(cursor)
+            .arg("MATCH")
+            .arg(format!("{prefix}:*"))
+            .arg("COUNT")
+            .arg(100)
+            .query_async(&mut conn)
+            .await
+            .unwrap();
+        assert!(
+            keys.is_empty(),
+            "completed pruning must leave neither hashes nor index members"
+        );
+        cursor = next;
+        if cursor == 0 {
+            break;
+        }
+    }
     for _ in 0..130 {
         EnqueueJob::new(&queue, JobPolicy::default())
             .execute(
