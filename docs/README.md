@@ -7,6 +7,7 @@
 - [Sessions and tokens](sessions.md): session lifecycle and token contracts.
 - [Realtime](realtime.md): session-bound WebSocket tickets, notifications, audiences,
   connection lifecycle and HTTP reconciliation.
+- [Domain events](domain-events.md): explicit committed application outcomes and reactions.
 - [HTTP API](http-api.md): v1 transport contracts, authentication, errors,
   messaging client journey, pagination/idempotency, OpenAPI/Swagger, CORS and
   peer-IP quotas (router only; no serving runtime yet).

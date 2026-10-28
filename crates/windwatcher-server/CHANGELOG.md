@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Realtime publication is driven by library `DomainEvent` outcomes; the WebSocket
+  wire contract is unchanged.
+
 - Conversation and membership notification metadata timestamps come from committed
   mutation outcomes, exactly matching persistence precision rather than handler clocks.
 

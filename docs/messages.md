@@ -1,5 +1,13 @@
 # Messages
 
+## Domain outcomes
+
+Send, edit, delete and read-state mutations return `Outcome<T>`. A successful
+send, changed edit, first deletion or advanced read watermark includes one typed
+`DomainEvent`; exact no-ops and idempotent command replays include none. Message
+events carry the committed transport-independent `MessageView`, while the server
+separately maps them to realtime frames. See [domain events](domain-events.md).
+
 ## Message model
 
 `Message` is an active text message or a structural deletion tombstone. It

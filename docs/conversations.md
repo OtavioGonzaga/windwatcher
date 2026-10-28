@@ -1,8 +1,9 @@
 # Conversations
 
-## Server realtime notifications
+## Domain outcomes and server realtime notifications
 
-The [realtime transport](realtime.md) publishes actual conversation/member mutations
+Conversation mutations return library `Outcome<T>` values with explicit committed
+`DomainEvent` facts. The [realtime transport](realtime.md) reacts to those facts
 after commit. Creation is a small actor-independent notification, not a full inbox
 projection. Initial participants receive one creation event; an existing Direct or
 idempotent replay produces none. Ownership transfer is one atomic event. Removal

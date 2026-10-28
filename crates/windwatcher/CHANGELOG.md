@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking:** mutating use cases now return `Outcome<T>` with explicit typed
+  `DomainEvent` facts; no-ops and idempotent replays emit no events.
+
 - **Breaking:** successful Group mutation/addition/leave outcomes now carry the
   exact committed conversation `updated_at`, preserving adapter timestamp precision
   without a later current-state lookup.
