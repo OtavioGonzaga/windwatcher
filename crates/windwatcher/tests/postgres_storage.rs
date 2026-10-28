@@ -1,7 +1,15 @@
 #![cfg(feature = "postgres")]
 
 use sqlx::{ConnectOptions, Connection};
-use windwatcher::{PostgresStorage, PostgresStorageOptions};
+use windwatcher::{
+    IdentityStore, PasswordHasher, PostgresStorage, PostgresStorageOptions, RefreshTokenProvider,
+    SessionStore,
+};
+
+#[path = "support/identity_store_contract.rs"]
+mod identity_contract;
+#[path = "support/session_store_contract.rs"]
+mod session_contract;
 
 async fn disposable_database() -> (String, String) {
     let base = std::env::var("WINDWATCHER_TEST_POSTGRES_URL")
@@ -42,6 +50,34 @@ async fn explicit_migration_lifecycle_and_physical_schema() {
         storage.migrate().await.unwrap();
         storage.migrate().await.unwrap();
         assert!(storage.check_schema().await.unwrap().is_current());
+        identity_contract::run(&storage).await;
+        let hasher = windwatcher::Argon2idPasswordHasher::default();
+        let hash = hasher.hash(&windwatcher::SecretPassword::new("integration password".to_owned()).unwrap()).await.unwrap();
+        let now = time::OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap();
+        let owner = windwatcher::User::new(windwatcher::UserId::new(), "owner_one".parse().unwrap(), now);
+        let other = windwatcher::User::new(windwatcher::UserId::new(), "owner_two".parse().unwrap(), now);
+        let mut disabled = windwatcher::User::new(windwatcher::UserId::new(), "owner_disabled".parse().unwrap(), now);
+        disabled.disable(now);
+        for user in [&owner, &other, &disabled] { storage.create_local_user(user, &hash).await.unwrap(); }
+        session_contract::run(&storage, owner.id(), other.id(), disabled.id(), windwatcher::UserId::new()).await;
+        let second_pool = PostgresStorage::connect(PostgresStorageOptions::new(&url)).await.unwrap();
+        let first_race = windwatcher::User::new(windwatcher::UserId::new(), "race_username".parse().unwrap(), now);
+        let second_race = windwatcher::User::new(windwatcher::UserId::new(), "race_username".parse().unwrap(), now);
+        let (left, right) = tokio::join!(storage.create_local_user(&first_race, &hash), second_pool.create_local_user(&second_race, &hash));
+        assert_eq!(usize::from(left.is_ok()) + usize::from(right.is_ok()), 1);
+        assert!(matches!(left, Err(windwatcher::IdentityStoreError::UsernameConflict)) || matches!(right, Err(windwatcher::IdentityStoreError::UsernameConflict)));
+        let provider = windwatcher::OsRefreshTokenProvider;
+        let old = provider.generate().unwrap();
+        let replacement_a = provider.generate().unwrap();
+        let replacement_b = provider.generate().unwrap();
+        let session = windwatcher::Session::new(windwatcher::SessionId::new(), owner.id(), now, now + time::Duration::days(1)).unwrap();
+        let old_hash = provider.hash(&old);
+        let replacement_a_hash = provider.hash(&replacement_a);
+        let replacement_b_hash = provider.hash(&replacement_b);
+        storage.create_session(&session, &old_hash).await.unwrap();
+        let rotate_at = now + time::Duration::seconds(1);
+        let (a, b) = tokio::join!(storage.rotate_refresh_token(session.id(), &old_hash, &replacement_a_hash, rotate_at), second_pool.rotate_refresh_token(session.id(), &old_hash, &replacement_b_hash, rotate_at));
+        assert_eq!(usize::from(a.unwrap() == windwatcher::RefreshRotationResult::Rotated) + usize::from(b.unwrap() == windwatcher::RefreshRotationResult::Rotated), 1);
         let pool = sqlx::PgPool::connect(&url).await.unwrap();
         let columns: Vec<(String, String)> = sqlx::query_as("SELECT table_name || '.' || column_name, data_type FROM information_schema.columns WHERE table_schema=current_schema()")
             .fetch_all(&pool).await.unwrap();
