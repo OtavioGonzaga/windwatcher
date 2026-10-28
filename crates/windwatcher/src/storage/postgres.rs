@@ -14,6 +14,7 @@ use uuid::Uuid;
 
 static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations/postgres");
 mod conversations;
+mod messages;
 
 /// Connection settings for a dedicated PostgreSQL primary-storage database.
 #[derive(Clone)]
