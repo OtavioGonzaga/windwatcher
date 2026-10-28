@@ -59,8 +59,8 @@ fn read_message(r: &sqlx::postgres::PgRow) -> Result<Message, MessageStoreError>
     )
     .map_err(|_| bad("incoherent persisted message"))
 }
-const VIEW: &str = "SELECT msg.id,msg.conversation_id,msg.sender_id,msg.content,msg.reply_to_message_id,msg.created_at,msg.edited_at,msg.deleted_at,sender.username AS sender_username,reply.sender_id AS reply_sender_id,reply_sender.username AS reply_sender_username,reply.content AS reply_content,reply.deleted_at AS reply_deleted_at FROM messages msg JOIN users sender ON sender.id=msg.sender_id LEFT JOIN messages reply ON reply.conversation_id=msg.conversation_id AND reply.id=msg.reply_to_message_id LEFT JOIN users reply_sender ON reply_sender.id=reply.sender_id";
-fn read_view(r: &sqlx::postgres::PgRow) -> Result<MessageView, MessageStoreError> {
+pub(super) const VIEW: &str = "SELECT msg.id,msg.conversation_id,msg.sender_id,msg.content,msg.reply_to_message_id,msg.created_at,msg.edited_at,msg.deleted_at,sender.username AS sender_username,reply.sender_id AS reply_sender_id,reply_sender.username AS reply_sender_username,reply.content AS reply_content,reply.deleted_at AS reply_deleted_at FROM messages msg JOIN users sender ON sender.id=msg.sender_id LEFT JOIN messages reply ON reply.conversation_id=msg.conversation_id AND reply.id=msg.reply_to_message_id LEFT JOIN users reply_sender ON reply_sender.id=reply.sender_id";
+pub(super) fn read_view(r: &sqlx::postgres::PgRow) -> Result<MessageView, MessageStoreError> {
     let message = read_message(r)?;
     let username = |col: &str| -> Result<crate::Username, MessageStoreError> {
         r.try_get::<String, _>(col)

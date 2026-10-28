@@ -34,7 +34,9 @@ fn normalize(t: OffsetDateTime) -> Result<OffsetDateTime, ConversationStoreError
     let n = micros(t).map_err(bad)?;
     date(n).map_err(bad)
 }
-fn read_conversation(r: &sqlx::postgres::PgRow) -> Result<Conversation, ConversationStoreError> {
+pub(super) fn read_conversation(
+    r: &sqlx::postgres::PgRow,
+) -> Result<Conversation, ConversationStoreError> {
     let id = ConversationId::try_from(r.try_get::<Uuid, _>("id").map_err(db)?)
         .map_err(|_| bad("invalid persisted conversation ID"))?;
     let kind = match r.try_get::<String, _>("kind").map_err(db)?.as_str() {
@@ -57,7 +59,9 @@ fn read_conversation(r: &sqlx::postgres::PgRow) -> Result<Conversation, Conversa
     Conversation::restore(id, kind, title, created, updated)
         .map_err(|_| bad("incoherent persisted conversation"))
 }
-fn read_member(r: &sqlx::postgres::PgRow) -> Result<ConversationMember, ConversationStoreError> {
+pub(super) fn read_member(
+    r: &sqlx::postgres::PgRow,
+) -> Result<ConversationMember, ConversationStoreError> {
     let cid = ConversationId::try_from(r.try_get::<Uuid, _>("conversation_id").map_err(db)?)
         .map_err(|_| bad("invalid conversation ID"))?;
     let uid = UserId::try_from(r.try_get::<Uuid, _>("user_id").map_err(db)?)
