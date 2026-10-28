@@ -10,6 +10,50 @@ pub async fn run<S: QueueStore>(store: &S) {
     exhaustion_and_manual_retry(store).await;
     temporal_precision(store).await;
     listing_and_maintenance(store).await;
+    pre_epoch_and_numeric_payload(store).await;
+}
+
+async fn pre_epoch_and_numeric_payload<S: QueueStore>(store: &S) {
+    let raw = OffsetDateTime::from_unix_timestamp_nanos(-1).unwrap();
+    let normalized = OffsetDateTime::from_unix_timestamp_nanos(-1000).unwrap();
+    let payload = JobPayload::try_from(serde_json::json!({
+        "unsigned": u64::MAX, "signed": i64::MIN,
+        "fraction": 0.10000000000000002_f64, "nested": [null,true,{"text":"雪"}]
+    }))
+    .unwrap();
+    let job = EnqueueJob::new(store, JobPolicy::default())
+        .execute(
+            JobKind::new("contract.roundtrip").unwrap(),
+            u16::MAX,
+            payload.clone(),
+            EnqueueOptions::new().max_attempts(u32::MAX),
+            raw,
+        )
+        .await
+        .unwrap();
+    assert_eq!(job.created_at(), normalized);
+    assert_eq!(job.available_at(), normalized);
+    assert_eq!(listed(store, job.id()).await, job);
+    let claimed = store
+        .claim_next(
+            WorkerId::new(),
+            LeaseId::new(),
+            Duration::from_nanos(1999),
+            raw,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(claimed.job().payload(), &payload);
+    assert_eq!(claimed.lease().expires_at(), OffsetDateTime::UNIX_EPOCH);
+    store
+        .complete(job.id(), claimed.lease().id(), raw)
+        .await
+        .unwrap();
+    let restored = listed(store, job.id()).await;
+    assert_eq!(restored.completed_at(), Some(normalized));
+    assert_eq!(restored.payload_version(), u16::MAX);
+    assert_eq!(restored.max_attempts(), u32::MAX);
 }
 
 async fn enqueue_claim_retry<S: QueueStore>(store: &S) {
@@ -538,6 +582,34 @@ async fn temporal_precision<S: QueueStore>(store: &S) {
         listed(store, job.id()).await.completed_at(),
         Some(at(55) + TimeDuration::microseconds(1))
     );
+    let completed = at(55) + TimeDuration::microseconds(1);
+    store
+        .maintain(
+            completed + TimeDuration::nanoseconds(1001),
+            Duration::from_nanos(1999),
+        )
+        .await
+        .unwrap();
+    assert!(
+        !store
+            .list(QueueListOptions::new(None, 100).unwrap())
+            .await
+            .unwrap()
+            .iter()
+            .any(|row| row.id() == job.id()),
+        "retention floors both the clock and duration to microseconds"
+    );
+    let raw = at(56) + TimeDuration::nanoseconds(999);
+    let failed = enqueue(store, raw, EnqueueOptions::new()).await;
+    let claimed = claim(store, raw).await;
+    assert_eq!(claimed.job().id(), failed.id());
+    let failure =
+        JobFailure::new(JobFailureCode::new("test.precision").unwrap(), "permanent").unwrap();
+    store
+        .fail(failed.id(), claimed.lease().id(), &failure, raw)
+        .await
+        .unwrap();
+    assert_eq!(listed(store, failed.id()).await.failed_at(), Some(at(56)));
 }
 
 async fn listing_and_maintenance<S: QueueStore>(store: &S) {

@@ -79,10 +79,32 @@ async fn shared_contract_and_independent_pools() {
             .unwrap(),
         LeaseMutationOutcome::Applied
     );
+    let checksum: Vec<u8> =
+        sqlx::query_scalar("SELECT checksum FROM _sqlx_migrations WHERE version=1")
+            .fetch_one(&mut conn)
+            .await
+            .unwrap();
+    conn.execute("UPDATE _sqlx_migrations SET success=false")
+        .await
+        .unwrap();
+    assert!(a.migration_status().await.is_err());
+    conn.execute("UPDATE _sqlx_migrations SET success=true,version=999")
+        .await
+        .unwrap();
+    assert!(a.migration_status().await.is_err());
+    conn.execute("UPDATE _sqlx_migrations SET version=1")
+        .await
+        .unwrap();
     conn.execute("UPDATE _sqlx_migrations SET checksum=UNHEX('00')")
         .await
         .unwrap();
     assert!(a.migration_status().await.is_err());
+    sqlx::query("UPDATE _sqlx_migrations SET checksum=?")
+        .bind(checksum)
+        .execute(&mut conn)
+        .await
+        .unwrap();
+    assert!(a.migration_status().await.unwrap().is_current());
     drop(conn);
     drop(a);
     drop(b);

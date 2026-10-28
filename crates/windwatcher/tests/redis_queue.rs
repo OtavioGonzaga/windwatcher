@@ -178,3 +178,132 @@ fn options_and_errors_redact_credentials_and_validate_prefix() {
     let error = RedisQueueError::Database(Box::new(std::io::Error::other(secret)));
     assert!(!format!("{error:?} {error}").contains(secret));
 }
+
+#[tokio::test]
+#[ignore = "requires disposable Redis; set WINDWATCHER_TEST_REDIS_URL"]
+async fn bounded_cleanup_walks_past_nonexhausted_leases_and_prunes_all_indexes() {
+    let url = std::env::var("WINDWATCHER_TEST_REDIS_URL").expect("set WINDWATCHER_TEST_REDIS_URL");
+    let prefix = format!("windwatcher:test:{}", uuid::Uuid::now_v7());
+    let queue = RedisQueue::connect(RedisQueueOptions::new(&url).key_prefix(&prefix))
+        .await
+        .unwrap();
+    let now = OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap();
+    // The first page has only retryable leases; maintenance must still reach later exhausted leases.
+    for i in 0..140 {
+        EnqueueJob::new(&queue, JobPolicy::default())
+            .execute(
+                JobKind::new("test.batch").unwrap(),
+                1,
+                JobPayload::new(Default::default()),
+                EnqueueOptions::new().max_attempts(if i < 70 { 2 } else { 1 }),
+                now,
+            )
+            .await
+            .unwrap();
+        queue
+            .claim_next(WorkerId::new(), LeaseId::new(), Duration::from_secs(1), now)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+    let report = queue
+        .maintain(now + time::Duration::seconds(1), Duration::from_secs(1))
+        .await
+        .unwrap();
+    assert_eq!(report.exhausted_jobs_failed(), 70);
+    let mut conn = redis::Client::open(url.as_str())
+        .unwrap()
+        .get_multiplexed_async_connection()
+        .await
+        .unwrap();
+    let count: u64 = redis::cmd("ZCARD")
+        .arg(format!("{prefix}:index:status:failed"))
+        .query_async(&mut conn)
+        .await
+        .unwrap();
+    assert_eq!(count, 70);
+    cleanup(&url, &prefix).await;
+    for _ in 0..130 {
+        let job = EnqueueJob::new(&queue, JobPolicy::default())
+            .execute(
+                JobKind::new("test.prune").unwrap(),
+                1,
+                JobPayload::new(Default::default()),
+                EnqueueOptions::new(),
+                now,
+            )
+            .await
+            .unwrap();
+        let claim = queue
+            .claim_next(WorkerId::new(), LeaseId::new(), Duration::from_secs(1), now)
+            .await
+            .unwrap()
+            .unwrap();
+        queue
+            .complete(job.id(), claim.lease().id(), now)
+            .await
+            .unwrap();
+    }
+    let (a, b) = tokio::join!(
+        queue.maintain(now + time::Duration::seconds(2), Duration::from_secs(1)),
+        queue.maintain(now + time::Duration::seconds(2), Duration::from_secs(1))
+    );
+    assert_eq!(
+        a.unwrap().completed_jobs_pruned() + b.unwrap().completed_jobs_pruned(),
+        130
+    );
+    let (_, keys): (u64, Vec<String>) = redis::cmd("SCAN")
+        .arg(0)
+        .arg("MATCH")
+        .arg(format!("{prefix}:*"))
+        .arg("COUNT")
+        .arg(1000)
+        .query_async(&mut conn)
+        .await
+        .unwrap();
+    assert!(
+        keys.is_empty(),
+        "completed pruning must leave neither hashes nor index members"
+    );
+    for _ in 0..130 {
+        EnqueueJob::new(&queue, JobPolicy::default())
+            .execute(
+                JobKind::new("test.final").unwrap(),
+                1,
+                JobPayload::new(Default::default()),
+                EnqueueOptions::new().max_attempts(1),
+                now,
+            )
+            .await
+            .unwrap();
+        queue
+            .claim_next(WorkerId::new(), LeaseId::new(), Duration::from_secs(1), now)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+    for _ in 0..3 {
+        assert!(
+            queue
+                .claim_next(
+                    WorkerId::new(),
+                    LeaseId::new(),
+                    Duration::from_secs(1),
+                    now + time::Duration::seconds(1)
+                )
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+    let count: u64 = redis::cmd("ZCARD")
+        .arg(format!("{prefix}:index:status:failed"))
+        .query_async(&mut conn)
+        .await
+        .unwrap();
+    assert_eq!(
+        count, 130,
+        "bounded claim cleanup eventually finalizes every abandoned last attempt without maintenance"
+    );
+    cleanup(&url, &prefix).await;
+}
