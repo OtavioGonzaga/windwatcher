@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   migration and migration-status commands.
 - Separate `windwatcher worker` process role with bounded execution slots,
   renewable leases, retry backoff and graceful shutdown.
+- `jobs list` inspection and operator retry for failed jobs.
 
 ### Changed
 

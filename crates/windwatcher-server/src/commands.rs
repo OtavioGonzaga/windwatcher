@@ -5,14 +5,84 @@ use std::{
 };
 
 use time::OffsetDateTime;
-use windwatcher::{Argon2idPasswordHasher, CreateLocalUser, CreateLocalUserError, SecretPassword};
+use windwatcher::{
+    Argon2idPasswordHasher, CreateLocalUser, CreateLocalUserError, JobId, JobStatus,
+    QueueListOptions, QueueStore, RetryFailedOutcome, SecretPassword,
+};
 use zeroize::Zeroize;
 
 use crate::{
     cli::{CreateUserArgs, SensitiveString},
     error::AppError,
+    queue::ConfiguredQueue,
     storage::Storage,
 };
+
+pub async fn jobs_list(
+    queue: &ConfiguredQueue,
+    status: Option<JobStatus>,
+    limit: u32,
+) -> Result<(), AppError> {
+    if !(1..=100).contains(&limit) {
+        return Err(AppError::Config(
+            "jobs list --limit must be between 1 and 100".into(),
+        ));
+    }
+    let jobs = queue
+        .list(QueueListOptions::new(status, limit))
+        .await
+        .map_err(|e| AppError::QueueOperation(Box::new(e)))?;
+    println!(
+        "ID\tKIND\tVERSION\tSTATUS\tATTEMPTS\tMAX\tAVAILABLE\tCREATED\tLEASE EXPIRES\tERROR CODE"
+    );
+    for job in jobs {
+        println!(
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            job.id(),
+            job.kind(),
+            job.payload_version(),
+            status_name(job.status()),
+            job.attempts(),
+            job.max_attempts(),
+            job.available_at(),
+            job.created_at(),
+            job.lease()
+                .map(|lease| lease.expires_at().to_string())
+                .unwrap_or_default(),
+            job.last_failure()
+                .map(|failure| failure.code().as_str())
+                .unwrap_or("")
+        );
+    }
+    Ok(())
+}
+
+fn status_name(status: JobStatus) -> &'static str {
+    match status {
+        JobStatus::Pending => "pending",
+        JobStatus::Leased => "leased",
+        JobStatus::Completed => "completed",
+        JobStatus::Failed => "failed",
+    }
+}
+
+pub async fn jobs_retry(queue: &ConfiguredQueue, raw_id: &str) -> Result<(), AppError> {
+    let id = raw_id
+        .parse::<JobId>()
+        .map_err(|_| AppError::Config("invalid job ID; expected a UUIDv7".into()))?;
+    match queue
+        .retry_failed(id, OffsetDateTime::now_utc())
+        .await
+        .map_err(|e| AppError::QueueOperation(Box::new(e)))?
+    {
+        RetryFailedOutcome::Retried => println!("Job {id} retried."),
+        RetryFailedOutcome::NotFound => println!("Job {id} was not found."),
+        RetryFailedOutcome::NotFailed => {
+            println!("Job {id} is not failed; only failed jobs can be retried.")
+        }
+    }
+    Ok(())
+}
 
 pub async fn migrate(storage: &Storage) -> Result<(), AppError> {
     let before = storage

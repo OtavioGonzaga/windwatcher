@@ -18,7 +18,7 @@ pub use config::realtime::{RawRealtime, ResolvedRealtimeConfig};
 pub use password::TokioPasswordHasher;
 
 use clap::Parser;
-use cli::{Cli, Command, MigrateCommand};
+use cli::{Cli, Command, JobStatusArg, JobsCommand, MigrateCommand};
 use error::AppError;
 use paths::{ResolvedPaths, RuntimeMode};
 pub use storage::Storage;
@@ -134,6 +134,28 @@ async fn run() -> Result<(), AppError> {
             let resolved = config::resolve_queue(&raw, &paths)?;
             let queue = connect_queue(&raw, &paths).await?;
             worker::run(queue, resolved).await
+        }
+        Command::Jobs { command } => {
+            let queue = connect_queue(&raw, &paths).await?;
+            let status = queue
+                .migration_status()
+                .await
+                .map_err(|e| AppError::MigrationStatus(Box::new(e)))?;
+            if !status.is_current() {
+                return Err(AppError::QueueSchemaPending);
+            }
+            match command {
+                JobsCommand::List { status, limit } => {
+                    let status = status.map(|value| match value {
+                        JobStatusArg::Pending => windwatcher::JobStatus::Pending,
+                        JobStatusArg::Leased => windwatcher::JobStatus::Leased,
+                        JobStatusArg::Completed => windwatcher::JobStatus::Completed,
+                        JobStatusArg::Failed => windwatcher::JobStatus::Failed,
+                    });
+                    commands::jobs_list(&queue, status, limit).await
+                }
+                JobsCommand::Retry { job_id } => commands::jobs_retry(&queue, &job_id).await,
+            }
         }
         Command::User {
             command: cli::UserCommand::Create(args),

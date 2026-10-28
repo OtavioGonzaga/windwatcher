@@ -295,6 +295,119 @@ fn worker_requires_queue_configuration_and_refuses_pending_schema() {
         .stderr(predicate::str::contains("windwatcher migrate --queue"));
 }
 
+#[tokio::test]
+async fn jobs_list_hides_payload_and_retry_only_resets_failed_jobs() {
+    use std::time::Duration;
+    use time::OffsetDateTime;
+    use windwatcher::{
+        EnqueueJob, EnqueueOptions, JobFailure, JobFailureCode, JobId, JobKind, JobPayload,
+        JobPolicy, LeaseId, QueueStore, SqliteQueue, SqliteQueueOptions, WorkerId,
+    };
+
+    let directory = TempDir::new().unwrap();
+    let storage_path = directory.path().join("windwatcher.db");
+    let queue_path = directory.path().join("queue.db");
+    let config = directory.path().join("config.toml");
+    fs::write(&config, format!(
+        "[storage.sqlite]\nurl = {:?}\n\n[queue]\n\n[queue.sqlite]\npath = {:?}\n\n[logging]\nfilter = \"warn\"\nformat = \"compact\"\n",
+        storage_path.display().to_string(), queue_path.display().to_string()
+    )).unwrap();
+
+    let failed_id;
+    let active_id;
+    {
+        let queue = SqliteQueue::connect(SqliteQueueOptions::new(format!(
+            "sqlite://{}",
+            queue_path.display()
+        )))
+        .await
+        .unwrap();
+        queue.migrate().await.unwrap();
+        let now = OffsetDateTime::now_utc();
+        let enqueuer = EnqueueJob::new(&queue, JobPolicy::default());
+        let enqueue = |payload| {
+            enqueuer.execute(
+                JobKind::new("cli.test").unwrap(),
+                1,
+                payload,
+                EnqueueOptions::new(),
+                now,
+            )
+        };
+        let failed = enqueue(
+            JobPayload::try_from(serde_json::json!({"secret_payload":"must-not-print"})).unwrap(),
+        )
+        .await
+        .unwrap();
+        let active = enqueue(JobPayload::try_from(serde_json::json!({})).unwrap())
+            .await
+            .unwrap();
+        failed_id = failed.id();
+        active_id = active.id();
+        let failed_claim = queue
+            .claim_next(
+                WorkerId::new(),
+                LeaseId::new(),
+                Duration::from_secs(60),
+                now,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        queue
+            .fail(
+                failed.id(),
+                failed_claim.lease().id(),
+                &JobFailure::new(JobFailureCode::new("cli.failed").unwrap(), "safe").unwrap(),
+                now,
+            )
+            .await
+            .unwrap();
+        queue
+            .claim_next(
+                WorkerId::new(),
+                LeaseId::new(),
+                Duration::from_secs(60),
+                now,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+    }
+
+    command(&config)
+        .args(["jobs", "list", "--status", "failed"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(failed_id.to_string()))
+        .stdout(predicate::str::contains("must-not-print").not());
+    command(&config)
+        .args(["jobs", "list"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(failed_id.to_string()))
+        .stdout(predicate::str::contains(active_id.to_string()));
+    command(&config)
+        .args(["jobs", "list", "--limit", "101"])
+        .assert()
+        .failure();
+    command(&config)
+        .args(["jobs", "retry", &failed_id.to_string()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("retried"));
+    command(&config)
+        .args(["jobs", "retry", &active_id.to_string()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("not failed"));
+    command(&config)
+        .args(["jobs", "retry", &JobId::new().to_string()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("not found"));
+}
+
 #[test]
 fn config_check_resolves_jwt_but_migrate_does_not() {
     let directory = TempDir::new().unwrap();

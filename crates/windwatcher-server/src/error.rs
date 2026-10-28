@@ -22,6 +22,8 @@ pub enum AppError {
     SchemaPending,
     #[error("queue schema is not current")]
     QueueSchemaPending,
+    #[error("queue operation failed")]
+    QueueOperation(#[source] Box<dyn Error + Send + Sync>),
     #[error("username {username:?} is already taken")]
     UsernameTaken { username: String },
     #[error("password input error: {0}")]
