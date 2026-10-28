@@ -73,6 +73,93 @@ async fn send(f: &Fixture, reply: Option<MessageId>) -> MessageView {
 }
 
 #[tokio::test]
+async fn messaging_outcomes_emit_only_committed_domain_events() {
+    let f = fixture().await;
+    let policy = MessagePolicy::default();
+    let sent = SendMessage::new(&f.store, &policy)
+        .execute(f.owner, f.conversation, "event message", None, now())
+        .await
+        .unwrap();
+    let sent_message = sent.value().clone();
+    assert_eq!(
+        sent.events(),
+        [DomainEvent::MessageSent {
+            message: sent_message.clone()
+        }]
+    );
+
+    let edited = EditMessage::new(&f.store, &policy)
+        .execute(f.owner, sent_message.id(), "edited", now())
+        .await
+        .unwrap();
+    let EditMessageOutcome::Changed(edited_message) = edited.value() else {
+        panic!("expected changed edit");
+    };
+    assert_eq!(
+        edited.events(),
+        [DomainEvent::MessageEdited {
+            message: edited_message.clone()
+        }]
+    );
+    let unchanged = EditMessage::new(&f.store, &policy)
+        .execute(f.owner, sent_message.id(), "edited", now())
+        .await
+        .unwrap();
+    assert!(unchanged.events().is_empty());
+
+    let deleted = DeleteMessage::new(&f.store)
+        .execute(f.owner, sent_message.id(), now())
+        .await
+        .unwrap();
+    let DeleteMessageOutcome::Deleted(tombstone) = deleted.value() else {
+        panic!("expected deletion");
+    };
+    assert_eq!(
+        deleted.events(),
+        [DomainEvent::MessageDeleted {
+            message: tombstone.clone()
+        }]
+    );
+    assert!(
+        DeleteMessage::new(&f.store)
+            .execute(f.owner, sent_message.id(), now())
+            .await
+            .unwrap()
+            .events()
+            .is_empty()
+    );
+
+    let readable = SendMessage::new(&f.store, &policy)
+        .execute(f.owner, f.conversation, "readable", None, now())
+        .await
+        .unwrap()
+        .into_value();
+    let read = MarkConversationReadThrough::new(&f.store)
+        .execute(f.peer, f.conversation, readable.id())
+        .await
+        .unwrap();
+    let MarkReadOutcome::Changed(state) = read.value() else {
+        panic!("expected read-state advancement");
+    };
+    assert_eq!(
+        read.events(),
+        [DomainEvent::ConversationReadStateAdvanced {
+            user_id: f.peer,
+            conversation_id: f.conversation,
+            state: *state,
+        }]
+    );
+    assert!(
+        MarkConversationReadThrough::new(&f.store)
+            .execute(f.peer, f.conversation, readable.id())
+            .await
+            .unwrap()
+            .events()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
 async fn message_views_enrich_current_shallow_replies_and_disabled_senders() {
     let f = fixture().await;
     let original = send(&f, None).await;

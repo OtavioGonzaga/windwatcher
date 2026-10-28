@@ -7,12 +7,12 @@ use tempfile::TempDir;
 use time::{Duration, OffsetDateTime};
 use windwatcher::{
     AddGroupMember, ConversationStore, ConversationStoreError, CreateGroupConversation,
-    GetConversation, GroupRole, IdentityStore, IdentityStoreError, LeaveGroupConversation,
-    LeaveGroupOutcome, MutationOutcome, OsRefreshTokenProvider, PasswordHash,
-    RefreshRotationResult, RefreshToken, RefreshTokenProvider, RenameGroupConversation, Session,
-    SessionId, SessionStore, SetGroupMemberRole, SqliteStorage, SqliteStorageError,
-    SqliteStorageOptions, StartDirectConversation, StartDirectConversationOutcome,
-    TransferGroupOwnership, User, UserId,
+    DomainEvent, GetConversation, GroupRole, IdentityStore, IdentityStoreError,
+    LeaveGroupConversation, LeaveGroupOutcome, MutationOutcome, OsRefreshTokenProvider,
+    PasswordHash, RefreshRotationResult, RefreshToken, RefreshTokenProvider, RemoveGroupMember,
+    RenameGroupConversation, Session, SessionId, SessionStore, SetGroupMemberRole, SqliteStorage,
+    SqliteStorageError, SqliteStorageOptions, StartDirectConversation,
+    StartDirectConversationOutcome, TransferGroupOwnership, User, UserId,
 };
 
 mod support;
@@ -55,6 +55,176 @@ async fn persisted_user(storage: &SqliteStorage, name: &str) -> User {
         .await
         .unwrap();
     user
+}
+
+#[tokio::test]
+async fn conversation_outcomes_emit_only_meaningful_domain_events() {
+    let (_directory, storage) = store().await;
+    let owner = persisted_user(&storage, "event_owner").await;
+    let member = persisted_user(&storage, "event_member").await;
+    let added = persisted_user(&storage, "event_added").await;
+    let now = timestamp(1_700_001_000);
+
+    let direct = StartDirectConversation::new(&storage)
+        .execute(owner.id(), member.id(), now)
+        .await
+        .unwrap();
+    assert!(matches!(
+        direct.events(),
+        [DomainEvent::ConversationCreated {
+            kind: windwatcher::ConversationKind::Direct,
+            ..
+        }]
+    ));
+    assert!(
+        StartDirectConversation::new(&storage)
+            .execute(owner.id(), member.id(), now + Duration::seconds(1))
+            .await
+            .unwrap()
+            .events()
+            .is_empty()
+    );
+
+    let group = CreateGroupConversation::new(&storage)
+        .execute(owner.id(), "events", &[member.id()], now)
+        .await
+        .unwrap();
+    let conversation = group.value().id();
+    assert_eq!(
+        group.events(),
+        [DomainEvent::ConversationCreated {
+            conversation_id: conversation,
+            kind: windwatcher::ConversationKind::Group,
+            occurred_at: now,
+        }]
+    );
+
+    let renamed = RenameGroupConversation::new(&storage)
+        .execute(
+            owner.id(),
+            conversation,
+            "renamed",
+            now + Duration::seconds(1),
+        )
+        .await
+        .unwrap();
+    assert!(
+        matches!(renamed.events(), [DomainEvent::GroupRenamed { conversation_id, .. }] if *conversation_id == conversation)
+    );
+    assert!(
+        RenameGroupConversation::new(&storage)
+            .execute(
+                owner.id(),
+                conversation,
+                "renamed",
+                now + Duration::seconds(2)
+            )
+            .await
+            .unwrap()
+            .events()
+            .is_empty()
+    );
+
+    let joined = AddGroupMember::new(&storage)
+        .execute(
+            owner.id(),
+            conversation,
+            added.id(),
+            now + Duration::seconds(3),
+        )
+        .await
+        .unwrap();
+    assert!(
+        matches!(joined.events(), [DomainEvent::GroupMemberAdded { user_id, .. }] if *user_id == added.id())
+    );
+    assert!(
+        AddGroupMember::new(&storage)
+            .execute(
+                owner.id(),
+                conversation,
+                added.id(),
+                now + Duration::seconds(4)
+            )
+            .await
+            .unwrap()
+            .events()
+            .is_empty()
+    );
+
+    let role = SetGroupMemberRole::new(&storage)
+        .execute(
+            owner.id(),
+            conversation,
+            added.id(),
+            GroupRole::Admin,
+            now + Duration::seconds(5),
+        )
+        .await
+        .unwrap();
+    assert!(
+        matches!(role.events(), [DomainEvent::GroupMemberRoleChanged { user_id, role: GroupRole::Admin, .. }] if *user_id == added.id())
+    );
+    assert!(
+        SetGroupMemberRole::new(&storage)
+            .execute(
+                owner.id(),
+                conversation,
+                added.id(),
+                GroupRole::Admin,
+                now + Duration::seconds(6)
+            )
+            .await
+            .unwrap()
+            .events()
+            .is_empty()
+    );
+
+    let removed = RemoveGroupMember::new(&storage)
+        .execute(
+            owner.id(),
+            conversation,
+            added.id(),
+            now + Duration::seconds(7),
+        )
+        .await
+        .unwrap();
+    assert!(
+        matches!(removed.events(), [DomainEvent::GroupMemberRemoved { user_id, .. }] if *user_id == added.id())
+    );
+
+    let transferred = TransferGroupOwnership::new(&storage)
+        .execute(
+            owner.id(),
+            conversation,
+            member.id(),
+            now + Duration::seconds(8),
+        )
+        .await
+        .unwrap();
+    assert!(
+        matches!(transferred.events(), [DomainEvent::GroupOwnershipTransferred { previous_owner_id, new_owner_id, .. }] if *previous_owner_id == owner.id() && *new_owner_id == member.id())
+    );
+
+    let left = LeaveGroupConversation::new(&storage)
+        .execute(owner.id(), conversation, now + Duration::seconds(9))
+        .await
+        .unwrap();
+    assert!(
+        matches!(left.events(), [DomainEvent::GroupMemberRemoved { user_id, .. }] if *user_id == owner.id())
+    );
+
+    let owner_only = CreateGroupConversation::new(&storage)
+        .execute(member.id(), "owner only", &[], now + Duration::seconds(10))
+        .await
+        .unwrap()
+        .into_value();
+    let deleted = LeaveGroupConversation::new(&storage)
+        .execute(member.id(), owner_only.id(), now + Duration::seconds(11))
+        .await
+        .unwrap();
+    assert!(
+        matches!(deleted.events(), [DomainEvent::GroupDeleted { conversation_id, former_owner_id, .. }] if *conversation_id == owner_only.id() && *former_owner_id == member.id())
+    );
 }
 
 #[tokio::test]

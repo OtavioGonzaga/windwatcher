@@ -19,6 +19,9 @@ pub async fn run<S: CreateCommandStore + ConversationStore + MessageStore>(
         .await
         .unwrap();
     assert_eq!(first.value().disposition, CreateDisposition::Created);
+    assert!(
+        matches!(first.events(), [DomainEvent::ConversationCreated { conversation_id, kind: ConversationKind::Group, occurred_at }] if *conversation_id == first.value().value && *occurred_at == now)
+    );
     let replay = create
         .execute(
             actor,
@@ -33,6 +36,7 @@ pub async fn run<S: CreateCommandStore + ConversationStore + MessageStore>(
         .unwrap();
     assert_eq!(first.value().value, replay.value().value);
     assert_eq!(replay.value().disposition, CreateDisposition::Replayed);
+    assert!(replay.events().is_empty());
     assert!(matches!(
         create
             .execute(
@@ -68,6 +72,9 @@ pub async fn run<S: CreateCommandStore + ConversationStore + MessageStore>(
         .await
         .unwrap();
     assert_eq!(sent.value().disposition, CreateDisposition::Created);
+    assert!(
+        matches!(sent.events(), [DomainEvent::MessageSent { message }] if message == &sent.value().value)
+    );
     let again = send
         .execute(
             actor,
@@ -81,6 +88,7 @@ pub async fn run<S: CreateCommandStore + ConversationStore + MessageStore>(
         .unwrap();
     assert_eq!(sent.value().value, again.value().value);
     assert_eq!(again.value().disposition, CreateDisposition::Replayed);
+    assert!(again.events().is_empty());
     assert!(matches!(
         send.execute(
             actor,
@@ -248,6 +256,7 @@ pub async fn run<S: CreateCommandStore + ConversationStore + MessageStore>(
         .unwrap();
     assert_eq!(direct.value().value, existing.value().value);
     assert_eq!(existing.value().disposition, CreateDisposition::Existing);
+    assert!(existing.events().is_empty());
     assert_eq!(
         create
             .execute(actor, request(), Some(&direct_key), now)
