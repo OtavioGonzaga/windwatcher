@@ -12,6 +12,8 @@ mod conversation_contract;
 mod identity_contract;
 #[path = "support/message_store_contract.rs"]
 mod message_contract;
+#[path = "support/query_store_contract.rs"]
+mod query_contract;
 #[path = "support/session_store_contract.rs"]
 mod session_contract;
 
@@ -65,6 +67,11 @@ async fn explicit_migration_lifecycle_and_physical_schema() {
         for user in [&owner, &other, &disabled, &admin, &member, &outsider] { storage.create_local_user(user, &hash).await.unwrap(); }
         conversation_contract::run(&storage, owner.id(), admin.id(), member.id(), outsider.id()).await;
         message_contract::run(&storage, owner.id(), admin.id(), member.id(), outsider.id()).await;
+        let query_owner = windwatcher::User::new(windwatcher::UserId::new(), "query_owner".parse().unwrap(), now);
+        let query_peer = windwatcher::User::new(windwatcher::UserId::new(), "query_peer".parse().unwrap(), now);
+        let query_outsider = windwatcher::User::new(windwatcher::UserId::new(), "query_outsider".parse().unwrap(), now);
+        for user in [&query_owner, &query_peer, &query_outsider] { storage.create_local_user(user, &hash).await.unwrap(); }
+        query_contract::run(&storage, query_owner, query_peer, query_outsider).await;
         session_contract::run(&storage, owner.id(), other.id(), disabled.id(), windwatcher::UserId::new()).await;
         let second_pool = MySqlStorage::connect(MySqlStorageOptions::new(&url)).await.unwrap();
         let direct_a = windwatcher::Conversation::new_direct(windwatcher::ConversationId::new(), now);

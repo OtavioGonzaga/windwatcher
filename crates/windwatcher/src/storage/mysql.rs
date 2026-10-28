@@ -13,6 +13,7 @@ use uuid::Uuid;
 
 mod conversations;
 mod messages;
+mod queries;
 
 static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations/mysql");
 

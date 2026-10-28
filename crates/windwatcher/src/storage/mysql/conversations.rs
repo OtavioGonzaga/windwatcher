@@ -36,7 +36,9 @@ fn normalized(t: OffsetDateTime) -> Result<OffsetDateTime, ConversationStoreErro
 fn uuid(bytes: Vec<u8>) -> Result<Uuid, ConversationStoreError> {
     Uuid::from_slice(&bytes).map_err(|_| bad("invalid persisted identifier"))
 }
-fn read_conversation(r: &sqlx::mysql::MySqlRow) -> Result<Conversation, ConversationStoreError> {
+pub(super) fn read_conversation(
+    r: &sqlx::mysql::MySqlRow,
+) -> Result<Conversation, ConversationStoreError> {
     let id = ConversationId::try_from(uuid(r.try_get("id").map_err(db)?)?)
         .map_err(|_| bad("invalid conversation ID"))?;
     let kind = match r.try_get::<String, _>("kind").map_err(db)?.as_str() {
@@ -57,7 +59,9 @@ fn read_conversation(r: &sqlx::mysql::MySqlRow) -> Result<Conversation, Conversa
     Conversation::restore(id, kind, title, created, updated)
         .map_err(|_| bad("incoherent conversation"))
 }
-fn read_member(r: &sqlx::mysql::MySqlRow) -> Result<ConversationMember, ConversationStoreError> {
+pub(super) fn read_member(
+    r: &sqlx::mysql::MySqlRow,
+) -> Result<ConversationMember, ConversationStoreError> {
     let c = ConversationId::try_from(uuid(r.try_get("conversation_id").map_err(db)?)?)
         .map_err(|_| bad("invalid conversation ID"))?;
     let u = UserId::try_from(uuid(r.try_get("user_id").map_err(db)?)?)
