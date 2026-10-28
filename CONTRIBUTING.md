@@ -73,9 +73,10 @@ where appropriate.
 
 ## SQLite migrations
 
-SQLite migrations live in `crates/windwatcher/migrations/sqlite`. Add stable,
-sequential forward-only SQL files; never edit a released migration. SQL files
-use LF line endings because migration checksums are platform-independent.
+Primary SQLite migrations live in `crates/windwatcher/migrations/sqlite`; queue
+SQLite migrations live independently in `crates/windwatcher/migrations/queue/sqlite`.
+Add stable, sequential forward-only SQL files; never edit a released migration.
+SQL files use LF line endings because migration checksums are platform-independent.
 SQLite integration tests create disposable temporary databases and require no
 external database server or `DATABASE_URL`.
 

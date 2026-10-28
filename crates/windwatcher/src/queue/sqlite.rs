@@ -372,8 +372,10 @@ impl QueueStore for SqliteQueue {
             )));
         }
         let now_us = micros(now).map_err(queue_error)?;
+        let duration_us = i64::try_from(duration.as_micros())
+            .map_err(|_| queue_error(SqliteQueueError::Corrupt("lease duration out of range")))?;
         let expires = now_us
-            .checked_add(i64::try_from(duration.as_micros()).unwrap_or(i64::MAX))
+            .checked_add(duration_us)
             .ok_or_else(|| queue_error(SqliteQueueError::Corrupt("lease expiry out of range")))?;
         let result = sqlx::query("UPDATE queue_jobs SET lease_expires_at=? WHERE id=? AND status='leased' AND lease_id=? AND lease_expires_at>?").bind(expires).bind(uuid_bytes(job)).bind(uuid_bytes(lease)).bind(now_us).execute(&self.pool).await.map_err(|e| queue_error(db_error(e)))?;
         Ok(if result.rows_affected() == 1 {
@@ -486,9 +488,8 @@ impl QueueStore for SqliteQueue {
     ) -> Result<QueueMaintenanceReport, QueueStoreError> {
         let now_us = micros(now).map_err(queue_error)?;
         let exhausted = sqlx::query("UPDATE queue_jobs SET status='failed', failed_at=?, lease_id=NULL, lease_owner=NULL, lease_expires_at=NULL, last_error_code='queue.attempts_exhausted', last_error_message='maximum attempts exhausted' WHERE status='leased' AND lease_expires_at<=? AND attempts>=max_attempts").bind(now_us).bind(now_us).execute(&self.pool).await.map_err(|e| queue_error(db_error(e)))?.rows_affected();
-        let cutoff = now_us
-            .checked_sub(i64::try_from(completed_retention.as_micros()).unwrap_or(i64::MAX))
-            .unwrap_or(i64::MIN);
+        let retention_us = i64::try_from(completed_retention.as_micros()).unwrap_or(i64::MAX);
+        let cutoff = now_us.checked_sub(retention_us).unwrap_or(i64::MIN);
         let pruned =
             sqlx::query("DELETE FROM queue_jobs WHERE status='completed' AND completed_at<=?")
                 .bind(cutoff)

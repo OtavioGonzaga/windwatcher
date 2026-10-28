@@ -24,12 +24,16 @@ The packages are independently versioned.
 
 ```bash
 windwatcher migrate
+windwatcher worker
+windwatcher jobs list
 windwatcher user create --username otavio
 windwatcher config check
 ```
 
 An [HTTP v1 router](docs/http-api.md) is implemented and tested, but the CLI does
-not bind a listener yet; there is no `serve` command in this delivery.
+not bind a listener yet; there is no `serve` command in this delivery. The
+optional durable queue and separate worker process are documented in
+[Durable jobs](docs/jobs.md); no production job handlers are shipped yet.
 
 ## Development
 

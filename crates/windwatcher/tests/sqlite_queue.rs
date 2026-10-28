@@ -482,3 +482,85 @@ async fn malformed_persisted_payload_is_claimed_for_permanent_failure() {
         "payload.invalid"
     );
 }
+
+#[tokio::test]
+async fn sqlite_schema_constraints_indexes_and_physical_conventions_are_enforced() {
+    let directory = TempDir::new().unwrap();
+    let url = format!("sqlite://{}", directory.path().join("queue.db").display());
+    let queue =
+        SqliteQueue::connect(SqliteQueueOptions::new(&url).busy_timeout(Duration::from_secs(3)))
+            .await
+            .unwrap();
+    queue.migrate().await.unwrap();
+    let now = OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap()
+        + time::Duration::nanoseconds(999);
+    let job = EnqueueJob::new(&queue, JobPolicy::default())
+        .execute(
+            JobKind::new("test.schema").unwrap(),
+            1,
+            payload(),
+            EnqueueOptions::new(),
+            now,
+        )
+        .await
+        .unwrap();
+    let pool = sqlx::SqlitePool::connect(&url).await.unwrap();
+    let id: Vec<u8> = sqlx::query_scalar("SELECT id FROM queue_jobs WHERE id=?")
+        .bind(job.id().as_uuid().as_bytes().to_vec())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(id.len(), 16);
+    let timestamp: i64 = sqlx::query_scalar("SELECT created_at FROM queue_jobs WHERE id=?")
+        .bind(id.clone())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(timestamp, 1_700_000_000_000_000);
+    let journal: String = sqlx::query_scalar("PRAGMA journal_mode")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(journal.to_ascii_lowercase(), "wal");
+    for index in [
+        "queue_jobs_pending_claim",
+        "queue_jobs_expired_lease",
+        "queue_jobs_completed_retention",
+        "queue_jobs_operator_listing",
+    ] {
+        let exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='index' AND name=?)",
+        )
+        .bind(index)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(exists, "missing index {index}");
+    }
+    let invalid = sqlx::query("UPDATE queue_jobs SET status='leased' WHERE id=?")
+        .bind(id)
+        .execute(&pool)
+        .await;
+    assert!(
+        invalid.is_err(),
+        "incoherent lease state must be rejected by SQLite"
+    );
+}
+
+#[tokio::test]
+async fn queue_migration_checksum_tampering_is_rejected() {
+    let directory = TempDir::new().unwrap();
+    let url = format!("sqlite://{}", directory.path().join("queue.db").display());
+    let queue = SqliteQueue::connect(SqliteQueueOptions::new(&url))
+        .await
+        .unwrap();
+    queue.migrate().await.unwrap();
+    let pool = sqlx::SqlitePool::connect(&url).await.unwrap();
+    sqlx::query(
+        "UPDATE _sqlx_migrations SET checksum = zeroblob(length(checksum)) WHERE version=1",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert!(queue.migration_status().await.is_err());
+}

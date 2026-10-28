@@ -425,6 +425,22 @@ pub fn resolve_queue(
     {
         return Err(AppError::Config("queue durations, concurrency, payload limit and attempts must be positive; lease_renew_interval must be less than lease_duration and retry_max_delay must be at least retry_base_delay".into()));
     }
+    for duration in [
+        lease_duration,
+        lease_renew_interval,
+        poll_interval,
+        retry_base_delay,
+        retry_max_delay,
+        completed_retention,
+        maintenance_interval,
+        shutdown_grace_period,
+    ] {
+        if time::Duration::try_from(duration).is_err() {
+            return Err(AppError::Config(
+                "queue duration exceeds the supported timestamp range".into(),
+            ));
+        }
+    }
     let derived_path = queue.sqlite.path.is_none();
     let path = queue
         .sqlite

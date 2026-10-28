@@ -267,6 +267,13 @@ fn queue_migrations_are_separately_configured_and_targetable() {
         .assert()
         .success();
     assert!(directory.path().join("windwatcher.db").exists());
+    command(&config).arg("migrate").assert().success();
+    command(&config)
+        .args(["migrate", "status"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Storage: SQLite"))
+        .stdout(predicate::str::contains("Queue: SQLite"));
 }
 
 #[test]
@@ -293,6 +300,11 @@ fn worker_requires_queue_configuration_and_refuses_pending_schema() {
         .failure()
         .stderr(predicate::str::contains("queue schema is not current"))
         .stderr(predicate::str::contains("windwatcher migrate --queue"));
+    command(&config)
+        .args(["jobs", "list"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("queue schema is not current"));
 }
 
 #[tokio::test]

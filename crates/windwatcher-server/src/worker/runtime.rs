@@ -110,7 +110,16 @@ async fn execute_claim(
     let version = claimed.job().payload_version();
     let attempt = claimed.job().attempts();
     let payload = claimed.job().payload().clone();
-    let mut handler = Box::pin(registry.dispatch(&kind, version, payload));
+    let mut handler = Box::pin(if claimed.payload_invalid() {
+        Box::pin(async {
+            Err(JobExecutionError::Permanent {
+                code: JobFailureCode::new("payload.invalid").expect("static failure code is valid"),
+                message: "persisted job payload is invalid".into(),
+            })
+        }) as super::handler::HandlerFuture
+    } else {
+        registry.dispatch(&kind, version, payload)
+    });
     let mut renewals = interval(config.lease_renew_interval);
     renewals.set_missed_tick_behavior(MissedTickBehavior::Delay);
     renewals.tick().await;
@@ -476,6 +485,39 @@ mod tests {
         assert_eq!(
             rows[0].last_failure().unwrap().code().as_str(),
             "provider.timeout"
+        );
+    }
+
+    #[tokio::test]
+    async fn malformed_persisted_payload_fails_permanently_without_dispatch() {
+        let (dir, queue) = queue().await;
+        let now = OffsetDateTime::now_utc();
+        let job = enqueue(&queue, "corrupt", now).await;
+        let pool = sqlx::SqlitePool::connect(&format!(
+            "sqlite://{}",
+            dir.path().join("queue.db").display()
+        ))
+        .await
+        .unwrap();
+        sqlx::query("UPDATE queue_jobs SET payload_json='not-json' WHERE id=?")
+            .bind(job.id().as_uuid().as_bytes().to_vec())
+            .execute(&pool)
+            .await
+            .unwrap();
+        let claim = queue
+            .claim_next(WorkerId::new(), LeaseId::new(), Duration::from_secs(2), now)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(claim.payload_invalid());
+        execute_claim(&queue, &JobRegistry::default(), &settings(), claim).await;
+        let failed = queue
+            .list(QueueListOptions::new(Some(JobStatus::Failed), 10))
+            .await
+            .unwrap();
+        assert_eq!(
+            failed[0].last_failure().unwrap().code().as_str(),
+            "payload.invalid"
         );
     }
 }

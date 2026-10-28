@@ -221,16 +221,27 @@ impl Job {
             && attempts <= max_attempts
             && match status {
                 JobStatus::Pending => {
-                    lease.is_none() && completed_at.is_none() && failed_at.is_none()
+                    lease.is_none()
+                        && attempts < max_attempts
+                        && completed_at.is_none()
+                        && failed_at.is_none()
                 }
                 JobStatus::Leased => {
-                    lease.is_some() && completed_at.is_none() && failed_at.is_none()
+                    lease.is_some() && attempts > 0 && completed_at.is_none() && failed_at.is_none()
                 }
                 JobStatus::Completed => {
-                    lease.is_none() && completed_at.is_some() && failed_at.is_none()
+                    lease.is_none()
+                        && attempts > 0
+                        && completed_at.is_some()
+                        && failed_at.is_none()
+                        && last_failure.is_none()
                 }
                 JobStatus::Failed => {
-                    lease.is_none() && failed_at.is_some() && completed_at.is_none()
+                    lease.is_none()
+                        && attempts > 0
+                        && failed_at.is_some()
+                        && completed_at.is_none()
+                        && last_failure.is_some()
                 }
             };
         if !coherent {
@@ -331,6 +342,7 @@ impl ClaimedJob {
             payload_invalid,
         })
     }
+    #[cfg(feature = "queue-sqlite")]
     pub(crate) fn invalid_payload(job: Job, lease: JobLease) -> Result<Self, JobValueError> {
         let mut claimed = Self::new(job, lease)?;
         claimed.payload_invalid = true;

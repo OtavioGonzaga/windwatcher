@@ -16,12 +16,15 @@ CREATE TABLE queue_jobs (
     completed_at INTEGER,
     failed_at INTEGER,
     CHECK(attempts <= max_attempts),
+    CHECK((status = 'pending' AND attempts < max_attempts) OR (status != 'pending' AND attempts >= 1)),
     CHECK((status = 'leased' AND lease_id IS NOT NULL AND lease_owner IS NOT NULL AND lease_expires_at IS NOT NULL)
        OR (status != 'leased' AND lease_id IS NULL AND lease_owner IS NULL AND lease_expires_at IS NULL)),
     CHECK((status = 'completed' AND completed_at IS NOT NULL AND failed_at IS NULL)
        OR (status = 'failed' AND failed_at IS NOT NULL AND completed_at IS NULL)
        OR (status IN ('pending', 'leased') AND completed_at IS NULL AND failed_at IS NULL)),
     CHECK((last_error_code IS NULL) = (last_error_message IS NULL)),
+    CHECK((status = 'completed' AND last_error_code IS NULL) OR (status != 'completed')),
+    CHECK((status = 'failed' AND last_error_code IS NOT NULL) OR (status != 'failed')),
     CHECK(last_error_message IS NULL OR length(CAST(last_error_message AS BLOB)) <= 4096)
 ) STRICT;
 
