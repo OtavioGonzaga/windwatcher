@@ -68,6 +68,12 @@ releasing leases, allowing normal expiry and recovery. V1 has no global handler
 timeout, job cancellation API, scheduler, recurring jobs, or production handler
 registry entries.
 
+The runtime supervises every slot and maintenance task. An unexpected exit or
+panic (also during graceful drain) stops the worker with an error and cancels
+the remaining tasks without releasing leases. A systemd/container supervisor
+can restart the process; jobs recover through normal lease expiry rather than
+silently running with fewer execution slots.
+
 Workers periodically finalize exhausted expired leases and prune completed jobs
 older than the configured retention (seven days by default). Maintenance is
 idempotent and concurrency-safe; there is no distributed maintenance lock.

@@ -18,6 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Queue configuration preserves the resolved enqueue payload and attempt policy.
+- Worker task termination/panic is supervised and fails the process instead of
+  silently reducing concurrency; graceful shutdown still drains active work.
 
 ### Changed
 

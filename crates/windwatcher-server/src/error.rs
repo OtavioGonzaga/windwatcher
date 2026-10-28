@@ -24,6 +24,10 @@ pub enum AppError {
     QueueSchemaPending,
     #[error("queue operation failed")]
     QueueOperation(#[source] Box<dyn Error + Send + Sync>),
+    #[error("worker task terminated unexpectedly; restart the worker process")]
+    WorkerTaskTerminated,
+    #[error("failed to listen for worker shutdown signal")]
+    WorkerSignal(#[source] std::io::Error),
     #[error("username {username:?} is already taken")]
     UsernameTaken { username: String },
     #[error("password input error: {0}")]
