@@ -109,8 +109,8 @@ pub use jobs::{EnqueueJob, EnqueueJobError, EnqueueOptions, JobPolicy, JobPolicy
 #[cfg(feature = "queue-sqlite")]
 pub use queue::{QueueMigrationStatus, SqliteQueue, SqliteQueueError, SqliteQueueOptions};
 pub use queue_store::{
-    LeaseMutationOutcome, QueueListOptions, QueueMaintenanceReport, QueueStore, QueueStoreError,
-    RetryFailedOutcome, RetryOutcome,
+    LeaseMutationOutcome, QueueListOptions, QueueListOptionsError, QueueMaintenanceReport,
+    QueueStore, QueueStoreError, RetryFailedOutcome, RetryOutcome,
 };
 #[cfg(feature = "sqlite")]
 pub use storage::{MigrationStatus, SqliteStorage, SqliteStorageError, SqliteStorageOptions};

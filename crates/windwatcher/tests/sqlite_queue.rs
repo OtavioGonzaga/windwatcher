@@ -82,7 +82,7 @@ async fn queue_database_has_explicit_migrations_and_fenced_lifecycle() {
     );
     assert_eq!(
         queue
-            .list(QueueListOptions::new(Some(JobStatus::Pending), 10))
+            .list(QueueListOptions::new(Some(JobStatus::Pending), 10).unwrap())
             .await
             .unwrap()[0]
             .attempts(),
@@ -111,7 +111,7 @@ async fn queue_database_has_explicit_migrations_and_fenced_lifecycle() {
     );
     assert_eq!(
         queue
-            .list(QueueListOptions::new(Some(JobStatus::Completed), 10))
+            .list(QueueListOptions::new(Some(JobStatus::Completed), 10).unwrap())
             .await
             .unwrap()[0]
             .id(),
@@ -166,7 +166,7 @@ async fn exhausted_retry_fails_without_an_extra_claim() {
     );
     assert_eq!(
         queue
-            .list(QueueListOptions::new(Some(JobStatus::Failed), 10))
+            .list(QueueListOptions::new(Some(JobStatus::Failed), 10).unwrap())
             .await
             .unwrap()[0]
             .id(),
@@ -206,7 +206,7 @@ async fn abandoned_final_claim_is_failed_without_periodic_maintenance() {
             .is_none()
     );
     let failed = queue
-        .list(QueueListOptions::new(Some(JobStatus::Failed), 10))
+        .list(QueueListOptions::new(Some(JobStatus::Failed), 10).unwrap())
         .await
         .unwrap();
     assert_eq!(failed[0].id(), job.id());
@@ -249,7 +249,7 @@ async fn manual_retry_preserves_identity_and_policy_and_clears_failure() {
         windwatcher::RetryFailedOutcome::Retried
     );
     let retried = queue
-        .list(QueueListOptions::new(Some(JobStatus::Pending), 10))
+        .list(QueueListOptions::new(Some(JobStatus::Pending), 10).unwrap())
         .await
         .unwrap()
         .remove(0);
@@ -398,7 +398,7 @@ async fn maintenance_prunes_only_expired_completed_jobs_and_is_idempotent() {
     );
     assert!(
         queue
-            .list(QueueListOptions::new(Some(JobStatus::Completed), 100))
+            .list(QueueListOptions::new(Some(JobStatus::Completed), 100).unwrap())
             .await
             .unwrap()
             .iter()
@@ -406,7 +406,7 @@ async fn maintenance_prunes_only_expired_completed_jobs_and_is_idempotent() {
     );
     assert!(
         queue
-            .list(QueueListOptions::new(Some(JobStatus::Failed), 100))
+            .list(QueueListOptions::new(Some(JobStatus::Failed), 100).unwrap())
             .await
             .unwrap()
             .iter()
@@ -414,7 +414,7 @@ async fn maintenance_prunes_only_expired_completed_jobs_and_is_idempotent() {
     );
     assert!(
         queue
-            .list(QueueListOptions::new(Some(JobStatus::Pending), 100))
+            .list(QueueListOptions::new(Some(JobStatus::Pending), 100).unwrap())
             .await
             .unwrap()
             .iter()
@@ -422,7 +422,7 @@ async fn maintenance_prunes_only_expired_completed_jobs_and_is_idempotent() {
     );
     assert!(
         queue
-            .list(QueueListOptions::new(Some(JobStatus::Leased), 100))
+            .list(QueueListOptions::new(Some(JobStatus::Leased), 100).unwrap())
             .await
             .unwrap()
             .iter()
@@ -472,7 +472,7 @@ async fn malformed_persisted_payload_is_claimed_for_permanent_failure() {
         .unwrap();
     assert_eq!(
         queue
-            .list(QueueListOptions::new(Some(JobStatus::Failed), 10))
+            .list(QueueListOptions::new(Some(JobStatus::Failed), 10).unwrap())
             .await
             .unwrap()[0]
             .last_failure()

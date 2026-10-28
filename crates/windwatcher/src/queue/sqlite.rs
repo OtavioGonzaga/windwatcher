@@ -436,11 +436,6 @@ impl QueueStore for SqliteQueue {
         })
     }
     async fn list(&self, options: QueueListOptions) -> Result<Vec<Job>, QueueStoreError> {
-        if options.limit() == 0 || options.limit() > 100 {
-            return Err(queue_error(SqliteQueueError::Configuration(
-                "job list limit must be 1..=100".into(),
-            )));
-        }
         let rows = if let Some(state) = options.status() {
             sqlx::query(
                 "SELECT * FROM queue_jobs WHERE status=? ORDER BY created_at DESC,id DESC LIMIT ?",

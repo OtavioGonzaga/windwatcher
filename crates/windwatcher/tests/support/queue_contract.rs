@@ -38,7 +38,7 @@ async fn enqueue_claim_retry<S: QueueStore>(store: &S) {
         Some(uuid::Version::SortRand)
     );
     let before_oversized = store
-        .list(QueueListOptions::new(None, 100))
+        .list(QueueListOptions::new(None, 100).unwrap())
         .await
         .unwrap()
         .len();
@@ -56,7 +56,7 @@ async fn enqueue_claim_retry<S: QueueStore>(store: &S) {
     );
     assert_eq!(
         store
-            .list(QueueListOptions::new(None, 100))
+            .list(QueueListOptions::new(None, 100).unwrap())
             .await
             .unwrap()
             .len(),
@@ -103,7 +103,7 @@ async fn enqueue_claim_retry<S: QueueStore>(store: &S) {
     );
     assert_eq!(
         store
-            .list(QueueListOptions::new(Some(JobStatus::Leased), 10))
+            .list(QueueListOptions::new(Some(JobStatus::Leased), 10).unwrap())
             .await
             .unwrap()
             .iter()
@@ -180,7 +180,7 @@ async fn enqueue_claim_retry<S: QueueStore>(store: &S) {
     );
     assert_eq!(
         store
-            .list(QueueListOptions::new(Some(JobStatus::Completed), 10))
+            .list(QueueListOptions::new(Some(JobStatus::Completed), 10).unwrap())
             .await
             .unwrap()
             .iter()
@@ -281,7 +281,7 @@ async fn claim<S: QueueStore>(store: &S, now: OffsetDateTime) -> ClaimedJob {
 
 async fn listed<S: QueueStore>(store: &S, id: JobId) -> Job {
     store
-        .list(QueueListOptions::new(None, 100))
+        .list(QueueListOptions::new(None, 100).unwrap())
         .await
         .unwrap()
         .into_iter()
@@ -498,7 +498,10 @@ async fn listing_and_maintenance<S: QueueStore>(store: &S) {
     let active = claim(store, at(120)).await;
     assert_eq!(active.job().id(), leased.id());
     // Same created_at exercises the ID tie-breaker without promising claim order.
-    let rows = store.list(QueueListOptions::new(None, 100)).await.unwrap();
+    let rows = store
+        .list(QueueListOptions::new(None, 100).unwrap())
+        .await
+        .unwrap();
     let mut expected = rows.clone();
     expected.sort_by_key(|job| std::cmp::Reverse((job.created_at(), job.id())));
     assert_eq!(rows, expected);
@@ -509,7 +512,7 @@ async fn listing_and_maintenance<S: QueueStore>(store: &S) {
         JobStatus::Failed,
     ] {
         let filtered = store
-            .list(QueueListOptions::new(Some(status), 100))
+            .list(QueueListOptions::new(Some(status), 100).unwrap())
             .await
             .unwrap();
         assert_eq!(
@@ -521,7 +524,10 @@ async fn listing_and_maintenance<S: QueueStore>(store: &S) {
         );
     }
     assert_eq!(
-        store.list(QueueListOptions::new(None, 2)).await.unwrap(),
+        store
+            .list(QueueListOptions::new(None, 2).unwrap())
+            .await
+            .unwrap(),
         rows[..2]
     );
     let completed_before = rows
@@ -546,7 +552,10 @@ async fn listing_and_maintenance<S: QueueStore>(store: &S) {
         .await
         .unwrap();
     assert_eq!(again, QueueMaintenanceReport::new(0, 0));
-    let after = store.list(QueueListOptions::new(None, 100)).await.unwrap();
+    let after = store
+        .list(QueueListOptions::new(None, 100).unwrap())
+        .await
+        .unwrap();
     assert!(!after.iter().any(|job| job.id() == old.id()));
     assert_eq!(
         listed(store, recent.id()).await.status(),
@@ -574,7 +583,7 @@ async fn listing_and_maintenance<S: QueueStore>(store: &S) {
         .unwrap();
     assert_eq!(
         store
-            .list(QueueListOptions::new(Some(JobStatus::Failed), 100))
+            .list(QueueListOptions::new(Some(JobStatus::Failed), 100).unwrap())
             .await
             .unwrap(),
         failed_before

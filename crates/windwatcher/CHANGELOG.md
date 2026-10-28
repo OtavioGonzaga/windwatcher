@@ -14,6 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Independent `queue-sqlite` adapter with its own schema, migrations, lease and
   job lifecycle operations, plus a shared portable queue contract test suite.
 
+- Queue listing options validate the portable `1..=100` limit before adapter I/O.
+
 ### Changed
 
 - **Breaking:** mutating use cases now return `Outcome<T>` with explicit typed

@@ -76,10 +76,19 @@ pub struct QueueListOptions {
     status: Option<JobStatus>,
     limit: u32,
 }
+
+/// A job-list limit outside the portable inclusive range `1..=100`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+#[error("job list limit must be between 1 and 100")]
+pub struct QueueListOptionsError;
+
 impl QueueListOptions {
-    /// Creates listing options; adapter enforces a maximum limit of 100.
-    pub fn new(status: Option<JobStatus>, limit: u32) -> Self {
-        Self { status, limit }
+    /// Creates listing options, rejecting limits outside `1..=100`.
+    pub fn new(status: Option<JobStatus>, limit: u32) -> Result<Self, QueueListOptionsError> {
+        if !(1..=100).contains(&limit) {
+            return Err(QueueListOptionsError);
+        }
+        Ok(Self { status, limit })
     }
     /// Returns optional state filter.
     pub fn status(&self) -> Option<JobStatus> {
@@ -88,6 +97,26 @@ impl QueueListOptions {
     /// Returns requested result limit.
     pub fn limit(&self) -> u32 {
         self.limit
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn listing_limits_are_validated_before_reaching_any_adapter() {
+        for limit in [0, 101, u32::MAX] {
+            assert_eq!(
+                QueueListOptions::new(None, limit),
+                Err(QueueListOptionsError)
+            );
+        }
+        for limit in [1, 100] {
+            let options = QueueListOptions::new(Some(JobStatus::Failed), limit).unwrap();
+            assert_eq!(options.limit(), limit);
+            assert_eq!(options.status(), Some(JobStatus::Failed));
+        }
     }
 }
 

@@ -23,13 +23,10 @@ pub async fn jobs_list(
     status: Option<JobStatus>,
     limit: u32,
 ) -> Result<(), AppError> {
-    if !(1..=100).contains(&limit) {
-        return Err(AppError::Config(
-            "jobs list --limit must be between 1 and 100".into(),
-        ));
-    }
+    let options = QueueListOptions::new(status, limit)
+        .map_err(|error| AppError::Config(error.to_string()))?;
     let jobs = queue
-        .list(QueueListOptions::new(status, limit))
+        .list(options)
         .await
         .map_err(|e| AppError::QueueOperation(Box::new(e)))?;
     println!(

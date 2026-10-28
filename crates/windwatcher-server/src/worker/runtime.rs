@@ -380,7 +380,7 @@ mod tests {
         );
         execute_claim(&queue, &registry, &settings(), claim).await;
         let rows = queue
-            .list(QueueListOptions::new(Some(JobStatus::Completed), 10))
+            .list(QueueListOptions::new(Some(JobStatus::Completed), 10).unwrap())
             .await
             .unwrap();
         assert_eq!(rows[0].id(), job.id());
@@ -505,7 +505,7 @@ mod tests {
         );
         execute_claim(&queue, &registry, &settings(), claim).await;
         let rows = queue
-            .list(QueueListOptions::new(Some(JobStatus::Pending), 10))
+            .list(QueueListOptions::new(Some(JobStatus::Pending), 10).unwrap())
             .await
             .unwrap();
         assert_eq!(rows[0].id(), job.id());
@@ -540,7 +540,7 @@ mod tests {
         assert!(claim.payload_invalid());
         execute_claim(&queue, &JobRegistry::default(), &settings(), claim).await;
         let failed = queue
-            .list(QueueListOptions::new(Some(JobStatus::Failed), 10))
+            .list(QueueListOptions::new(Some(JobStatus::Failed), 10).unwrap())
             .await
             .unwrap();
         assert_eq!(
@@ -598,7 +598,7 @@ mod tests {
         assert!(matches!(result, Err(AppError::WorkerTaskTerminated)));
         assert!(observed.load(Ordering::SeqCst));
         let rows = queue
-            .list(QueueListOptions::new(Some(JobStatus::Leased), 10))
+            .list(QueueListOptions::new(Some(JobStatus::Leased), 10).unwrap())
             .await
             .unwrap();
         assert_eq!(rows.len(), 2);
@@ -663,14 +663,14 @@ mod tests {
         .unwrap();
         assert_eq!(
             queue
-                .list(QueueListOptions::new(Some(JobStatus::Completed), 10))
+                .list(QueueListOptions::new(Some(JobStatus::Completed), 10).unwrap())
                 .await
                 .unwrap()
                 .len(),
             1
         );
         let pending = queue
-            .list(QueueListOptions::new(Some(JobStatus::Pending), 10))
+            .list(QueueListOptions::new(Some(JobStatus::Pending), 10).unwrap())
             .await
             .unwrap();
         assert_eq!(pending.len(), 1);
@@ -712,7 +712,7 @@ mod tests {
         .unwrap();
         assert!(observed.load(Ordering::SeqCst));
         let leased = queue
-            .list(QueueListOptions::new(Some(JobStatus::Leased), 10))
+            .list(QueueListOptions::new(Some(JobStatus::Leased), 10).unwrap())
             .await
             .unwrap();
         assert_eq!(leased.len(), 1);
