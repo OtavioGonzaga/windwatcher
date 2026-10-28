@@ -54,6 +54,12 @@ conversation and message storage ports
 while keeping SQLx and its Tokio runtime requirement at the infrastructure
 boundary.
 
+The reusable crate also owns the portable durable-job envelope, enqueue use case
+and `QueueStore` port. The optional `queue-sqlite` feature provides a distinct
+`SqliteQueue` adapter and independent migration lifecycle. The official server
+composes the optional queue only for worker, job-operator and queue-migration
+commands; queue schema management is not part of `QueueStore`.
+
 Message application operations depend on `MessageStore`, implemented by the
 optional SQLite adapter:
 
@@ -163,6 +169,30 @@ Database plus HTTP remain authoritative; sockets offer no replay, ACK, durable
 snapshot boundary or domain ordering. Clients reconcile through HTTP after reconnect.
 
 `RealtimeEvent` is not `DomainEvent`. The server maps library facts to the wire
-protocol without equating internal names or payloads. There is still no production listener, `serve`, health/readiness or
-process shutdown lifecycle. See [realtime](realtime.md) and
-[ADR 0012](adr/0012-websocket-realtime-transport.md).
+protocol without equating internal names or payloads. There is still no
+production listener, `serve`, health/readiness or HTTP serving lifecycle. The
+standalone `worker` process is implemented separately and consumes `QueueStore`;
+it does not start HTTP and currently has no official production handlers.
+`DomainEvent` does not automatically enqueue jobs. Primary storage and queue
+storage use separate SQLite files and are not transactionally coupled:
+
+```text
+                    windwatcher-server
+                           │
+             ┌─────────────┴─────────────┐
+             │                           │
+       primary application          worker process
+             │                           │
+        DomainEvent[]                 QueueStore
+             │                           │
+       realtime reaction          SqliteQueue → queue.db
+             │
+       SqliteStorage → windwatcher.db
+```
+
+Queue delivery is at-least-once with no processing-order guarantee. Renewable
+leases use `LeaseId` fencing; worker concurrency is a number of execution slots
+per process. There is no outbox, automatic event-to-job mapping, cancellation,
+priority or deduplication in v1. See [realtime](realtime.md), [jobs](jobs.md),
+[ADR 0012](adr/0012-websocket-realtime-transport.md), and
+[ADR 0014](adr/0014-durable-job-queue-semantics.md).

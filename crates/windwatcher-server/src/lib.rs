@@ -8,15 +8,17 @@ pub mod http;
 mod logging;
 mod password;
 mod paths;
+mod queue;
 mod realtime;
 mod storage;
+mod worker;
 
 pub use config::http::{RawCors, RawHttp, RawRateLimit, RawRateLimitPolicy, ResolvedHttpConfig};
 pub use config::realtime::{RawRealtime, ResolvedRealtimeConfig};
 pub use password::TokioPasswordHasher;
 
 use clap::Parser;
-use cli::{Cli, Command, MigrateCommand};
+use cli::{Cli, Command, JobStatusArg, JobsCommand, MigrateCommand};
 use error::AppError;
 use paths::{ResolvedPaths, RuntimeMode};
 pub use storage::Storage;
@@ -60,16 +62,99 @@ async fn run() -> Result<(), AppError> {
         } => {
             config::resolve_full(&raw, &paths)?;
             println!(
-                "Configuration valid.\nMode: {}\nStorage: SQLite",
-                if cli.system { "system" } else { "user" }
+                "Configuration valid.\nMode: {}\nStorage: SQLite\nQueue: {}",
+                if cli.system { "system" } else { "user" },
+                if raw.queue.is_some() {
+                    "SQLite"
+                } else {
+                    "disabled"
+                }
             );
             Ok(())
         }
-        Command::Migrate { command } => {
-            let storage = connect_storage(&raw, &paths).await?;
+        Command::Migrate(args) => {
+            let explicit = args.storage || args.queue;
+            let do_storage = args.storage || !explicit;
+            let do_queue = args.queue || (!explicit && raw.queue.is_some());
+            if do_storage {
+                let storage = connect_storage(&raw, &paths).await?;
+                match args.command {
+                    Some(MigrateCommand::Status) => commands::migration_status(&storage).await?,
+                    None => commands::migrate(&storage).await?,
+                }
+            }
+            if do_queue {
+                let queue = connect_queue(&raw, &paths).await?;
+                let status = queue
+                    .migration_status()
+                    .await
+                    .map_err(|e| AppError::MigrationStatus(Box::new(e)))?;
+                if matches!(args.command, Some(MigrateCommand::Status)) {
+                    println!("Queue: {}", queue.backend_name());
+                    println!(
+                        "Current version: {}",
+                        status
+                            .current_version()
+                            .map_or_else(|| "none".into(), |v| v.to_string())
+                    );
+                    println!(
+                        "Latest version: {}",
+                        status
+                            .latest_version()
+                            .map_or_else(|| "none".into(), |v| v.to_string())
+                    );
+                    println!("Pending migrations: {}", status.pending());
+                    println!(
+                        "Status: {}",
+                        if status.is_current() {
+                            "current"
+                        } else {
+                            "pending"
+                        }
+                    );
+                } else {
+                    let pending = status.pending();
+                    queue
+                        .migrate()
+                        .await
+                        .map_err(|e| AppError::Migration(Box::new(e)))?;
+                    println!(
+                        "Queue: {}",
+                        if pending == 0 {
+                            "No pending migrations.".to_owned()
+                        } else {
+                            format!("Applied {pending} migration(s).")
+                        }
+                    );
+                }
+            }
+            Ok(())
+        }
+        Command::Worker => {
+            let resolved = config::resolve_queue(&raw, &paths)?;
+            let queue = connect_queue(&raw, &paths).await?;
+            worker::run(queue, resolved).await
+        }
+        Command::Jobs { command } => {
+            let queue = connect_queue(&raw, &paths).await?;
+            let status = queue
+                .migration_status()
+                .await
+                .map_err(|e| AppError::MigrationStatus(Box::new(e)))?;
+            if !status.is_current() {
+                return Err(AppError::QueueSchemaPending);
+            }
             match command {
-                Some(MigrateCommand::Status) => commands::migration_status(&storage).await,
-                None => commands::migrate(&storage).await,
+                JobsCommand::List { status, limit } => {
+                    let status = status.map(|value| match value {
+                        JobStatusArg::Pending => windwatcher::JobStatus::Pending,
+                        JobStatusArg::Leased => windwatcher::JobStatus::Leased,
+                        JobStatusArg::Completed => windwatcher::JobStatus::Completed,
+                        JobStatusArg::Failed => windwatcher::JobStatus::Failed,
+                    });
+                    commands::jobs_list(&queue, status, limit).await
+                }
+                JobsCommand::Retry { job_id } => commands::jobs_retry(&queue, &job_id).await,
             }
         }
         Command::User {
@@ -79,6 +164,22 @@ async fn run() -> Result<(), AppError> {
             commands::create_user(&storage, args, argument_password).await
         }
     }
+}
+
+async fn connect_queue(
+    raw: &config::RawConfig,
+    paths: &ResolvedPaths,
+) -> Result<queue::ConfiguredQueue, AppError> {
+    let resolved = config::resolve_queue(raw, paths)?;
+    if resolved.derived_path && resolved.create_if_missing {
+        std::fs::create_dir_all(&paths.data_dir).map_err(|source| AppError::DataDirectory {
+            path: paths.data_dir.clone(),
+            source,
+        })?;
+    }
+    queue::ConfiguredQueue::connect(resolved.options)
+        .await
+        .map_err(|error| AppError::Storage(Box::new(error)))
 }
 
 async fn connect_storage(

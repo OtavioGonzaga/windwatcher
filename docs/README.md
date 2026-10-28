@@ -15,9 +15,10 @@
 - [Messages](messages.md): message projections, replies, tombstones and own read state.
 - [Pagination](pagination.md): opaque resource-scoped keyset continuations.
 - [Persistence](persistence.md): semantic ports, SQLite snapshots and atomic commands.
+- [Durable jobs](jobs.md): portable queue semantics, SQLite queue, worker and operations.
 - [Server configuration](server-configuration.md): operational configuration,
   paths, secrets, and logging.
-- [CLI](cli.md): explicit migration and user-provisioning commands.
+- [CLI](cli.md): explicit migrations, worker and operator commands.
 - [Architectural Decision Records](adr/README.md): significant decisions made
   with their implementation.
 - [Contributing](../CONTRIBUTING.md): development workflow and repository rules.

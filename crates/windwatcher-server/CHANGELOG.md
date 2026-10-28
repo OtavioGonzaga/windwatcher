@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Optional SQLite queue configuration and independently targeted storage/queue
+  migration and migration-status commands.
+- Separate `windwatcher worker` process role with bounded execution slots,
+  renewable leases, retry backoff and graceful shutdown.
+- `jobs list` inspection and operator retry for failed jobs.
+
+### Fixed
+
+- Queue configuration preserves the resolved enqueue payload and attempt policy.
+- Worker task termination/panic is supervised and fails the process instead of
+  silently reducing concurrency; graceful shutdown still drains active work.
+
 ### Changed
 
 - Realtime publication is driven by library `DomainEvent` outcomes; the WebSocket

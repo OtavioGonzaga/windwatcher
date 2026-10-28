@@ -25,9 +25,13 @@ pub struct Cli {
 #[derive(Debug, Subcommand)]
 pub enum Command {
     /// Apply pending database migrations.
-    Migrate {
+    Migrate(MigrateArgs),
+    /// Run the standalone background worker.
+    Worker,
+    /// Inspect and retry durable jobs.
+    Jobs {
         #[command(subcommand)]
-        command: Option<MigrateCommand>,
+        command: JobsCommand,
     },
     /// Manage local users.
     User {
@@ -39,6 +43,41 @@ pub enum Command {
         #[command(subcommand)]
         command: ConfigCommand,
     },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum JobsCommand {
+    /// List jobs without displaying payloads.
+    List {
+        /// Filter to one persisted status.
+        #[arg(long, value_enum)]
+        status: Option<JobStatusArg>,
+        /// Maximum number of jobs to display (1..=100).
+        #[arg(long, default_value_t = 50, value_parser = clap::value_parser!(u32).range(1..=100))]
+        limit: u32,
+    },
+    /// Retry a failed job, preserving its JobId and attempt policy.
+    Retry { job_id: String },
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum JobStatusArg {
+    Pending,
+    Leased,
+    Completed,
+    Failed,
+}
+
+#[derive(Debug, Args)]
+pub struct MigrateArgs {
+    /// Target primary storage migrations.
+    #[arg(long, global = true)]
+    pub storage: bool,
+    /// Target queue migrations.
+    #[arg(long, global = true)]
+    pub queue: bool,
+    #[command(subcommand)]
+    pub command: Option<MigrateCommand>,
 }
 
 #[derive(Debug, Subcommand)]

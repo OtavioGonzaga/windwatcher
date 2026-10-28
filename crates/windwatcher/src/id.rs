@@ -129,6 +129,12 @@ domain_id!(
     MessageId,
     "The UUIDv7 identity and canonical ordering key of a [`crate::Message`]."
 );
+domain_id!(JobId, "The UUIDv7 identity of a durable queued job.");
+domain_id!(LeaseId, "The UUIDv7 fencing identity of one job claim.");
+domain_id!(
+    WorkerId,
+    "The UUIDv7 identity of one worker process lifetime."
+);
 
 #[cfg(test)]
 mod tests {
@@ -136,7 +142,9 @@ mod tests {
 
     use uuid::{Uuid, Variant, Version};
 
-    use super::{ConversationId, IdentifierError, MessageId, SessionId, UserId};
+    use super::{
+        ConversationId, IdentifierError, JobId, LeaseId, MessageId, SessionId, UserId, WorkerId,
+    };
 
     macro_rules! identifier_tests {
         ($module:ident, $type:ident) => {
@@ -232,4 +240,7 @@ mod tests {
     identifier_tests!(session_id, SessionId);
     identifier_tests!(conversation_id, ConversationId);
     identifier_tests!(message_id, MessageId);
+    identifier_tests!(job_id, JobId);
+    identifier_tests!(lease_id, LeaseId);
+    identifier_tests!(worker_id, WorkerId);
 }

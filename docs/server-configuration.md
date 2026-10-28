@@ -29,6 +29,20 @@ SQLite is the default storage backend; `[storage.sqlite]` optionally sets `url`,
 `create_if_missing`, `max_connections`, and human-readable `busy_timeout`.
 Durations such as `5s`, `15m`, and `30d` are supported.
 
+The durable queue is optional. When `[queue]` is configured, SQLite is currently
+the supported provider and the default file is `queue.db`, separate from
+`windwatcher.db`. Queue worker and operator commands require this section;
+`config check` validates its concurrency, lease, retry and retention settings.
+The queue database path must not resolve to the primary storage file. Queue
+connection/migration initialization is command-specific; ordinary commands do
+not open it. See [jobs](jobs.md) for queue semantics and worker operations.
+
+`windwatcher migrate` applies storage migrations and queue migrations when a
+queue is configured. `--storage` and `--queue` target them independently, and
+the same flags apply to `migrate status`. Explicit `--queue` without queue
+configuration is an actionable error. Runtime and operator commands check the
+schema and never migrate implicitly.
+
 JWT uses a direct `auth.jwt.secret` or exact bytes from `auth.jwt.secret_file`,
 never both. Secret files are not trimmed: a final newline is part of the secret.
 Generate a file safely with `printf '%s' "$SECRET" > jwt.key`. `config check`
