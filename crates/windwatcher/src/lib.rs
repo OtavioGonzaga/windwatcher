@@ -7,6 +7,7 @@ mod conversation;
 mod conversation_store;
 mod conversations;
 mod cursor;
+mod events;
 mod id;
 mod idempotency;
 mod identity;
@@ -43,6 +44,7 @@ pub use conversations::{
     TransferGroupOwnershipError,
 };
 pub use cursor::CursorError;
+pub use events::{DomainEvent, Outcome};
 pub use idempotency::{
     ConversationCreateCommand, ConversationCreateRequest, CreateCommandError, CreateCommandStore,
     CreateConversation, CreateDisposition, CreateResult, IdempotencyKey, IdempotencyKeyError,
