@@ -55,8 +55,22 @@ while keeping SQLx and its Tokio runtime requirement at the infrastructure
 boundary.
 
 The reusable crate also owns the portable durable-job envelope, enqueue use case
-and `QueueStore` port. The optional `queue-sqlite` feature provides a distinct
-`SqliteQueue` adapter and independent migration lifecycle. The official server
+and `QueueStore` port. Optional `queue-sqlite`, `queue-postgres`, `queue-mysql` and
+`queue-redis` features provide concrete adapters. SQL queues have independent,
+explicit migrations; Redis uses atomic Lua transitions with no schema migration
+lifecycle. The official server compiles all four and selects a provider at runtime;
+library consumers compile only their requested adapters. Adapter mechanics differ,
+but observable queue semantics do not:
+
+```text
+QueueStore
+├── SQLite
+├── PostgreSQL
+├── MySQL
+└── Redis
+```
+
+The official server
 composes the optional queue only for worker, job-operator and queue-migration
 commands; queue schema management is not part of `QueueStore`.
 
@@ -174,7 +188,7 @@ production listener, `serve`, health/readiness or HTTP serving lifecycle. The
 standalone `worker` process is implemented separately and consumes `QueueStore`;
 it does not start HTTP and currently has no official production handlers.
 `DomainEvent` does not automatically enqueue jobs. Primary storage and queue
-storage use separate SQLite files and are not transactionally coupled:
+storage are operationally independent and are not transactionally coupled:
 
 ```text
                     windwatcher-server
@@ -185,7 +199,7 @@ storage use separate SQLite files and are not transactionally coupled:
              │                           │
         DomainEvent[]                 QueueStore
              │                           │
-       realtime reaction          SqliteQueue → queue.db
+        realtime reaction       configured queue → queue backend
              │
        SqliteStorage → windwatcher.db
 ```

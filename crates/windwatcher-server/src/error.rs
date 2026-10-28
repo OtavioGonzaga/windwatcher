@@ -22,6 +22,12 @@ pub enum AppError {
     SchemaPending,
     #[error("queue schema is not current")]
     QueueSchemaPending,
+    #[error("failed to connect to {backend} queue")]
+    QueueConnection {
+        backend: &'static str,
+        #[source]
+        source: Box<dyn Error + Send + Sync>,
+    },
     #[error("queue operation failed")]
     QueueOperation(#[source] Box<dyn Error + Send + Sync>),
     #[error("worker task terminated unexpectedly; restart the worker process")]

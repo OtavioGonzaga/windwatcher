@@ -41,6 +41,164 @@ fn command(config: &Path) -> Command {
 }
 
 #[test]
+fn network_queue_config_selection_and_safe_errors() {
+    let directory = TempDir::new().unwrap();
+    let path = complete_config(&directory, "warn");
+    let base = fs::read_to_string(&path).unwrap();
+    let secret = "recognizable_fake_password";
+    for (provider, scheme, label) in [
+        ("postgres", "postgresql", "PostgreSQL"),
+        ("mysql", "mysql", "MySQL"),
+        ("redis", "redis", "Redis"),
+    ] {
+        fs::write(&path,format!("{base}\n[queue]\nprovider = '{provider}'\n[queue.{provider}]\nurl = '{scheme}://user:{secret}@localhost/0'\n")).unwrap();
+        command(&path)
+            .args(["config", "check"])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains(format!("Queue: {label}")))
+            .stdout(predicate::str::contains(secret).not())
+            .stderr(predicate::str::contains(secret).not());
+        fs::write(
+            &path,
+            format!(
+                "{base}\n[queue]\nprovider = '{provider}'\n[queue.{provider}]\nurl = '{secret}'\n"
+            ),
+        )
+        .unwrap();
+        command(&path)
+            .args(["config", "check"])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains(format!("queue.{provider}.url")))
+            .stderr(predicate::str::contains(secret).not());
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL, MySQL and Redis; set WINDWATCHER_TEST_*_URL"]
+async fn network_queue_migration_and_jobs_cli() {
+    use sqlx::{ConnectOptions, Connection};
+    for (provider, variable) in [
+        ("postgres", "WINDWATCHER_TEST_POSTGRES_URL"),
+        ("mysql", "WINDWATCHER_TEST_MYSQL_URL"),
+        ("redis", "WINDWATCHER_TEST_REDIS_URL"),
+    ] {
+        let base_url = std::env::var(variable)
+            .expect("set all WINDWATCHER_TEST_{POSTGRES,MYSQL,REDIS}_URL values");
+        let name = format!("windwatcher_test_{}", uuid::Uuid::now_v7().simple());
+        let mut pg = None;
+        let mut mysql = None;
+        let url = match provider {
+            "postgres" => {
+                let mut conn = sqlx::PgConnection::connect(&base_url).await.unwrap();
+                // Identifier is only a fixed prefix plus generated UUID hex.
+                sqlx::raw_sql(sqlx::AssertSqlSafe(format!("CREATE DATABASE {name}")))
+                    .execute(&mut conn)
+                    .await
+                    .unwrap();
+                pg = Some(conn);
+                base_url
+                    .parse::<sqlx::postgres::PgConnectOptions>()
+                    .unwrap()
+                    .database(&name)
+                    .to_url_lossy()
+                    .to_string()
+            }
+            "mysql" => {
+                let mut conn = sqlx::MySqlConnection::connect(&base_url).await.unwrap();
+                sqlx::raw_sql(sqlx::AssertSqlSafe(format!("CREATE DATABASE {name}")))
+                    .execute(&mut conn)
+                    .await
+                    .unwrap();
+                mysql = Some(conn);
+                base_url
+                    .parse::<sqlx::mysql::MySqlConnectOptions>()
+                    .unwrap()
+                    .database(&name)
+                    .to_url_lossy()
+                    .to_string()
+            }
+            _ => base_url,
+        };
+        let directory = TempDir::new().unwrap();
+        let path = config(&directory);
+        let base = fs::read_to_string(&path).unwrap();
+        fs::write(
+            &path,
+            format!(
+                "{base}\n[queue]\nprovider = '{provider}'\n[queue.{provider}]\nurl = {url:?}\n{}",
+                if provider == "redis" {
+                    format!("key_prefix = 'windwatcher:test:{name}'\n")
+                } else {
+                    String::new()
+                }
+            ),
+        )
+        .unwrap();
+        let initial = command(&path)
+            .args(["migrate", "status", "--queue"])
+            .assert()
+            .success();
+        if provider == "redis" {
+            initial.stdout(predicate::str::contains(
+                "Queue (Redis): migrations not applicable",
+            ));
+        } else {
+            initial.stdout(predicate::str::contains("Pending migrations: 1"));
+            command(&path)
+                .args(["jobs", "list"])
+                .assert()
+                .failure()
+                .stderr(predicate::str::contains("queue schema is not current"));
+            command(&path)
+                .arg("worker")
+                .assert()
+                .failure()
+                .stderr(predicate::str::contains("queue schema is not current"));
+        }
+        command(&path)
+            .args(["migrate", "--queue"])
+            .assert()
+            .success();
+        let current = command(&path)
+            .args(["migrate", "status", "--queue"])
+            .assert()
+            .success();
+        if provider == "redis" {
+            current.stdout(predicate::str::contains("not applicable"));
+        } else {
+            current.stdout(predicate::str::contains("Status: current"));
+        }
+        command(&path).args(["jobs", "list"]).assert().success();
+        command(&path)
+            .args(["jobs", "list", "--status", "failed"])
+            .assert()
+            .success();
+        // No jobs were enqueued: retry reaches the portable NotFound outcome, not a schema error.
+        command(&path)
+            .args(["jobs", "retry", &windwatcher::JobId::new().to_string()])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("not found"));
+        if let Some(mut conn) = pg {
+            sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+                "DROP DATABASE {name} WITH (FORCE)"
+            )))
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        }
+        if let Some(mut conn) = mysql {
+            sqlx::raw_sql(sqlx::AssertSqlSafe(format!("DROP DATABASE {name}")))
+                .execute(&mut conn)
+                .await
+                .unwrap();
+        }
+    }
+}
+
+#[test]
 fn realtime_config_defaults_toml_environment_and_validation() {
     let directory = TempDir::new().unwrap();
     let path = complete_config(&directory, "warn");

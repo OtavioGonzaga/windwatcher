@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `PostgresQueue`, `MySqlQueue` and `RedisQueue` behind independent
+  `queue-postgres`, `queue-mysql` and `queue-redis` features, completing the
+  official queue adapter matrix with the same portable lease/job contract.
+- Explicit PostgreSQL/MySQL queue migrations and namespace-isolated Redis atomic
+  transitions with exact microsecond indexes; network adapters use Rustls TLS.
+
 - Portable durable-job identifiers, validated job envelope and state types,
   enqueue policy/application operation, and the reusable `QueueStore` contract.
 - Independent `queue-sqlite` adapter with its own schema, migrations, lease and
@@ -17,6 +23,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Queue listing options validate the portable `1..=100` limit before adapter I/O.
 - Portable UTC microsecond queue timestamps and common lease-expiration validation;
   enqueue results match persisted precision and sub-microsecond leases are rejected.
+
+### Fixed
+
+- Queue payload restoration preserves deep JSON without a fixed decoder nesting
+  limit. SQL queues store opaque payload/failure bytes (including NUL) and signed
+  Unix-microsecond timestamps across the common model's full temporal range.
+- Redis script-detected key/index/metadata corruption is consistently reported as
+  `RedisQueueError::Corrupt`, without exposing stored values.
 
 ### Changed
 

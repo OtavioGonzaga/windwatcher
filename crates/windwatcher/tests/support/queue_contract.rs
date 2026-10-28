@@ -10,6 +10,243 @@ pub async fn run<S: QueueStore>(store: &S) {
     exhaustion_and_manual_retry(store).await;
     temporal_precision(store).await;
     listing_and_maintenance(store).await;
+    pre_epoch_and_numeric_payload(store).await;
+    opaque_payload_and_failure_text(store).await;
+    full_temporal_range(store).await;
+}
+
+async fn opaque_payload_and_failure_text<S: QueueStore>(store: &S) {
+    let mut nested = serde_json::Value::String("leaf\0雪".into());
+    // Exceeds both MySQL JSON's 100-level limit and serde_json's default 128.
+    for _ in 0..256 {
+        nested = serde_json::Value::Array(vec![nested]);
+    }
+    let payload = JobPayload::try_from(serde_json::json!({
+        "nul\0key": "a\0b", "unicode": "雪🦀é", "nested": nested,
+        "unsigned": u64::MAX, "signed": i64::MIN, "fraction": 0.10000000000000002_f64,
+    }))
+    .unwrap();
+    let now = OffsetDateTime::from_unix_timestamp(-10).unwrap();
+    let job = EnqueueJob::new(store, JobPolicy::default())
+        .execute(
+            JobKind::new("contract.opaque").unwrap(),
+            1,
+            payload.clone(),
+            EnqueueOptions::new().max_attempts(2),
+            now,
+        )
+        .await
+        .unwrap();
+    assert_eq!(listed(store, job.id()).await.payload(), &payload);
+    let claimed = claim(store, now).await;
+    assert_eq!(claimed.job().id(), job.id());
+    assert!(
+        !claimed.payload_invalid(),
+        "valid deep JSON must not become payload.invalid"
+    );
+    assert_eq!(claimed.job().payload(), &payload);
+    let failure =
+        JobFailure::new(JobFailureCode::new("test.opaque").unwrap(), "foo\0bar雪").unwrap();
+    let later = now + TimeDuration::seconds(1);
+    assert_eq!(
+        store
+            .retry(job.id(), claimed.lease().id(), &failure, later, now)
+            .await
+            .unwrap(),
+        RetryOutcome::Scheduled
+    );
+    assert_eq!(listed(store, job.id()).await.last_failure(), Some(&failure));
+    let reclaimed = claim(store, later).await;
+    assert_eq!(reclaimed.job().id(), job.id());
+    assert!(!reclaimed.payload_invalid());
+    assert_eq!(reclaimed.job().payload(), &payload);
+    assert_eq!(
+        store
+            .fail(job.id(), reclaimed.lease().id(), &failure, later)
+            .await
+            .unwrap(),
+        LeaseMutationOutcome::Applied
+    );
+    let restored = listed(store, job.id()).await;
+    assert_eq!(restored.last_failure(), Some(&failure));
+    assert_eq!(restored.payload(), &payload);
+}
+
+// Earlier contract cases may leave unrelated due work. Do not assume any claim order.
+async fn claim_id<S: QueueStore>(
+    store: &S,
+    id: JobId,
+    now: OffsetDateTime,
+    duration: Duration,
+) -> ClaimedJob {
+    for _ in 0..100 {
+        let claimed = store
+            .claim_next(WorkerId::new(), LeaseId::new(), duration, now)
+            .await
+            .unwrap()
+            .unwrap();
+        if claimed.job().id() == id {
+            return claimed;
+        }
+        assert_eq!(
+            store
+                .complete(claimed.job().id(), claimed.lease().id(), now)
+                .await
+                .unwrap(),
+            LeaseMutationOutcome::Applied
+        );
+    }
+    panic!("target job was not claimed");
+}
+
+async fn full_temporal_range<S: QueueStore>(store: &S) {
+    let minimum = time::PrimitiveDateTime::MIN.assume_utc();
+    let maximum = time::PrimitiveDateTime::MAX
+        .assume_utc()
+        .replace_nanosecond(999_999_000)
+        .unwrap();
+    // Covers years before PostgreSQL TIMESTAMPTZ and MySQL DATETIME minima.
+    let job = enqueue(store, minimum, EnqueueOptions::new().max_attempts(2)).await;
+    assert_eq!(listed(store, job.id()).await, job);
+    let first = claim_id(store, job.id(), minimum, Duration::from_micros(1)).await;
+    assert_eq!(
+        first.lease().expires_at(),
+        minimum + TimeDuration::microseconds(1)
+    );
+    let failure = JobFailure::new(
+        JobFailureCode::new("test.range").unwrap(),
+        "range\0diagnostic",
+    )
+    .unwrap();
+    store
+        .fail(job.id(), first.lease().id(), &failure, minimum)
+        .await
+        .unwrap();
+    assert_eq!(listed(store, job.id()).await.failed_at(), Some(minimum));
+    // A retention cutoff below the model's minimum remains valid integer arithmetic.
+    store.maintain(minimum, Duration::MAX).await.unwrap();
+    assert_eq!(listed(store, job.id()).await.last_failure(), Some(&failure));
+    let near_max = maximum - TimeDuration::microseconds(4);
+    assert_eq!(
+        store.retry_failed(job.id(), near_max).await.unwrap(),
+        RetryFailedOutcome::Retried
+    );
+    assert_eq!(listed(store, job.id()).await.available_at(), near_max);
+    let second = claim_id(store, job.id(), near_max, Duration::from_micros(2)).await;
+    let available = maximum - TimeDuration::microseconds(2);
+    assert_eq!(
+        store
+            .retry(job.id(), second.lease().id(), &failure, available, near_max)
+            .await
+            .unwrap(),
+        RetryOutcome::Scheduled
+    );
+    let final_claim = claim_id(store, job.id(), available, Duration::from_micros(2)).await;
+    assert_eq!(final_claim.lease().expires_at(), maximum);
+    assert_eq!(
+        store
+            .renew(
+                job.id(),
+                final_claim.lease().id(),
+                Duration::from_micros(2),
+                available
+            )
+            .await
+            .unwrap(),
+        LeaseMutationOutcome::Applied
+    );
+    let completed = maximum - TimeDuration::microseconds(1);
+    assert_eq!(
+        store
+            .complete(job.id(), final_claim.lease().id(), completed)
+            .await
+            .unwrap(),
+        LeaseMutationOutcome::Applied
+    );
+    assert_eq!(
+        listed(store, job.id()).await.completed_at(),
+        Some(completed)
+    );
+    assert_eq!(listed(store, job.id()).await.created_at(), minimum);
+    let late = enqueue(store, maximum, EnqueueOptions::new()).await;
+    assert_eq!(listed(store, late.id()).await, late);
+    assert!(
+        store
+            .claim_next(
+                WorkerId::new(),
+                LeaseId::new(),
+                Duration::from_micros(1),
+                maximum
+            )
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        listed(store, late.id()).await,
+        late,
+        "expiration overflow must not mutate state"
+    );
+    store.maintain(maximum, Duration::MAX).await.unwrap();
+    assert_eq!(
+        listed(store, job.id()).await.completed_at(),
+        Some(completed)
+    );
+    store
+        .maintain(maximum, Duration::from_micros(1))
+        .await
+        .unwrap();
+    assert!(
+        !store
+            .list(QueueListOptions::new(None, 100).unwrap())
+            .await
+            .unwrap()
+            .iter()
+            .any(|row| row.id() == job.id())
+    );
+    assert_eq!(listed(store, late.id()).await, late);
+}
+
+async fn pre_epoch_and_numeric_payload<S: QueueStore>(store: &S) {
+    let raw = OffsetDateTime::from_unix_timestamp_nanos(-1).unwrap();
+    let normalized = OffsetDateTime::from_unix_timestamp_nanos(-1000).unwrap();
+    let payload = JobPayload::try_from(serde_json::json!({
+        "unsigned": u64::MAX, "signed": i64::MIN,
+        "fraction": 0.10000000000000002_f64, "nested": [null,true,{"text":"雪"}]
+    }))
+    .unwrap();
+    let job = EnqueueJob::new(store, JobPolicy::default())
+        .execute(
+            JobKind::new("contract.roundtrip").unwrap(),
+            u16::MAX,
+            payload.clone(),
+            EnqueueOptions::new().max_attempts(u32::MAX),
+            raw,
+        )
+        .await
+        .unwrap();
+    assert_eq!(job.created_at(), normalized);
+    assert_eq!(job.available_at(), normalized);
+    assert_eq!(listed(store, job.id()).await, job);
+    let claimed = store
+        .claim_next(
+            WorkerId::new(),
+            LeaseId::new(),
+            Duration::from_nanos(1999),
+            raw,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(claimed.job().payload(), &payload);
+    assert_eq!(claimed.lease().expires_at(), OffsetDateTime::UNIX_EPOCH);
+    store
+        .complete(job.id(), claimed.lease().id(), raw)
+        .await
+        .unwrap();
+    let restored = listed(store, job.id()).await;
+    assert_eq!(restored.completed_at(), Some(normalized));
+    assert_eq!(restored.payload_version(), u16::MAX);
+    assert_eq!(restored.max_attempts(), u32::MAX);
 }
 
 async fn enqueue_claim_retry<S: QueueStore>(store: &S) {
@@ -538,6 +775,34 @@ async fn temporal_precision<S: QueueStore>(store: &S) {
         listed(store, job.id()).await.completed_at(),
         Some(at(55) + TimeDuration::microseconds(1))
     );
+    let completed = at(55) + TimeDuration::microseconds(1);
+    store
+        .maintain(
+            completed + TimeDuration::nanoseconds(1001),
+            Duration::from_nanos(1999),
+        )
+        .await
+        .unwrap();
+    assert!(
+        !store
+            .list(QueueListOptions::new(None, 100).unwrap())
+            .await
+            .unwrap()
+            .iter()
+            .any(|row| row.id() == job.id()),
+        "retention floors both the clock and duration to microseconds"
+    );
+    let raw = at(56) + TimeDuration::nanoseconds(999);
+    let failed = enqueue(store, raw, EnqueueOptions::new()).await;
+    let claimed = claim(store, raw).await;
+    assert_eq!(claimed.job().id(), failed.id());
+    let failure =
+        JobFailure::new(JobFailureCode::new("test.precision").unwrap(), "permanent").unwrap();
+    store
+        .fail(failed.id(), claimed.lease().id(), &failure, raw)
+        .await
+        .unwrap();
+    assert_eq!(listed(store, failed.id()).await.failed_at(), Some(at(56)));
 }
 
 async fn listing_and_maintenance<S: QueueStore>(store: &S) {
