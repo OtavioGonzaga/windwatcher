@@ -492,4 +492,33 @@ async fn activity_and_unread<S: MessagingQueryStore + ConversationStore + Messag
             .iter()
             .all(|s| s.conversation.id() != a.id())
     );
+    let title = GroupTitle::new("group\0title 雪").unwrap();
+    let group = Conversation::new_group(ConversationId::new(), title.clone(), now);
+    store.create_group(&group, actor, &[]).await.unwrap();
+    assert_eq!(
+        GetConversationSummary::new(store)
+            .execute(actor, group.id())
+            .await
+            .unwrap()
+            .conversation
+            .title(),
+        Some(&title)
+    );
+    let renamed = GroupTitle::new("renamed\0雪").unwrap();
+    assert!(matches!(
+        store
+            .rename_group(group.id(), actor, &renamed, now + Duration::seconds(1))
+            .await
+            .unwrap(),
+        ChangeStoreOutcome::Changed { .. }
+    ));
+    assert_eq!(
+        GetConversationSummary::new(store)
+            .execute(actor, group.id())
+            .await
+            .unwrap()
+            .conversation
+            .title(),
+        Some(&renamed)
+    );
 }
