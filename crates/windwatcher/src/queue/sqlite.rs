@@ -7,6 +7,7 @@ use sqlx::{
 use time::OffsetDateTime;
 use uuid::Uuid;
 
+use super::QueueMigrationStatus;
 use crate::{
     ClaimedJob, Job, JobFailure, JobFailureCode, JobId, JobKind, JobLease, JobPayload, JobStatus,
     LeaseId, LeaseMutationOutcome, QueueListOptions, QueueMaintenanceReport, QueueStore,
@@ -73,32 +74,6 @@ pub enum SqliteQueueError {
 impl From<SqliteQueueError> for QueueStoreError {
     fn from(value: SqliteQueueError) -> Self {
         Self::new(value)
-    }
-}
-
-/// Queue migration status, independent of primary-storage migrations.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct QueueMigrationStatus {
-    current: Option<i64>,
-    latest: Option<i64>,
-    pending: usize,
-}
-impl QueueMigrationStatus {
-    /// Returns highest applied migration version.
-    pub fn current_version(&self) -> Option<i64> {
-        self.current
-    }
-    /// Returns newest embedded migration version.
-    pub fn latest_version(&self) -> Option<i64> {
-        self.latest
-    }
-    /// Returns number of pending migrations.
-    pub fn pending(&self) -> usize {
-        self.pending
-    }
-    /// Returns whether schema matches embedded migrations.
-    pub fn is_current(&self) -> bool {
-        self.pending == 0 && self.current == self.latest
     }
 }
 
