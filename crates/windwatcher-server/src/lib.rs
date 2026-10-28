@@ -220,13 +220,20 @@ async fn connect_storage(
             }
             Storage::connect(options)
                 .await
-                .map_err(|error| AppError::Storage(Box::new(error)))?
+                .map_err(|error| AppError::Storage {
+                    backend: "SQLite",
+                    source: Box::new(error),
+                })?
         }
         provider @ config::ResolvedStorageProvider::Postgres(_)
         | provider @ config::ResolvedStorageProvider::MySql(_) => {
+            let backend = match &provider {
+                config::ResolvedStorageProvider::Postgres(_) => "PostgreSQL",
+                _ => "MySQL",
+            };
             Storage::connect_provider(provider)
                 .await
-                .map_err(AppError::Storage)?
+                .map_err(|source| AppError::Storage { backend, source })?
         }
     };
     tracing::info!(backend = storage.backend_name(), "storage backend selected");

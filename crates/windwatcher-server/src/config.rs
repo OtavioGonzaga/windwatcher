@@ -707,7 +707,7 @@ pub fn resolve_queue(
                 .and_then(|s| s.url.as_deref())
                 .map(PathBuf::from)
                 .unwrap_or_else(|| paths.data_dir.join("windwatcher.db"));
-            if same_database_path(&path, &storage_location) {
+            if raw.storage.provider == "sqlite" && same_database_path(&path, &storage_location) {
                 return Err(AppError::Config("storage.sqlite and queue.sqlite resolve to the same database file; queue requires a separate database".into()));
             }
             let create_if_missing = queue.sqlite.create_if_missing.unwrap_or(true);
@@ -930,6 +930,9 @@ mod tests {
         raw.queue.as_mut().unwrap().lease_duration = DurationValue("60s".into());
         raw.queue.as_mut().unwrap().sqlite.path = Some(paths.data_dir.join("windwatcher.db"));
         assert!(resolve_queue(&raw, &paths).is_err());
+        // An inactive SQLite storage block must not conflict with the queue file.
+        raw.storage.provider = "postgres".into();
+        assert!(resolve_queue(&raw, &paths).is_ok());
     }
 
     #[test]

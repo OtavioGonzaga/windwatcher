@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Report selected storage backends and invalid network migration histories
+  accurately; ignore inactive SQLite storage paths when validating queue files.
+
 - Add runtime primary-storage provider selection for SQLite, PostgreSQL, and
   MySQL, including configuration and explicit migration/status support.
 
