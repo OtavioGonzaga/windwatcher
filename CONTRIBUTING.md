@@ -80,6 +80,13 @@ SQL files use LF line endings because migration checksums are platform-independe
 SQLite integration tests create disposable temporary databases and require no
 external database server or `DATABASE_URL`.
 
+PostgreSQL and MySQL queue migrations live under
+`crates/windwatcher/migrations/queue/{postgres,mysql}` and follow the same
+forward-only/checksum discipline. Redis has no schema migrations. Real network
+adapter tests are explicitly ignored by default; execute them against disposable
+services using the commands in [durable jobs](docs/jobs.md#real-adapter-tests)
+before completing queue-adapter changes.
+
 ## Documentation
 
 Keep the README concise. Put conceptual and operational documentation under

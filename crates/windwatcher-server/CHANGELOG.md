@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Runtime queue provider selection for SQLite, PostgreSQL, MySQL and Redis in the
+  official binary, with common enqueue/worker policy and redacted connection URLs.
+- Redis migration commands report "migrations not applicable"; SQL queues retain
+  explicit migrations and schema checks before worker/job operations.
+
 - Optional SQLite queue configuration and independently targeted storage/queue
   migration and migration-status commands.
 - Separate `windwatcher worker` process role with bounded execution slots,

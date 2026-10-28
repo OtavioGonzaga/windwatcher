@@ -7,7 +7,7 @@ create_if_missing = true
 max_connections = 8
 busy_timeout = "5s"
 
-# Optional durable queue. Its database and migrations are separate from storage.
+# Optional durable queue. SQL databases/migrations are separate from storage.
 # Remove this section to disable queue operations.
 [queue]
 provider = "sqlite"
@@ -29,6 +29,24 @@ shutdown_grace_period = "30s"
 create_if_missing = true
 max_connections = 8
 busy_timeout = "5s"
+
+# To switch providers, change queue.provider above. Only the selected block is used.
+# PostgreSQL/MySQL URLs must target a dedicated, pre-created queue database.
+# Network credentials below are development placeholders; never commit real secrets.
+# [queue.postgres]
+# url = "postgresql://windwatcher:password@localhost/windwatcher_queue"
+# max_connections = 8
+# acquire_timeout = "5s"
+#
+# [queue.mysql]
+# url = "mysql://windwatcher:password@localhost/windwatcher_queue"
+# max_connections = 8
+# acquire_timeout = "5s"
+#
+# [queue.redis]
+# url = "redis://localhost/0"
+# key_prefix = "windwatcher:queue"
+# Redis needs durable persistence and a policy that does not evict queue keys.
 
 [auth]
 registration = "closed"

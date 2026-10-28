@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `PostgresQueue`, `MySqlQueue` and `RedisQueue` behind independent
+  `queue-postgres`, `queue-mysql` and `queue-redis` features, completing the
+  official queue adapter matrix with the same portable lease/job contract.
+- Explicit PostgreSQL/MySQL queue migrations and namespace-isolated Redis atomic
+  transitions with exact microsecond indexes; network adapters use Rustls TLS.
+
 - Portable durable-job identifiers, validated job envelope and state types,
   enqueue policy/application operation, and the reusable `QueueStore` contract.
 - Independent `queue-sqlite` adapter with its own schema, migrations, lease and

@@ -24,8 +24,9 @@ Claim/renew reject leases below one microsecond and expiration overflow before
 mutation, using the common library expiration calculation.
 
 The standalone worker is a separate process role with configurable execution
-slots. SQLite queue state uses a separate database and migration lifecycle from
-primary storage. Maintenance is idempotent and safe under concurrent workers,
+slots. SQL queue state uses a dedicated database and explicit migration lifecycle
+separate from primary storage. Redis uses atomic server-side scripts and has no
+Windwatcher schema migration lifecycle. Maintenance is idempotent and safe under concurrent workers,
 without a distributed maintenance lock. Domain commits do not automatically
 enqueue jobs: there is no outbox, and a future business-critical enqueue may
 require a transactional outbox decision.
@@ -39,5 +40,7 @@ cancellation, recurring scheduling, attempt history, or automatic
 Jobs can be retried and recovered after worker failure without claiming
 exactly-once execution. External effects can repeat, and domain commit followed
 by process failure can leave a selected future job unenqueued. SQLite supports
-multiple worker processes on a local filesystem; multi-host adapters remain a
-separate delivery.
+multiple worker processes on a local filesystem; PostgreSQL, MySQL and Redis
+support multi-host workers without changing queue semantics. Redis persistence
+and protection against key eviction remain operator responsibilities; the adapter
+cannot promise durability beyond the configured Redis service.
