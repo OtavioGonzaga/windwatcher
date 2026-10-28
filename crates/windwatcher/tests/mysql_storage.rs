@@ -10,6 +10,8 @@ use windwatcher::{
 mod conversation_contract;
 #[path = "support/identity_store_contract.rs"]
 mod identity_contract;
+#[path = "support/message_store_contract.rs"]
+mod message_contract;
 #[path = "support/session_store_contract.rs"]
 mod session_contract;
 
@@ -62,6 +64,7 @@ async fn explicit_migration_lifecycle_and_physical_schema() {
         let outsider = windwatcher::User::new(windwatcher::UserId::new(), "conv_outsider".parse().unwrap(), now);
         for user in [&owner, &other, &disabled, &admin, &member, &outsider] { storage.create_local_user(user, &hash).await.unwrap(); }
         conversation_contract::run(&storage, owner.id(), admin.id(), member.id(), outsider.id()).await;
+        message_contract::run(&storage, owner.id(), admin.id(), member.id(), outsider.id()).await;
         session_contract::run(&storage, owner.id(), other.id(), disabled.id(), windwatcher::UserId::new()).await;
         let second_pool = MySqlStorage::connect(MySqlStorageOptions::new(&url)).await.unwrap();
         let direct_a = windwatcher::Conversation::new_direct(windwatcher::ConversationId::new(), now);

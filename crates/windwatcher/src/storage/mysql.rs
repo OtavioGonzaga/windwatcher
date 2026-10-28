@@ -12,6 +12,7 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 
 mod conversations;
+mod messages;
 
 static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations/mysql");
 

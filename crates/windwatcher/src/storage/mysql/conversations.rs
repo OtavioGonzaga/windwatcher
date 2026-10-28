@@ -427,6 +427,18 @@ impl ConversationStore for MySqlStorage {
             if n != 1 {
                 return Ok(LeaveStoreOutcome::OwnershipTransferRequired);
             }
+            // InnoDB does not cascade through the self-referential reply FK.
+            // Clear reply edges and remove history before deleting the parent.
+            sqlx::query("UPDATE messages SET reply_to_message_id=NULL WHERE conversation_id=?")
+                .bind(raw(id))
+                .execute(&mut *tx)
+                .await
+                .map_err(db)?;
+            sqlx::query("DELETE FROM messages WHERE conversation_id=?")
+                .bind(raw(id))
+                .execute(&mut *tx)
+                .await
+                .map_err(db)?;
             sqlx::query("DELETE FROM conversation_members WHERE conversation_id=?")
                 .bind(raw(id))
                 .execute(&mut *tx)
