@@ -42,7 +42,9 @@ pub(crate) async fn run(
         config.clone(),
         stop_rx,
     ));
-    tracing::info!(worker_id = %worker, concurrency = config.concurrency, "worker_started");
+    tracing::info!(worker_id = %worker, concurrency = config.concurrency,
+        default_max_attempts = config.job_policy.default_max_attempts(),
+        max_payload_bytes = config.job_policy.max_payload_bytes(), "worker_started");
     shutdown_signal()
         .await
         .map_err(|e| AppError::Config(format!("failed to listen for shutdown signal: {e}")))?;
@@ -283,6 +285,7 @@ mod tests {
 
     fn settings() -> ResolvedQueueConfig {
         ResolvedQueueConfig {
+            job_policy: JobPolicy::default(),
             concurrency: 2,
             lease_duration: Duration::from_millis(80),
             lease_renew_interval: Duration::from_millis(10),

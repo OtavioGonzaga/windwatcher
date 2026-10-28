@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   renewable leases, retry backoff and graceful shutdown.
 - `jobs list` inspection and operator retry for failed jobs.
 
+### Fixed
+
+- Queue configuration preserves the resolved enqueue payload and attempt policy.
+
 ### Changed
 
 - Realtime publication is driven by library `DomainEvent` outcomes; the WebSocket

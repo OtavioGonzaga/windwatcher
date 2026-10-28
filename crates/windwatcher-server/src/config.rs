@@ -10,8 +10,8 @@ use figment::{
 };
 use serde::{Deserialize, Deserializer, Serialize};
 use windwatcher::{
-    Hs256JwtAccessTokenCodec, Hs256SigningSecret, MessagePolicy, RegistrationPolicy, SessionPolicy,
-    SqliteQueueOptions, SqliteStorageOptions,
+    Hs256JwtAccessTokenCodec, Hs256SigningSecret, JobPolicy, MessagePolicy, RegistrationPolicy,
+    SessionPolicy, SqliteQueueOptions, SqliteStorageOptions,
 };
 
 use crate::{cli::LogFormat, error::AppError, paths::ResolvedPaths};
@@ -96,6 +96,7 @@ pub struct RawQueueSqlite {
 
 #[derive(Clone, Debug)]
 pub struct ResolvedQueueConfig {
+    pub job_policy: JobPolicy,
     pub concurrency: usize,
     pub lease_duration: Duration,
     pub lease_renew_interval: Duration,
@@ -410,9 +411,9 @@ pub fn resolve_queue(
     let completed_retention = queue.completed_retention.parse()?;
     let maintenance_interval = queue.maintenance_interval.parse()?;
     let shutdown_grace_period = queue.shutdown_grace_period.parse()?;
+    let job_policy = JobPolicy::new(queue.max_payload_bytes, queue.default_max_attempts)
+        .map_err(|error| AppError::Config(format!("queue: {error}")))?;
     if queue.concurrency == 0
-        || queue.default_max_attempts == 0
-        || queue.max_payload_bytes == 0
         || lease_duration.is_zero()
         || lease_renew_interval.is_zero()
         || lease_renew_interval >= lease_duration
@@ -478,6 +479,7 @@ pub fn resolve_queue(
         options = options.busy_timeout(timeout);
     }
     Ok(ResolvedQueueConfig {
+        job_policy,
         concurrency: queue.concurrency,
         lease_duration,
         lease_renew_interval,
@@ -639,7 +641,11 @@ mod tests {
         let mut raw = RawConfig::default();
         assert!(resolve_queue(&raw, &paths).is_err());
         raw.queue = Some(RawQueue::default());
+        raw.queue.as_mut().unwrap().default_max_attempts = 20;
+        raw.queue.as_mut().unwrap().max_payload_bytes = 65_536;
         let resolved = resolve_queue(&raw, &paths).unwrap();
+        assert_eq!(resolved.job_policy.default_max_attempts(), 20);
+        assert_eq!(resolved.job_policy.max_payload_bytes(), 65_536);
         assert!(resolved.derived_path);
         let _ = resolved.options;
         assert_eq!(
