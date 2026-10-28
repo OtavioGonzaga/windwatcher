@@ -137,7 +137,7 @@ async fn lock_message_conversation(
             .map_err(db)?;
     raw.map(id).transpose()
 }
-async fn by_id(
+pub(super) async fn by_id(
     c: &mut MySqlConnection,
     message: MessageId,
 ) -> Result<Option<MessageView>, MessageStoreError> {

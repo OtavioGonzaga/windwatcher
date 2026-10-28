@@ -105,7 +105,7 @@ async fn enabled(c: &mut MySqlConnection, id: UserId) -> Result<(), Conversation
         Err(ConversationStoreError::ParticipantUnavailable(id))
     }
 }
-async fn create_group(
+pub(super) async fn create_group(
     c: &mut MySqlConnection,
     conv: &Conversation,
     owner: UserId,
@@ -140,6 +140,53 @@ async fn create_group(
     }
     Ok(())
 }
+pub(super) async fn create_direct(
+    tx: &mut MySqlConnection,
+    conv: &Conversation,
+    a: UserId,
+    b: UserId,
+) -> Result<StartDirectStoreOutcome, ConversationStoreError> {
+    if conv.kind() != ConversationKind::Direct {
+        return Err(ConversationStoreError::InvalidConversationKind {
+            expected: ConversationKind::Direct,
+            actual: conv.kind(),
+        });
+    }
+    let mut pair = [a.as_uuid().into_bytes(), b.as_uuid().into_bytes()];
+    pair.sort();
+    let direct_key = [pair[0].as_slice(), pair[1].as_slice()].concat();
+    if let Some(row) = sqlx::query(
+        "SELECT id,kind,title,created_at,updated_at FROM conversations WHERE direct_key=?",
+    )
+    .bind(&direct_key)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(db)?
+    {
+        return Ok(StartDirectStoreOutcome::Existing(read_conversation(&row)?));
+    }
+    let mut ids = vec![a, b];
+    ids.sort();
+    ids.dedup();
+    for id in ids {
+        enabled(&mut *tx, id).await?;
+    }
+    let created = micros(conv.created_at()).map_err(bad)?;
+    let result=sqlx::query("INSERT IGNORE INTO conversations(id,kind,title,direct_key,created_at,updated_at) VALUES(?,'direct',NULL,?,?,?)")
+        .bind(raw(conv.id())).bind(&direct_key).bind(created).bind(micros(conv.updated_at()).map_err(bad)?)
+        .execute(&mut *tx).await.map_err(db)?;
+    if result.rows_affected() == 0 {
+        let row=sqlx::query("SELECT id,kind,title,created_at,updated_at FROM conversations WHERE direct_key=? FOR UPDATE")
+            .bind(&direct_key).fetch_one(&mut *tx).await.map_err(db)?;
+        return Ok(StartDirectStoreOutcome::Existing(read_conversation(&row)?));
+    }
+    for id in [a, b] {
+        sqlx::query("INSERT IGNORE INTO conversation_members(conversation_id,user_id,role,joined_at) VALUES(?,?,'direct',?)")
+            .bind(raw(conv.id())).bind(raw(id)).bind(created).execute(&mut *tx).await.map_err(db)?;
+    }
+    Ok(StartDirectStoreOutcome::Created(conv.clone()))
+}
+
 impl ConversationStore for MySqlStorage {
     async fn member_ids(&self, id: ConversationId) -> Result<Vec<UserId>, ConversationStoreError> {
         let rows = sqlx::query("SELECT user_id FROM conversation_members WHERE conversation_id=?")

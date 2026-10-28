@@ -112,7 +112,7 @@ async fn enabled(c: &mut PgConnection, id: UserId) -> Result<(), ConversationSto
         Err(ConversationStoreError::ParticipantUnavailable(id))
     }
 }
-async fn create_direct(
+pub(super) async fn create_direct(
     c: &mut PgConnection,
     conv: &Conversation,
     a: UserId,
@@ -162,7 +162,7 @@ async fn create_direct(
         Ok(StartDirectStoreOutcome::Existing(read_conversation(&r)?))
     }
 }
-async fn create_group(
+pub(super) async fn create_group(
     c: &mut PgConnection,
     conv: &Conversation,
     owner: UserId,

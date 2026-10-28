@@ -13,6 +13,7 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 
 static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations/postgres");
+mod commands;
 mod conversations;
 mod messages;
 mod queries;

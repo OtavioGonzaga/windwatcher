@@ -11,6 +11,7 @@ use std::{error::Error, fmt, str::FromStr, time::Duration};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
+mod commands;
 mod conversations;
 mod messages;
 mod queries;

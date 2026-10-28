@@ -8,6 +8,8 @@ use windwatcher::{
 
 #[path = "support/conversation_store_contract.rs"]
 mod conversation_contract;
+#[path = "support/idempotency_contract.rs"]
+mod idempotency_contract;
 #[path = "support/identity_store_contract.rs"]
 mod identity_contract;
 #[path = "support/message_store_contract.rs"]
@@ -72,6 +74,10 @@ async fn explicit_migration_lifecycle_and_physical_schema() {
         let query_outsider = windwatcher::User::new(windwatcher::UserId::new(), "query_outsider".parse().unwrap(), now);
         for user in [&query_owner, &query_peer, &query_outsider] { storage.create_local_user(user, &hash).await.unwrap(); }
         query_contract::run(&storage, query_owner, query_peer, query_outsider).await;
+        let command_actor = windwatcher::User::new(windwatcher::UserId::new(), "command_actor".parse().unwrap(), now);
+        let command_peer = windwatcher::User::new(windwatcher::UserId::new(), "command_peer".parse().unwrap(), now);
+        for user in [&command_actor, &command_peer] { storage.create_local_user(user, &hash).await.unwrap(); }
+        idempotency_contract::run(&storage, command_actor.id(), command_peer.id()).await;
         session_contract::run(&storage, owner.id(), other.id(), disabled.id(), windwatcher::UserId::new()).await;
         let second_pool = MySqlStorage::connect(MySqlStorageOptions::new(&url)).await.unwrap();
         let direct_a = windwatcher::Conversation::new_direct(windwatcher::ConversationId::new(), now);
