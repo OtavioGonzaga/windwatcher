@@ -1,6 +1,8 @@
 use time::OffsetDateTime;
 
-use crate::{CursorError, ListMessagesStoreOutcome, Page, PageRequest, cursor};
+use crate::{
+    CursorError, DomainEvent, ListMessagesStoreOutcome, Outcome, Page, PageRequest, cursor,
+};
 
 use crate::{
     ConversationId, DeleteMessageStoreOutcome as Delete, EditMessageStoreOutcome as Edit,
@@ -177,10 +179,12 @@ impl MarkReadOutcome {
 /// # conversation: ConversationId, now: time::OffsetDateTime)
 /// # -> Result<(), Box<dyn std::error::Error>> {
 /// let policy = MessagePolicy::default();
-/// let message = SendMessage::new(storage, &policy)
+/// let message_outcome = SendMessage::new(storage, &policy)
 ///     .execute(actor, conversation, "hello", None, now).await?;
-/// let reply = SendMessage::new(storage, &policy)
+/// let message = message_outcome.value();
+/// let reply_outcome = SendMessage::new(storage, &policy)
 ///     .execute(actor, conversation, "reply", Some(message.id()), now).await?;
+/// let reply = reply_outcome.value();
 /// // Sending either message did not implicitly advance the read marker.
 /// MarkConversationReadThrough::new(storage)
 ///     .execute(actor, conversation, reply.id()).await?;
@@ -207,7 +211,7 @@ impl<'a, S: MessageStore> SendMessage<'a, S> {
         content: impl Into<String>,
         reply: Option<MessageId>,
         now: OffsetDateTime,
-    ) -> Result<MessageView, SendMessageError> {
+    ) -> Result<Outcome<MessageView>, SendMessageError> {
         let content = MessageContent::new(content).map_err(SendMessageError::InvalidContent)?;
         self.policy
             .validate(&content)
@@ -216,7 +220,10 @@ impl<'a, S: MessageStore> SendMessage<'a, S> {
         let message = Message::new(MessageId::new(), conversation, actor, content, reply, now)
             .map_err(|error| MessageStoreError::Unexpected(Box::new(error)))?;
         match self.store.send_message(&message).await? {
-            Send::Sent(message) => Ok(message),
+            Send::Sent(message) => Ok(Outcome::with_event(
+                message.clone(),
+                DomainEvent::MessageSent { message },
+            )),
             Send::ConversationNotFound => Err(SendMessageError::ConversationNotFound),
             Send::NotMember => Err(SendMessageError::NotMember),
             Send::ReplyTargetNotFound => Err(SendMessageError::ReplyTargetNotFound),
@@ -265,7 +272,7 @@ impl<'a, S: MessageStore> EditMessage<'a, S> {
         message: MessageId,
         content: impl Into<String>,
         now: OffsetDateTime,
-    ) -> Result<EditMessageOutcome, EditMessageError> {
+    ) -> Result<Outcome<EditMessageOutcome>, EditMessageError> {
         let content = MessageContent::new(content).map_err(EditMessageError::InvalidContent)?;
         self.policy
             .validate(&content)
@@ -275,8 +282,11 @@ impl<'a, S: MessageStore> EditMessage<'a, S> {
             .edit_message(actor, message, &content, now)
             .await?
         {
-            Edit::Changed(message) => Ok(EditMessageOutcome::Changed(message)),
-            Edit::Unchanged(message) => Ok(EditMessageOutcome::Unchanged(message)),
+            Edit::Changed(message) => Ok(Outcome::with_event(
+                EditMessageOutcome::Changed(message.clone()),
+                DomainEvent::MessageEdited { message },
+            )),
+            Edit::Unchanged(message) => Ok(Outcome::new(EditMessageOutcome::Unchanged(message))),
             Edit::NotMember => Err(EditMessageError::NotMember),
             Edit::MessageNotFound => Err(EditMessageError::MessageNotFound),
             Edit::NotAuthor => Err(EditMessageError::NotAuthor),
@@ -300,10 +310,15 @@ impl<'a, S: MessageStore> DeleteMessage<'a, S> {
         actor: UserId,
         message: MessageId,
         now: OffsetDateTime,
-    ) -> Result<DeleteMessageOutcome, DeleteMessageError> {
+    ) -> Result<Outcome<DeleteMessageOutcome>, DeleteMessageError> {
         match self.store.delete_message(actor, message, now).await? {
-            Delete::Deleted(message) => Ok(DeleteMessageOutcome::Deleted(message)),
-            Delete::AlreadyDeleted(message) => Ok(DeleteMessageOutcome::AlreadyDeleted(message)),
+            Delete::Deleted(message) => Ok(Outcome::with_event(
+                DeleteMessageOutcome::Deleted(message.clone()),
+                DomainEvent::MessageDeleted { message },
+            )),
+            Delete::AlreadyDeleted(message) => {
+                Ok(Outcome::new(DeleteMessageOutcome::AlreadyDeleted(message)))
+            }
             Delete::NotMember => Err(DeleteMessageError::NotMember),
             Delete::MessageNotFound => Err(DeleteMessageError::MessageNotFound),
             Delete::NotAuthorized => Err(DeleteMessageError::NotAuthorized),
@@ -326,14 +341,21 @@ impl<'a, S: MessageStore> MarkConversationReadThrough<'a, S> {
         actor: UserId,
         conversation: ConversationId,
         message: MessageId,
-    ) -> Result<MarkReadOutcome, MarkConversationReadError> {
+    ) -> Result<Outcome<MarkReadOutcome>, MarkConversationReadError> {
         match self
             .store
             .mark_read_through(actor, conversation, message)
             .await?
         {
-            Read::Changed(state) => Ok(MarkReadOutcome::Changed(state)),
-            Read::Unchanged(state) => Ok(MarkReadOutcome::Unchanged(state)),
+            Read::Changed(state) => Ok(Outcome::with_event(
+                MarkReadOutcome::Changed(state),
+                DomainEvent::ConversationReadStateAdvanced {
+                    user_id: actor,
+                    conversation_id: conversation,
+                    state,
+                },
+            )),
+            Read::Unchanged(state) => Ok(Outcome::new(MarkReadOutcome::Unchanged(state))),
             Read::ConversationNotFound => Err(MarkConversationReadError::ConversationNotFound),
             Read::NotMember => Err(MarkConversationReadError::NotMember),
             Read::MessageNotFound => Err(MarkConversationReadError::MessageNotFound),

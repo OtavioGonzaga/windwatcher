@@ -7,12 +7,12 @@ use tempfile::TempDir;
 use time::{Duration, OffsetDateTime};
 use windwatcher::{
     AddGroupMember, ConversationStore, ConversationStoreError, CreateGroupConversation,
-    GetConversation, GroupRole, IdentityStore, IdentityStoreError, LeaveGroupConversation,
-    LeaveGroupOutcome, MutationOutcome, OsRefreshTokenProvider, PasswordHash,
-    RefreshRotationResult, RefreshToken, RefreshTokenProvider, RenameGroupConversation, Session,
-    SessionId, SessionStore, SetGroupMemberRole, SqliteStorage, SqliteStorageError,
-    SqliteStorageOptions, StartDirectConversation, StartDirectConversationOutcome,
-    TransferGroupOwnership, User, UserId,
+    DomainEvent, GetConversation, GroupRole, IdentityStore, IdentityStoreError,
+    LeaveGroupConversation, LeaveGroupOutcome, MutationOutcome, OsRefreshTokenProvider,
+    PasswordHash, RefreshRotationResult, RefreshToken, RefreshTokenProvider, RemoveGroupMember,
+    RenameGroupConversation, Session, SessionId, SessionStore, SetGroupMemberRole, SqliteStorage,
+    SqliteStorageError, SqliteStorageOptions, StartDirectConversation,
+    StartDirectConversationOutcome, TransferGroupOwnership, User, UserId,
 };
 
 mod support;
@@ -55,6 +55,176 @@ async fn persisted_user(storage: &SqliteStorage, name: &str) -> User {
         .await
         .unwrap();
     user
+}
+
+#[tokio::test]
+async fn conversation_outcomes_emit_only_meaningful_domain_events() {
+    let (_directory, storage) = store().await;
+    let owner = persisted_user(&storage, "event_owner").await;
+    let member = persisted_user(&storage, "event_member").await;
+    let added = persisted_user(&storage, "event_added").await;
+    let now = timestamp(1_700_001_000);
+
+    let direct = StartDirectConversation::new(&storage)
+        .execute(owner.id(), member.id(), now)
+        .await
+        .unwrap();
+    assert!(matches!(
+        direct.events(),
+        [DomainEvent::ConversationCreated {
+            kind: windwatcher::ConversationKind::Direct,
+            ..
+        }]
+    ));
+    assert!(
+        StartDirectConversation::new(&storage)
+            .execute(owner.id(), member.id(), now + Duration::seconds(1))
+            .await
+            .unwrap()
+            .events()
+            .is_empty()
+    );
+
+    let group = CreateGroupConversation::new(&storage)
+        .execute(owner.id(), "events", &[member.id()], now)
+        .await
+        .unwrap();
+    let conversation = group.value().id();
+    assert_eq!(
+        group.events(),
+        [DomainEvent::ConversationCreated {
+            conversation_id: conversation,
+            kind: windwatcher::ConversationKind::Group,
+            occurred_at: now,
+        }]
+    );
+
+    let renamed = RenameGroupConversation::new(&storage)
+        .execute(
+            owner.id(),
+            conversation,
+            "renamed",
+            now + Duration::seconds(1),
+        )
+        .await
+        .unwrap();
+    assert!(
+        matches!(renamed.events(), [DomainEvent::GroupRenamed { conversation_id, .. }] if *conversation_id == conversation)
+    );
+    assert!(
+        RenameGroupConversation::new(&storage)
+            .execute(
+                owner.id(),
+                conversation,
+                "renamed",
+                now + Duration::seconds(2)
+            )
+            .await
+            .unwrap()
+            .events()
+            .is_empty()
+    );
+
+    let joined = AddGroupMember::new(&storage)
+        .execute(
+            owner.id(),
+            conversation,
+            added.id(),
+            now + Duration::seconds(3),
+        )
+        .await
+        .unwrap();
+    assert!(
+        matches!(joined.events(), [DomainEvent::GroupMemberAdded { user_id, .. }] if *user_id == added.id())
+    );
+    assert!(
+        AddGroupMember::new(&storage)
+            .execute(
+                owner.id(),
+                conversation,
+                added.id(),
+                now + Duration::seconds(4)
+            )
+            .await
+            .unwrap()
+            .events()
+            .is_empty()
+    );
+
+    let role = SetGroupMemberRole::new(&storage)
+        .execute(
+            owner.id(),
+            conversation,
+            added.id(),
+            GroupRole::Admin,
+            now + Duration::seconds(5),
+        )
+        .await
+        .unwrap();
+    assert!(
+        matches!(role.events(), [DomainEvent::GroupMemberRoleChanged { user_id, role: GroupRole::Admin, .. }] if *user_id == added.id())
+    );
+    assert!(
+        SetGroupMemberRole::new(&storage)
+            .execute(
+                owner.id(),
+                conversation,
+                added.id(),
+                GroupRole::Admin,
+                now + Duration::seconds(6)
+            )
+            .await
+            .unwrap()
+            .events()
+            .is_empty()
+    );
+
+    let removed = RemoveGroupMember::new(&storage)
+        .execute(
+            owner.id(),
+            conversation,
+            added.id(),
+            now + Duration::seconds(7),
+        )
+        .await
+        .unwrap();
+    assert!(
+        matches!(removed.events(), [DomainEvent::GroupMemberRemoved { user_id, .. }] if *user_id == added.id())
+    );
+
+    let transferred = TransferGroupOwnership::new(&storage)
+        .execute(
+            owner.id(),
+            conversation,
+            member.id(),
+            now + Duration::seconds(8),
+        )
+        .await
+        .unwrap();
+    assert!(
+        matches!(transferred.events(), [DomainEvent::GroupOwnershipTransferred { previous_owner_id, new_owner_id, .. }] if *previous_owner_id == owner.id() && *new_owner_id == member.id())
+    );
+
+    let left = LeaveGroupConversation::new(&storage)
+        .execute(owner.id(), conversation, now + Duration::seconds(9))
+        .await
+        .unwrap();
+    assert!(
+        matches!(left.events(), [DomainEvent::GroupMemberRemoved { user_id, .. }] if *user_id == owner.id())
+    );
+
+    let owner_only = CreateGroupConversation::new(&storage)
+        .execute(member.id(), "owner only", &[], now + Duration::seconds(10))
+        .await
+        .unwrap()
+        .into_value();
+    let deleted = LeaveGroupConversation::new(&storage)
+        .execute(member.id(), owner_only.id(), now + Duration::seconds(11))
+        .await
+        .unwrap();
+    assert!(
+        matches!(deleted.events(), [DomainEvent::GroupDeleted { conversation_id, former_owner_id, .. }] if *conversation_id == owner_only.id() && *former_owner_id == member.id())
+    );
 }
 
 #[tokio::test]
@@ -251,7 +421,7 @@ async fn conversation_store_supports_directs_groups_and_owner_lifecycle() {
         .execute(alice.id(), bob.id(), now)
         .await
         .unwrap();
-    let direct_id = match direct {
+    let direct_id = match direct.into_value() {
         StartDirectConversationOutcome::Created(c)
         | StartDirectConversationOutcome::Existing(c) => c.id(),
     };
@@ -260,7 +430,7 @@ async fn conversation_store_supports_directs_groups_and_owner_lifecycle() {
         .await
         .unwrap();
     assert_eq!(
-        match reverse {
+        match reverse.into_value() {
             StartDirectConversationOutcome::Created(c)
             | StartDirectConversationOutcome::Existing(c) => c.id(),
         },
@@ -270,7 +440,7 @@ async fn conversation_store_supports_directs_groups_and_owner_lifecycle() {
         .execute(alice.id(), alice.id(), now)
         .await
         .unwrap();
-    let self_id = match self_direct {
+    let self_id = match self_direct.into_value() {
         StartDirectConversationOutcome::Created(c)
         | StartDirectConversationOutcome::Existing(c) => c.id(),
     };
@@ -288,60 +458,65 @@ async fn conversation_store_supports_directs_groups_and_owner_lifecycle() {
         .unwrap();
     assert_eq!(
         storage
-            .find_member(group.id(), alice.id())
+            .find_member(group.value().id(), alice.id())
             .await
             .unwrap()
             .unwrap()
             .role(),
         windwatcher::MembershipRole::Group(GroupRole::Owner)
     );
-    AddGroupMember::new(&storage)
-        .execute(alice.id(), group.id(), bob.id(), now)
+    let added = AddGroupMember::new(&storage)
+        .execute(alice.id(), group.value().id(), bob.id(), now)
         .await
         .unwrap();
+    assert!(added.events().is_empty());
     assert_eq!(
         SetGroupMemberRole::new(&storage)
             .execute(
                 alice.id(),
-                group.id(),
+                group.value().id(),
                 bob.id(),
                 GroupRole::Admin,
                 timestamp(101)
             )
             .await
-            .unwrap(),
+            .unwrap()
+            .into_value(),
         MutationOutcome::Changed {
             updated_at: timestamp(101)
         }
     );
     assert_eq!(
         TransferGroupOwnership::new(&storage)
-            .execute(alice.id(), group.id(), bob.id(), timestamp(102))
+            .execute(alice.id(), group.value().id(), bob.id(), timestamp(102))
             .await
-            .unwrap(),
+            .unwrap()
+            .into_value(),
         MutationOutcome::Changed {
             updated_at: timestamp(102)
         }
     );
     assert_eq!(
         LeaveGroupConversation::new(&storage)
-            .execute(alice.id(), group.id(), timestamp(103))
+            .execute(alice.id(), group.value().id(), timestamp(103))
             .await
-            .unwrap(),
+            .unwrap()
+            .into_value(),
         LeaveGroupOutcome::Left {
             updated_at: timestamp(103)
         }
     );
     assert_eq!(
         LeaveGroupConversation::new(&storage)
-            .execute(bob.id(), group.id(), timestamp(104))
+            .execute(bob.id(), group.value().id(), timestamp(104))
             .await
-            .unwrap(),
+            .unwrap()
+            .into_value(),
         LeaveGroupOutcome::ConversationDeleted
     );
     assert!(
         storage
-            .find_conversation(group.id())
+            .find_conversation(group.value().id())
             .await
             .unwrap()
             .is_none()
@@ -393,8 +568,8 @@ async fn concurrent_direct_creation_converges_for_peer_and_self_pairs() {
             StartDirectConversationOutcome::Created(conversation)
             | StartDirectConversationOutcome::Existing(conversation) => conversation.id(),
         };
-        let conversation_id = id(left.await.unwrap());
-        assert_eq!(conversation_id, id(right.await.unwrap()));
+        let conversation_id = id(left.await.unwrap().into_value());
+        assert_eq!(conversation_id, id(right.await.unwrap().into_value()));
         direct_ids.push(conversation_id);
     }
     let url = format!(
@@ -435,47 +610,64 @@ async fn group_permissions_no_ops_and_direct_rejections_are_enforced() {
         SetGroupMemberRole::new(&storage)
             .execute(
                 owner.id(),
-                group.id(),
+                group.value().id(),
                 admin.id(),
                 GroupRole::Admin,
                 timestamp(301)
             )
             .await
-            .unwrap(),
+            .unwrap()
+            .into_value(),
         MutationOutcome::Changed {
             updated_at: timestamp(301)
         }
     );
     assert!(matches!(
         AddGroupMember::new(&storage)
-            .execute(member.id(), group.id(), outsider.id(), timestamp(302))
+            .execute(
+                member.id(),
+                group.value().id(),
+                outsider.id(),
+                timestamp(302)
+            )
             .await,
         Err(windwatcher::AddGroupMemberError::InsufficientPermissions)
     ));
     assert_eq!(
         AddGroupMember::new(&storage)
-            .execute(admin.id(), group.id(), outsider.id(), timestamp(302))
+            .execute(
+                admin.id(),
+                group.value().id(),
+                outsider.id(),
+                timestamp(302)
+            )
             .await
-            .unwrap(),
+            .unwrap()
+            .into_value(),
         windwatcher::AddGroupMemberOutcome::Added {
             updated_at: timestamp(302)
         }
     );
     assert!(matches!(
         GetConversation::new(&storage)
-            .execute(UserId::new(), group.id())
+            .execute(UserId::new(), group.value().id())
             .await,
         Err(windwatcher::GetConversationError::NotMember)
     ));
     assert!(matches!(
         AddGroupMember::new(&storage)
-            .execute(owner.id(), group.id(), UserId::new(), timestamp(302))
+            .execute(
+                owner.id(),
+                group.value().id(),
+                UserId::new(),
+                timestamp(302)
+            )
             .await,
         Err(windwatcher::AddGroupMemberError::ParticipantUnavailable(_))
     ));
     assert!(matches!(
         TransferGroupOwnership::new(&storage)
-            .execute(admin.id(), group.id(), owner.id(), timestamp(303))
+            .execute(admin.id(), group.value().id(), owner.id(), timestamp(303))
             .await,
         Err(windwatcher::TransferGroupOwnershipError::InsufficientPermissions)
     ));
@@ -483,7 +675,7 @@ async fn group_permissions_no_ops_and_direct_rejections_are_enforced() {
         SetGroupMemberRole::new(&storage)
             .execute(
                 admin.id(),
-                group.id(),
+                group.value().id(),
                 owner.id(),
                 GroupRole::Member,
                 timestamp(303)
@@ -492,21 +684,22 @@ async fn group_permissions_no_ops_and_direct_rejections_are_enforced() {
         Err(windwatcher::SetGroupMemberRoleError::OwnerProtected)
     ));
     let before = storage
-        .find_conversation(group.id())
+        .find_conversation(group.value().id())
         .await
         .unwrap()
         .unwrap()
         .updated_at();
     assert_eq!(
         RenameGroupConversation::new(&storage)
-            .execute(admin.id(), group.id(), "Group", timestamp(304))
+            .execute(admin.id(), group.value().id(), "Group", timestamp(304))
             .await
-            .unwrap(),
+            .unwrap()
+            .into_value(),
         MutationOutcome::Unchanged
     );
     assert_eq!(
         storage
-            .find_conversation(group.id())
+            .find_conversation(group.value().id())
             .await
             .unwrap()
             .unwrap()
@@ -515,13 +708,13 @@ async fn group_permissions_no_ops_and_direct_rejections_are_enforced() {
     );
     assert!(matches!(
         RenameGroupConversation::new(&storage)
-            .execute(member.id(), group.id(), "new", timestamp(304))
+            .execute(member.id(), group.value().id(), "new", timestamp(304))
             .await,
         Err(windwatcher::RenameGroupConversationError::InsufficientPermissions)
     ));
     assert!(matches!(
         RenameGroupConversation::new(&storage)
-            .execute(owner.id(), group.id(), "  ", timestamp(304))
+            .execute(owner.id(), group.value().id(), "  ", timestamp(304))
             .await,
         Err(windwatcher::RenameGroupConversationError::InvalidTitle(_))
     ));
@@ -529,7 +722,7 @@ async fn group_permissions_no_ops_and_direct_rejections_are_enforced() {
         .execute(owner.id(), member.id(), now)
         .await
         .unwrap();
-    let direct_id = match direct {
+    let direct_id = match direct.into_value() {
         StartDirectConversationOutcome::Created(c)
         | StartDirectConversationOutcome::Existing(c) => c.id(),
     };
@@ -581,13 +774,13 @@ async fn group_creation_and_ownership_transfer_roll_back_on_persistence_failure(
     inspector.execute("CREATE TRIGGER reject_owner_transfer BEFORE UPDATE OF role ON conversation_members WHEN NEW.role = 'owner' BEGIN SELECT RAISE(ABORT, 'test failure'); END").await.unwrap();
     assert!(matches!(
         TransferGroupOwnership::new(&storage)
-            .execute(owner.id(), group.id(), member.id(), timestamp(402))
+            .execute(owner.id(), group.value().id(), member.id(), timestamp(402))
             .await,
         Err(windwatcher::TransferGroupOwnershipError::Storage(_))
     ));
     assert_eq!(
         storage
-            .find_member(group.id(), owner.id())
+            .find_member(group.value().id(), owner.id())
             .await
             .unwrap()
             .unwrap()
@@ -596,7 +789,7 @@ async fn group_creation_and_ownership_transfer_roll_back_on_persistence_failure(
     );
     assert_eq!(
         storage
-            .find_member(group.id(), member.id())
+            .find_member(group.value().id(), member.id())
             .await
             .unwrap()
             .unwrap()
@@ -625,13 +818,14 @@ async fn group_management_permission_matrix_and_owner_only_lifecycle_hold() {
         SetGroupMemberRole::new(&storage)
             .execute(
                 owner.id(),
-                group.id(),
+                group.value().id(),
                 admin.id(),
                 GroupRole::Admin,
                 timestamp(601)
             )
             .await
-            .unwrap(),
+            .unwrap()
+            .into_value(),
         MutationOutcome::Changed {
             updated_at: timestamp(601)
         }
@@ -640,19 +834,20 @@ async fn group_management_permission_matrix_and_owner_only_lifecycle_hold() {
         SetGroupMemberRole::new(&storage)
             .execute(
                 admin.id(),
-                group.id(),
+                group.value().id(),
                 target.id(),
                 GroupRole::Admin,
                 timestamp(602)
             )
             .await
-            .unwrap(),
+            .unwrap()
+            .into_value(),
         MutationOutcome::Changed {
             updated_at: timestamp(602)
         }
     );
     let before = storage
-        .find_conversation(group.id())
+        .find_conversation(group.value().id())
         .await
         .unwrap()
         .unwrap()
@@ -661,18 +856,19 @@ async fn group_management_permission_matrix_and_owner_only_lifecycle_hold() {
         SetGroupMemberRole::new(&storage)
             .execute(
                 admin.id(),
-                group.id(),
+                group.value().id(),
                 target.id(),
                 GroupRole::Admin,
                 timestamp(603)
             )
             .await
-            .unwrap(),
+            .unwrap()
+            .into_value(),
         MutationOutcome::Unchanged
     );
     assert_eq!(
         storage
-            .find_conversation(group.id())
+            .find_conversation(group.value().id())
             .await
             .unwrap()
             .unwrap()
@@ -681,39 +877,42 @@ async fn group_management_permission_matrix_and_owner_only_lifecycle_hold() {
     );
     assert_eq!(
         windwatcher::RemoveGroupMember::new(&storage)
-            .execute(admin.id(), group.id(), target.id(), timestamp(604))
+            .execute(admin.id(), group.value().id(), target.id(), timestamp(604))
             .await
-            .unwrap(),
+            .unwrap()
+            .into_value(),
         MutationOutcome::Changed {
             updated_at: timestamp(604)
         }
     );
     assert!(matches!(
         windwatcher::RemoveGroupMember::new(&storage)
-            .execute(member.id(), group.id(), admin.id(), timestamp(605))
+            .execute(member.id(), group.value().id(), admin.id(), timestamp(605))
             .await,
         Err(windwatcher::RemoveGroupMemberError::InsufficientPermissions)
     ));
     assert_eq!(
         windwatcher::RemoveGroupMember::new(&storage)
-            .execute(owner.id(), group.id(), admin.id(), timestamp(605))
+            .execute(owner.id(), group.value().id(), admin.id(), timestamp(605))
             .await
-            .unwrap(),
+            .unwrap()
+            .into_value(),
         MutationOutcome::Changed {
             updated_at: timestamp(605)
         }
     );
     assert!(matches!(
         LeaveGroupConversation::new(&storage)
-            .execute(owner.id(), group.id(), timestamp(606))
+            .execute(owner.id(), group.value().id(), timestamp(606))
             .await,
         Err(windwatcher::LeaveGroupConversationError::OwnershipTransferRequired)
     ));
     assert_eq!(
         LeaveGroupConversation::new(&storage)
-            .execute(member.id(), group.id(), timestamp(607))
+            .execute(member.id(), group.value().id(), timestamp(607))
             .await
-            .unwrap(),
+            .unwrap()
+            .into_value(),
         LeaveGroupOutcome::Left {
             updated_at: timestamp(607)
         }
@@ -723,11 +922,13 @@ async fn group_management_permission_matrix_and_owner_only_lifecycle_hold() {
         .execute(owner.id(), "owner only", &[], timestamp(608))
         .await
         .unwrap();
+    let owner_only = owner_only.into_value();
     assert_eq!(
         LeaveGroupConversation::new(&storage)
             .execute(owner.id(), owner_only.id(), timestamp(609))
             .await
-            .unwrap(),
+            .unwrap()
+            .into_value(),
         LeaveGroupOutcome::ConversationDeleted
     );
 }
@@ -1021,7 +1222,7 @@ async fn conversation_schema_uses_strict_binary_keys_and_cascading_memberships()
         .execute(alice.id(), bob.id(), timestamp(500))
         .await
         .unwrap();
-    let direct_id = match direct {
+    let direct_id = match direct.into_value() {
         StartDirectConversationOutcome::Created(c)
         | StartDirectConversationOutcome::Existing(c) => c.id(),
     };
@@ -1080,7 +1281,7 @@ async fn malformed_persisted_conversation_memberships_are_rejected() {
         .execute(alice.id(), bob.id(), timestamp(550))
         .await
         .unwrap();
-    let direct_id = match direct {
+    let direct_id = match direct.into_value() {
         StartDirectConversationOutcome::Created(c)
         | StartDirectConversationOutcome::Existing(c) => c.id(),
     };
@@ -1109,13 +1310,13 @@ async fn malformed_persisted_conversation_memberships_are_rejected() {
     sqlx::query(
         "UPDATE conversation_members SET role = 'direct' WHERE conversation_id = ? AND user_id = ?",
     )
-    .bind(group.id().as_uuid().into_bytes().to_vec())
+    .bind(group.value().id().as_uuid().into_bytes().to_vec())
     .bind(bob.id().as_uuid().into_bytes().to_vec())
     .execute(&inspector)
     .await
     .unwrap();
     assert!(matches!(
-        storage.find_member(group.id(), bob.id()).await,
+        storage.find_member(group.value().id(), bob.id()).await,
         Err(ConversationStoreError::Unexpected(_))
     ));
 }

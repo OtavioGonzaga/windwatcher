@@ -17,7 +17,6 @@ use crate::http::{
     page::PageResponse,
     problem::{ApiProblem, ProblemDetails, ProblemKind},
 };
-use crate::realtime::event::{EventData, Kind};
 
 macro_rules! group_error {
     ($name:ident, $error:ident, {$($pattern:pat => $kind:ident),* $(,)?}) => {
@@ -121,26 +120,13 @@ pub(super) async fn create(
             }
         }
     };
-    let kind = match &request {
-        ConversationCreateRequest::Direct { .. } => Kind::Direct,
-        ConversationCreateRequest::Group { .. } => Kind::Group,
-    };
     let now = OffsetDateTime::now_utc();
-    let result = CreateConversation::new(&state.storage)
+    let outcome = CreateConversation::new(&state.storage)
         .execute(actor.user_id, request, key.as_ref(), now)
         .await
         .map_err(|e| ApiProblem::command(context, e))?;
-    if result.disposition == CreateDisposition::Created {
-        state.realtime.notify(
-            result.value,
-            EventData::ConversationCreated {
-                conversation_id: result.value.to_string(),
-                kind,
-            },
-            now,
-            &[],
-        );
-    }
+    let (result, events) = outcome.into_parts();
+    state.realtime.react_all(events);
     let (status, headers, id) = create_response(result);
     Ok((
         status,
@@ -175,23 +161,12 @@ pub(super) async fn update(
 ) -> Result<Json<ConversationResponse>, ApiProblem> {
     let id = path_identifier(&id, context)?;
     let now = OffsetDateTime::now_utc();
-    let title = request.title.clone();
     let outcome = RenameGroupConversation::new(&state.storage)
         .execute(actor.user_id, id, request.title, now)
         .await
         .map_err(|e| rename_error(context, e))?;
-    if let MutationOutcome::Changed { updated_at } = outcome {
-        state.realtime.notify(
-            id,
-            EventData::ConversationUpdated {
-                conversation_id: id.to_string(),
-                title,
-                updated_at,
-            },
-            now,
-            &[],
-        );
-    }
+    let (_, events) = outcome.into_parts();
+    state.realtime.react_all(events);
     detail(&state, actor.user_id, id, context).await
 }
 
@@ -228,16 +203,8 @@ pub(super) async fn add_member(
         .execute(actor.user_id, id, target, now)
         .await
         .map_err(|e| add_error(context, e))?;
-    if let AddGroupMemberOutcome::Added { updated_at } = outcome {
-        state.realtime.notify_member(
-            id,
-            target,
-            MembershipRole::Group(GroupRole::Member),
-            true,
-            updated_at,
-            now,
-        );
-    }
+    let (outcome, events) = outcome.into_parts();
+    state.realtime.react_all(events);
     let status = if matches!(outcome, AddGroupMemberOutcome::Added { .. }) {
         StatusCode::CREATED
     } else {
@@ -265,16 +232,8 @@ pub(super) async fn update_member(
         .execute(actor.user_id, id, target, role, now)
         .await
         .map_err(|e| role_error(context, e))?;
-    if let MutationOutcome::Changed { updated_at } = outcome {
-        state.realtime.notify_member(
-            id,
-            target,
-            MembershipRole::Group(role),
-            false,
-            updated_at,
-            now,
-        );
-    }
+    let (_, events) = outcome.into_parts();
+    state.realtime.react_all(events);
     member(&state, actor.user_id, id, target, context).await
 }
 
@@ -292,18 +251,8 @@ pub(super) async fn remove_member(
         .execute(actor.user_id, id, target, now)
         .await
         .map_err(|e| remove_error(context, e))?;
-    if let MutationOutcome::Changed { updated_at } = outcome {
-        state.realtime.notify(
-            id,
-            EventData::MemberRemoved {
-                conversation_id: id.to_string(),
-                user_id: target.to_string(),
-                conversation_updated_at: updated_at,
-            },
-            now,
-            &[target],
-        );
-    }
+    let (_, events) = outcome.into_parts();
+    state.realtime.react_all(events);
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -322,11 +271,8 @@ pub(super) async fn transfer_owner(
         .execute(actor.user_id, id, target, now)
         .await
         .map_err(|e| owner_error(context, e))?;
-    if let MutationOutcome::Changed { updated_at } = outcome {
-        state
-            .realtime
-            .notify_owner(id, actor.user_id, target, updated_at, now);
-    }
+    let (_, events) = outcome.into_parts();
+    state.realtime.react_all(events);
     detail(&state, actor.user_id, id, context).await
 }
 
@@ -343,24 +289,7 @@ pub(super) async fn leave(
         .execute(actor.user_id, id, now)
         .await
         .map_err(|e| leave_error(context, e))?;
-    match outcome {
-        LeaveGroupOutcome::Left { updated_at } => state.realtime.notify(
-            id,
-            EventData::MemberRemoved {
-                conversation_id: id.to_string(),
-                user_id: actor.user_id.to_string(),
-                conversation_updated_at: updated_at,
-            },
-            now,
-            &[actor.user_id],
-        ),
-        LeaveGroupOutcome::ConversationDeleted => state.realtime.notify_users(
-            &[actor.user_id],
-            EventData::ConversationDeleted {
-                conversation_id: id.to_string(),
-            },
-            now,
-        ),
-    }
+    let (_, events) = outcome.into_parts();
+    state.realtime.react_all(events);
     Ok(StatusCode::NO_CONTENT)
 }

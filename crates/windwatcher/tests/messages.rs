@@ -292,7 +292,8 @@ fn validates_writes_before_storage_and_preserves_actor_context() {
         let sent: MessageView = SendMessage::new(&echo, &policy)
             .execute(actor, c, " 😀 ", None, now)
             .await
-            .unwrap();
+            .unwrap()
+            .into_value();
         assert_eq!(sent.sender_id(), actor);
         assert!(!sent.is_deleted());
     });
@@ -494,7 +495,8 @@ fn public_outcomes_are_application_types_and_historical_reads_ignore_policy() {
                 EditMessage::new(&Fake(Response::Edit(outcome)), &policy)
                     .execute(actor, message.id(), "", now)
                     .await
-                    .unwrap();
+                    .unwrap()
+                    .into_value();
             assert_eq!(
                 result,
                 if changed {
@@ -511,7 +513,8 @@ fn public_outcomes_are_application_types_and_historical_reads_ignore_policy() {
             let result: DeleteMessageOutcome = DeleteMessage::new(&Fake(Response::Delete(outcome)))
                 .execute(actor, message.id(), now)
                 .await
-                .unwrap();
+                .unwrap()
+                .into_value();
             assert_eq!(
                 result,
                 if changed {
@@ -528,7 +531,8 @@ fn public_outcomes_are_application_types_and_historical_reads_ignore_policy() {
                 })))
                 .execute(actor, c, message.id())
                 .await
-                .unwrap();
+                .unwrap()
+                .into_value();
             assert_eq!(
                 result,
                 if changed {

@@ -325,7 +325,7 @@ mod tests {
             .await
             .unwrap();
         let policy = crate::MessagePolicy::default();
-        crate::SendMessage::new(&store, &policy)
+        let outcome = crate::SendMessage::new(&store, &policy)
             .execute(
                 actor,
                 conversation.id(),
@@ -335,6 +335,7 @@ mod tests {
             )
             .await
             .unwrap();
+        assert_eq!(outcome.events().len(), 1);
         let writer = store.pool.begin_with("BEGIN IMMEDIATE").await.unwrap();
         let reads = tokio::time::timeout(std::time::Duration::from_millis(500), async {
             let page = store

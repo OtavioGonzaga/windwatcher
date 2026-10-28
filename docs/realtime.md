@@ -296,6 +296,8 @@ This PR does not provide `serve`, production listener lifecycle, health/readines
 or graceful process shutdown. Test listeners bind only temporary loopback ports.
 
 `RealtimeEvent` lives entirely in `windwatcher-server` and is not `DomainEvent`.
-Future domain-event reactions can replace explicit post-commit handler hooks via a
-server-side mapper without equating their names/payloads or changing this external
-protocol. See [ADR 0012](adr/0012-websocket-realtime-transport.md).
+The server maps committed library `DomainEvent` values through a server-side
+reaction boundary without equating their names/payloads or changing this external
+protocol. Reactions remain best effort. See [domain events](domain-events.md),
+[ADR 0012](adr/0012-websocket-realtime-transport.md) and
+[ADR 0013](adr/0013-explicit-domain-event-outcomes.md).

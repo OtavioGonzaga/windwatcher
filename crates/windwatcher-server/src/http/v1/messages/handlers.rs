@@ -17,7 +17,6 @@ use crate::http::{
     page::PageResponse,
     problem::{ApiProblem, ProblemDetails, ProblemKind},
 };
-use crate::realtime::event::EventData;
 
 #[utoipa::path(get, path = "/conversations/{conversation_id}/messages", operation_id = "listMessages", tag = "Messages", security(("bearerAuth" = [])), params(("conversation_id" = String, Path, format = Uuid), PaginationQuery), responses((status = 200, body = PageResponse<MessageResponse>), (status = 400, body = ProblemDetails), (status = 401, body = ProblemDetails), (status = 404, body = ProblemDetails), (status = 422, body = ProblemDetails), (status = 429, body = ProblemDetails), (status = 500, body = ProblemDetails)))]
 pub(super) async fn list(
@@ -62,7 +61,7 @@ pub(super) async fn send(
         .as_deref()
         .map(|s| body_identifier(s, context))
         .transpose()?;
-    let result = SendMessageCommand::new(&state.storage, &state.messages)
+    let outcome = SendMessageCommand::new(&state.storage, &state.messages)
         .execute(
             actor.user_id,
             path_identifier(&id, context)?,
@@ -73,17 +72,9 @@ pub(super) async fn send(
         )
         .await
         .map_err(|e| ApiProblem::command(context, e))?;
+    let (result, events) = outcome.into_parts();
+    state.realtime.react_all(events);
     let (status, headers, message) = super::super::conversations::handlers::create_response(result);
-    if status == StatusCode::CREATED {
-        state.realtime.notify(
-            message.conversation_id(),
-            EventData::MessageCreated {
-                message: message.clone().into(),
-            },
-            message.created_at(),
-            &[],
-        );
-    }
     Ok((status, headers, Json(message.into())))
 }
 
@@ -115,7 +106,7 @@ pub(super) async fn edit(
     ApiJson(request): ApiJson<EditMessageRequest>,
 ) -> Result<Json<MessageResponse>, ApiProblem> {
     let now = OffsetDateTime::now_utc();
-    let result = EditMessage::new(&state.storage, &state.messages)
+    let outcome = EditMessage::new(&state.storage, &state.messages)
         .execute(
             actor.user_id,
             path_identifier(&id, context)?,
@@ -136,16 +127,8 @@ pub(super) async fn edit(
             };
             ApiProblem::new(kind, context)
         })?;
-    if let EditMessageOutcome::Changed(ref message) = result {
-        state.realtime.notify(
-            message.conversation_id(),
-            EventData::MessageUpdated {
-                message: message.clone().into(),
-            },
-            now,
-            &[],
-        );
-    }
+    let (result, events) = outcome.into_parts();
+    state.realtime.react_all(events);
     let (EditMessageOutcome::Changed(message) | EditMessageOutcome::Unchanged(message)) = result;
     Ok(Json(message.into()))
 }
@@ -158,7 +141,7 @@ pub(super) async fn delete(
     ApiPath(id): ApiPath<String>,
 ) -> Result<Json<MessageResponse>, ApiProblem> {
     let now = OffsetDateTime::now_utc();
-    let result = DeleteMessage::new(&state.storage)
+    let outcome = DeleteMessage::new(&state.storage)
         .execute(actor.user_id, path_identifier(&id, context)?, now)
         .await
         .map_err(|e| {
@@ -171,16 +154,8 @@ pub(super) async fn delete(
             };
             ApiProblem::new(kind, context)
         })?;
-    if let DeleteMessageOutcome::Deleted(ref message) = result {
-        state.realtime.notify(
-            message.conversation_id(),
-            EventData::MessageDeleted {
-                message: message.clone().into(),
-            },
-            now,
-            &[],
-        );
-    }
+    let (result, events) = outcome.into_parts();
+    state.realtime.react_all(events);
     let (DeleteMessageOutcome::Deleted(message) | DeleteMessageOutcome::AlreadyDeleted(message)) =
         result;
     Ok(Json(message.into()))
@@ -195,8 +170,7 @@ pub(super) async fn read_state(
     ApiJson(request): ApiJson<ReadStateRequest>,
 ) -> Result<Json<ReadStateResponse>, ApiProblem> {
     let id = path_identifier(&id, context)?;
-    let now = OffsetDateTime::now_utc();
-    let result = MarkConversationReadThrough::new(&state.storage)
+    let outcome = MarkConversationReadThrough::new(&state.storage)
         .execute(
             actor.user_id,
             id,
@@ -212,16 +186,7 @@ pub(super) async fn read_state(
             };
             ApiProblem::new(kind, context)
         })?;
-    if let MarkReadOutcome::Changed(read) = result {
-        state.realtime.notify_users(
-            &[actor.user_id],
-            EventData::ReadStateUpdated {
-                conversation_id: id.to_string(),
-                last_read_message_id: read.last_read_message_id.map(|id| id.to_string()),
-                unread_count: read.unread_count,
-            },
-            now,
-        );
-    }
+    let (result, events) = outcome.into_parts();
+    state.realtime.react_all(events);
     Ok(Json(result.state().into()))
 }

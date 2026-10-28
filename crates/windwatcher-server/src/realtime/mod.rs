@@ -3,6 +3,7 @@ mod dispatch;
 pub(crate) mod event;
 mod hub;
 mod notifier;
+mod reaction;
 mod ticket;
 
 use crate::{ResolvedRealtimeConfig, Storage};
