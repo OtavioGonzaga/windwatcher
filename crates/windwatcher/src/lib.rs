@@ -24,7 +24,8 @@ mod queries;
 #[cfg(any(
     feature = "queue-sqlite",
     feature = "queue-postgres",
-    feature = "queue-mysql"
+    feature = "queue-mysql",
+    feature = "queue-redis"
 ))]
 mod queue;
 mod queue_store;
@@ -120,6 +121,8 @@ pub use queue::QueueMigrationStatus;
 pub use queue::{MySqlQueue, MySqlQueueError, MySqlQueueOptions};
 #[cfg(feature = "queue-postgres")]
 pub use queue::{PostgresQueue, PostgresQueueError, PostgresQueueOptions};
+#[cfg(feature = "queue-redis")]
+pub use queue::{RedisQueue, RedisQueueError, RedisQueueOptions};
 #[cfg(feature = "queue-sqlite")]
 pub use queue::{SqliteQueue, SqliteQueueError, SqliteQueueOptions};
 pub use queue_store::{
