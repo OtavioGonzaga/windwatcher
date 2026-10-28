@@ -69,6 +69,7 @@ async fn send(f: &Fixture, reply: Option<MessageId>) -> MessageView {
         .execute(f.owner, f.conversation, "message", reply, now())
         .await
         .unwrap()
+        .into_value()
 }
 
 #[tokio::test]
@@ -110,7 +111,7 @@ async fn keyed_sends_are_atomic_concurrent_persistent_and_store_only_hashes() {
     );
     let a = a.unwrap();
     let b = b.unwrap();
-    assert_eq!(a.value.id(), b.value.id());
+    assert_eq!(a.value().id(), b.value().id());
     assert_ne!(a.disposition, b.disposition);
     let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM messages")
         .fetch_one(&f.pool)
@@ -142,8 +143,8 @@ async fn keyed_sends_are_atomic_concurrent_persistent_and_store_only_hashes() {
         .execute(f.owner, f.conversation, "same", None, Some(&key), now())
         .await
         .unwrap();
-    assert_eq!(replay.value.id(), a.value.id());
-    assert_eq!(replay.disposition, CreateDisposition::Replayed);
+    assert_eq!(replay.value().id(), a.value().id());
+    assert_eq!(replay.value().disposition, CreateDisposition::Replayed);
     sqlx::query("CREATE TRIGGER reject_command_record BEFORE INSERT ON idempotency_records BEGIN SELECT RAISE(ABORT, 'test failure'); END").execute(&f.pool).await.unwrap();
     let other = IdempotencyKey::new("rollback-key").unwrap();
     assert!(
@@ -200,7 +201,7 @@ async fn keyed_groups_are_concurrent_atomic_and_cleanup_keeps_active_records() {
     );
     let a = a.unwrap();
     let b = b.unwrap();
-    assert_eq!(a.value, b.value);
+    assert_eq!(a.value().value, b.value().value);
     assert_ne!(a.disposition, b.disposition);
     let count: i64 =
         sqlx::query_scalar("SELECT COUNT(*) FROM conversations WHERE title = 'one group'")
@@ -244,7 +245,7 @@ async fn keyed_groups_are_concurrent_atomic_and_cleanup_keeps_active_records() {
         )
         .await
         .unwrap();
-    assert_ne!(renewed.value, a.value);
+    assert_ne!(renewed.value(), a.value());
     let active: i64 =
         sqlx::query_scalar("SELECT COUNT(*) FROM idempotency_records WHERE key_hash = ?")
             .bind(failed_key.hash().as_slice())
@@ -770,7 +771,7 @@ async fn storage_rolls_back_failures_rejects_corruption_and_loads_large_history(
             .execute(f.owner, large.id())
             .await
             .unwrap(),
-        large
+        large.clone().into_value()
     );
     let invalid = Message::restore(
         MessageId::new(),
@@ -804,7 +805,7 @@ async fn storage_rolls_back_failures_rejects_corruption_and_loads_large_history(
             .execute(f.owner, large.id())
             .await
             .unwrap(),
-        large
+        large.clone().into_value()
     );
     sqlx::query("DROP TRIGGER reject_message_edit")
         .execute(&f.pool)

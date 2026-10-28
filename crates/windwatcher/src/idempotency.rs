@@ -4,9 +4,9 @@ use sha2::{Digest, Sha256};
 use time::OffsetDateTime;
 
 use crate::{
-    Conversation, ConversationId, ConversationStoreError, GroupTitle, GroupTitleError, Message,
-    MessageContent, MessageContentError, MessageId, MessagePolicy, MessagePolicyError,
-    MessageStoreError, MessageView, QueryStoreError, UserId,
+    Conversation, ConversationId, ConversationStoreError, DomainEvent, GroupTitle, GroupTitleError,
+    Message, MessageContent, MessageContentError, MessageId, MessagePolicy, MessagePolicyError,
+    MessageStoreError, MessageView, Outcome, QueryStoreError, UserId,
 };
 
 /// Validated exact client command key. Debug output deliberately redacts it.
@@ -57,6 +57,14 @@ pub struct CreateResult<T> {
     pub value: T,
     /// Whether creation, semantic reuse or replay occurred.
     pub disposition: CreateDisposition,
+}
+
+impl<T> std::ops::Deref for CreateResult<T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        &self.value
+    }
 }
 
 /// Application conversation creation input, independent of transport JSON.
@@ -216,7 +224,7 @@ impl<'a, S: CreateCommandStore> CreateConversation<'a, S> {
         request: ConversationCreateRequest,
         key: Option<&IdempotencyKey>,
         now: OffsetDateTime,
-    ) -> Result<CreateResult<ConversationId>, CreateCommandError> {
+    ) -> Result<Outcome<CreateResult<ConversationId>>, CreateCommandError> {
         let (conversation, mut participants) = match request {
             ConversationCreateRequest::Direct { participant_id } => (
                 Conversation::new_direct(ConversationId::new(), now),
@@ -240,7 +248,9 @@ impl<'a, S: CreateCommandStore> CreateConversation<'a, S> {
             participants.sort_unstable();
             participants.dedup();
         }
-        self.0
+        let kind = conversation.kind();
+        let result = self
+            .0
             .create_conversation_command(
                 &ConversationCreateCommand {
                     conversation,
@@ -250,7 +260,18 @@ impl<'a, S: CreateCommandStore> CreateConversation<'a, S> {
                 key,
                 now,
             )
-            .await
+            .await?;
+        Ok(match result.disposition {
+            CreateDisposition::Created => Outcome::with_event(
+                result.clone(),
+                DomainEvent::ConversationCreated {
+                    conversation_id: result.value,
+                    kind,
+                    occurred_at: now,
+                },
+            ),
+            CreateDisposition::Existing | CreateDisposition::Replayed => Outcome::new(result),
+        })
     }
 }
 
@@ -273,14 +294,23 @@ impl<'a, S: CreateCommandStore> SendMessageCommand<'a, S> {
         reply: Option<MessageId>,
         key: Option<&IdempotencyKey>,
         now: OffsetDateTime,
-    ) -> Result<CreateResult<MessageView>, CreateCommandError> {
+    ) -> Result<Outcome<CreateResult<MessageView>>, CreateCommandError> {
         let content = MessageContent::new(content).map_err(CreateCommandError::InvalidContent)?;
         self.policy
             .validate(&content)
             .map_err(CreateCommandError::ContentTooLarge)?;
         let message = Message::new(MessageId::new(), conversation, actor, content, reply, now)
             .map_err(|e| CreateCommandError::Message(MessageStoreError::Unexpected(Box::new(e))))?;
-        self.store.send_message_command(&message, key, now).await
+        let result = self.store.send_message_command(&message, key, now).await?;
+        Ok(match result.disposition {
+            CreateDisposition::Created => Outcome::with_event(
+                result.clone(),
+                DomainEvent::MessageSent {
+                    message: result.value.clone(),
+                },
+            ),
+            CreateDisposition::Existing | CreateDisposition::Replayed => Outcome::new(result),
+        })
     }
 }
 

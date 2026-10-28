@@ -112,7 +112,7 @@ pub async fn run<S: MessagingQueryStore + ConversationStore + MessageStore + Ide
     assert_eq!(detail.activity_at, message.created_at());
     assert_eq!(detail.unread_count, 1);
     assert_eq!(detail.membership.last_read_message_id(), None);
-    assert_eq!(detail.last_message.as_ref().unwrap(), &message);
+    assert_eq!(detail.last_message.as_ref().unwrap(), message.value());
     assert!(matches!(
         GetConversationSummary::new(store)
             .execute(outsider.id(), ids[0])
