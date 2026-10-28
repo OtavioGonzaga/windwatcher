@@ -11,7 +11,7 @@ use figment::{
 use serde::{Deserialize, Deserializer, Serialize};
 use windwatcher::{
     Hs256JwtAccessTokenCodec, Hs256SigningSecret, MessagePolicy, RegistrationPolicy, SessionPolicy,
-    SqliteStorageOptions,
+    SqliteQueueOptions, SqliteStorageOptions,
 };
 
 use crate::{cli::LogFormat, error::AppError, paths::ResolvedPaths};
@@ -41,11 +41,64 @@ impl<'de> Deserialize<'de> for DurationValue {
 #[serde(default, deny_unknown_fields)]
 pub struct RawConfig {
     pub storage: RawStorage,
+    pub queue: Option<RawQueue>,
     pub auth: RawAuth,
     pub messages: RawMessages,
     pub http: RawHttp,
     pub realtime: RawRealtime,
     pub logging: RawLogging,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct RawQueue {
+    pub provider: String,
+    pub concurrency: usize,
+    pub lease_duration: DurationValue,
+    pub lease_renew_interval: DurationValue,
+    pub poll_interval: DurationValue,
+    pub default_max_attempts: u32,
+    pub retry_base_delay: DurationValue,
+    pub retry_max_delay: DurationValue,
+    pub max_payload_bytes: usize,
+    pub completed_retention: DurationValue,
+    pub maintenance_interval: DurationValue,
+    pub shutdown_grace_period: DurationValue,
+    pub sqlite: RawQueueSqlite,
+}
+impl Default for RawQueue {
+    fn default() -> Self {
+        Self {
+            provider: "sqlite".into(),
+            concurrency: 1,
+            lease_duration: DurationValue("60s".into()),
+            lease_renew_interval: DurationValue("20s".into()),
+            poll_interval: DurationValue("1s".into()),
+            default_max_attempts: 5,
+            retry_base_delay: DurationValue("1s".into()),
+            retry_max_delay: DurationValue("5m".into()),
+            max_payload_bytes: 262_144,
+            completed_retention: DurationValue("7d".into()),
+            maintenance_interval: DurationValue("5m".into()),
+            shutdown_grace_period: DurationValue("30s".into()),
+            sqlite: RawQueueSqlite::default(),
+        }
+    }
+}
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct RawQueueSqlite {
+    pub path: Option<PathBuf>,
+    pub create_if_missing: Option<bool>,
+    pub max_connections: Option<u32>,
+    pub busy_timeout: Option<DurationValue>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ResolvedQueueConfig {
+    pub options: SqliteQueueOptions,
+    pub create_if_missing: bool,
+    pub derived_path: bool,
 }
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
@@ -320,9 +373,112 @@ pub fn resolve_full(raw: &RawConfig, paths: &ResolvedPaths) -> Result<(), AppErr
     resolve_session(raw)?;
     raw.http.resolve().map_err(AppError::Config)?;
     raw.realtime.resolve().map_err(AppError::Config)?;
+    if raw.queue.is_some() {
+        resolve_queue(raw, paths)?;
+    }
     let _messages = resolve_messages(raw);
     let _jwt = resolve_jwt(raw)?;
     Ok(())
+}
+
+pub fn resolve_queue(
+    raw: &RawConfig,
+    paths: &ResolvedPaths,
+) -> Result<ResolvedQueueConfig, AppError> {
+    let Some(queue) = raw.queue.as_ref() else {
+        return Err(AppError::Config(
+            "queue is not configured; add a [queue] section".into(),
+        ));
+    };
+    if queue.provider != "sqlite" {
+        return Err(AppError::Config("queue.provider must be `sqlite`".into()));
+    }
+    let lease_duration = queue.lease_duration.parse()?;
+    let lease_renew_interval = queue.lease_renew_interval.parse()?;
+    let poll_interval = queue.poll_interval.parse()?;
+    let retry_base_delay = queue.retry_base_delay.parse()?;
+    let retry_max_delay = queue.retry_max_delay.parse()?;
+    let completed_retention = queue.completed_retention.parse()?;
+    let maintenance_interval = queue.maintenance_interval.parse()?;
+    let shutdown_grace_period = queue.shutdown_grace_period.parse()?;
+    if queue.concurrency == 0
+        || queue.default_max_attempts == 0
+        || queue.max_payload_bytes == 0
+        || lease_duration.is_zero()
+        || lease_renew_interval.is_zero()
+        || lease_renew_interval >= lease_duration
+        || poll_interval.is_zero()
+        || retry_base_delay.is_zero()
+        || retry_max_delay < retry_base_delay
+        || completed_retention.is_zero()
+        || maintenance_interval.is_zero()
+        || shutdown_grace_period.is_zero()
+    {
+        return Err(AppError::Config("queue durations, concurrency, payload limit and attempts must be positive; lease_renew_interval must be less than lease_duration and retry_max_delay must be at least retry_base_delay".into()));
+    }
+    let derived_path = queue.sqlite.path.is_none();
+    let path = queue
+        .sqlite
+        .path
+        .clone()
+        .unwrap_or_else(|| paths.data_dir.join("queue.db"));
+    let storage_location = raw
+        .storage
+        .sqlite
+        .as_ref()
+        .and_then(|s| s.url.as_deref())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| paths.data_dir.join("windwatcher.db"));
+    if same_database_path(&path, &storage_location) {
+        return Err(AppError::Config("storage.sqlite and queue.sqlite resolve to the same database file; queue requires a separate database".into()));
+    }
+    let create_if_missing = queue.sqlite.create_if_missing.unwrap_or(true);
+    let mut options = SqliteQueueOptions::new(path.to_string_lossy().to_string())
+        .create_if_missing(create_if_missing);
+    if let Some(connections) = queue.sqlite.max_connections {
+        if connections == 0 {
+            return Err(AppError::Config(
+                "queue.sqlite.max_connections must be greater than zero".into(),
+            ));
+        }
+        options = options.max_connections(connections);
+    }
+    if let Some(timeout) = &queue.sqlite.busy_timeout {
+        let timeout = timeout.parse()?;
+        if timeout.is_zero() {
+            return Err(AppError::Config(
+                "queue.sqlite.busy_timeout must be greater than zero".into(),
+            ));
+        }
+        options = options.busy_timeout(timeout);
+    }
+    Ok(ResolvedQueueConfig {
+        options,
+        create_if_missing,
+        derived_path,
+    })
+}
+
+fn same_database_path(left: &Path, right: &Path) -> bool {
+    fn normalized(path: &Path) -> PathBuf {
+        let value = path.to_string_lossy();
+        let value = value
+            .strip_prefix("sqlite://")
+            .or_else(|| value.strip_prefix("sqlite:"))
+            .or_else(|| value.strip_prefix("file:"))
+            .unwrap_or(&value);
+        let value = value.split('?').next().unwrap_or(value);
+        let path = PathBuf::from(value);
+        if let Ok(canonical) = path.canonicalize() {
+            return canonical;
+        }
+        let parent = path.parent().unwrap_or_else(|| Path::new("."));
+        parent
+            .canonicalize()
+            .unwrap_or_else(|_| parent.to_path_buf())
+            .join(path.file_name().unwrap_or_default())
+    }
+    normalized(left) == normalized(right)
 }
 
 pub fn resolve_messages(raw: &RawConfig) -> MessagePolicy {
@@ -437,6 +593,31 @@ mod tests {
         };
         assert!(resolve_sqlite(&raw, &paths).is_ok());
         assert!(resolve_session(&raw).is_err());
+    }
+
+    #[test]
+    fn queue_configuration_is_optional_separate_and_validated() {
+        let directory = tempfile::TempDir::new().unwrap();
+        let paths = ResolvedPaths {
+            config_file: PathBuf::from("unused"),
+            data_dir: directory.path().to_path_buf(),
+        };
+        let mut raw = RawConfig::default();
+        assert!(resolve_queue(&raw, &paths).is_err());
+        raw.queue = Some(RawQueue::default());
+        let resolved = resolve_queue(&raw, &paths).unwrap();
+        assert!(resolved.derived_path);
+        let _ = resolved.options;
+        assert_eq!(
+            directory.path().join("windwatcher.db"),
+            paths.data_dir.join("windwatcher.db")
+        );
+
+        raw.queue.as_mut().unwrap().lease_renew_interval = DurationValue("60s".into());
+        assert!(resolve_queue(&raw, &paths).is_err());
+        raw.queue.as_mut().unwrap().lease_renew_interval = DurationValue("20s".into());
+        raw.queue.as_mut().unwrap().sqlite.path = Some(paths.data_dir.join("windwatcher.db"));
+        assert!(resolve_queue(&raw, &paths).is_err());
     }
 
     #[test]

@@ -229,6 +229,47 @@ fn migrations_are_explicit_and_user_provisioning_uses_current_schema() {
 }
 
 #[test]
+fn queue_migrations_are_separately_configured_and_targetable() {
+    let directory = TempDir::new().unwrap();
+    let config = config(&directory);
+    command(&config)
+        .args(["migrate", "--queue"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("queue is not configured"));
+    let queue_config = format!(
+        "\n[queue]\nprovider = \"sqlite\"\n\n[queue.sqlite]\npath = {:?}\n",
+        directory.path().join("queue.db").display().to_string()
+    );
+    fs::write(
+        &config,
+        format!("{}{}", fs::read_to_string(&config).unwrap(), queue_config),
+    )
+    .unwrap();
+
+    command(&config)
+        .args(["migrate", "--queue"])
+        .assert()
+        .success();
+    assert!(directory.path().join("queue.db").exists());
+    assert!(!directory.path().join("windwatcher.db").exists());
+    command(&config)
+        .args(["migrate", "--queue", "status"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Queue: SQLite"));
+    command(&config)
+        .args(["migrate", "status", "--queue"])
+        .assert()
+        .success();
+    command(&config)
+        .args(["migrate", "--storage"])
+        .assert()
+        .success();
+    assert!(directory.path().join("windwatcher.db").exists());
+}
+
+#[test]
 fn config_check_resolves_jwt_but_migrate_does_not() {
     let directory = TempDir::new().unwrap();
     let config = config(&directory);

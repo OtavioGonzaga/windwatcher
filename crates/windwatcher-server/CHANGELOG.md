@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Optional SQLite queue configuration and independently targeted storage/queue
+  migration and migration-status commands.
+
 ### Changed
 
 - Realtime publication is driven by library `DomainEvent` outcomes; the WebSocket

@@ -39,7 +39,7 @@ uuid = { version = "1", features = ["v7"] }
 serde_json = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
-windwatcher = { path = "../windwatcher", version = "0.1.0", features = ["sqlite", "jwt-hs256"] }
+windwatcher = { path = "../windwatcher", version = "0.1.0", features = ["sqlite", "queue-sqlite", "jwt-hs256"] }
 zeroize = { version = "1", features = ["serde"] }
 
 [dev-dependencies]

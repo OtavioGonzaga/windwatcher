@@ -7,6 +7,29 @@ create_if_missing = true
 max_connections = 8
 busy_timeout = "5s"
 
+# Optional durable queue. Its database and migrations are separate from storage.
+# Remove this section to disable queue operations.
+[queue]
+provider = "sqlite"
+concurrency = 1
+lease_duration = "60s"
+lease_renew_interval = "20s"
+poll_interval = "1s"
+default_max_attempts = 5
+retry_base_delay = "1s"
+retry_max_delay = "5m"
+max_payload_bytes = 262144
+completed_retention = "7d"
+maintenance_interval = "5m"
+shutdown_grace_period = "30s"
+
+[queue.sqlite]
+# Omit path for the mode-specific queue.db next to windwatcher.db.
+# path = "/var/lib/windwatcher/queue.db"
+create_if_missing = true
+max_connections = 8
+busy_timeout = "5s"
+
 [auth]
 registration = "closed"
 

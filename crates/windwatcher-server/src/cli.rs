@@ -25,10 +25,7 @@ pub struct Cli {
 #[derive(Debug, Subcommand)]
 pub enum Command {
     /// Apply pending database migrations.
-    Migrate {
-        #[command(subcommand)]
-        command: Option<MigrateCommand>,
-    },
+    Migrate(MigrateArgs),
     /// Manage local users.
     User {
         #[command(subcommand)]
@@ -39,6 +36,18 @@ pub enum Command {
         #[command(subcommand)]
         command: ConfigCommand,
     },
+}
+
+#[derive(Debug, Args)]
+pub struct MigrateArgs {
+    /// Target primary storage migrations.
+    #[arg(long, global = true)]
+    pub storage: bool,
+    /// Target queue migrations.
+    #[arg(long, global = true)]
+    pub queue: bool,
+    #[command(subcommand)]
+    pub command: Option<MigrateCommand>,
 }
 
 #[derive(Debug, Subcommand)]
