@@ -98,7 +98,7 @@ pub struct RawQueueSqlite {
     pub path: Option<PathBuf>,
     pub create_if_missing: Option<bool>,
     pub max_connections: Option<u32>,
-    pub busy_timeout: Option<DurationValue>,
+    pub busy_timeout: Option<String>,
 }
 
 #[derive(Clone, Default, Deserialize, Serialize)]
@@ -537,7 +537,7 @@ pub fn resolve_queue(
                             "{field}.acquire_timeout must be a valid duration"
                         ))
                     })?;
-            if timeout.is_zero() {
+            if timeout.is_zero() || std::time::Instant::now().checked_add(timeout).is_none() {
                 return Err(AppError::Config(format!(
                     "{field}.acquire_timeout must be greater than zero"
                 )));
@@ -614,7 +614,9 @@ pub fn resolve_queue(
                 options = options.max_connections(connections);
             }
             if let Some(timeout) = &queue.sqlite.busy_timeout {
-                let timeout = timeout.parse()?;
+                let timeout = humantime::parse_duration(timeout).map_err(|_| {
+                    AppError::Config("queue.sqlite.busy_timeout must be a valid duration".into())
+                })?;
                 if timeout.is_zero() {
                     return Err(AppError::Config(
                         "queue.sqlite.busy_timeout must be greater than zero".into(),
@@ -905,6 +907,12 @@ mod tests {
         assert!(resolve_queue(&raw, &paths).is_ok());
         raw.queue.as_mut().unwrap().provider = "unknown".into();
         assert!(resolve_queue(&raw, &paths).is_err());
+        let raw: RawConfig = Figment::from(Toml::string("[queue]\nprovider='redis'\n[queue.redis]\nurl='redis://localhost/0'\n[queue.sqlite]\nbusy_timeout='not a duration'\nmax_connections=0\n[queue.postgres]\nacquire_timeout='also invalid'\n"))
+            .extract().unwrap();
+        assert!(
+            resolve_queue(&raw, &paths).is_ok(),
+            "unselected provider options must not be validated"
+        );
     }
 
     #[test]

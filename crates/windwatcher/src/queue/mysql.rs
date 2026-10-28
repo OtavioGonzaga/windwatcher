@@ -54,7 +54,12 @@ impl MySqlQueueOptions {
         self.connect_options().map(|_| ())
     }
     fn connect_options(&self) -> Result<MySqlConnectOptions, MySqlQueueError> {
-        if self.max_connections == 0 || self.acquire_timeout.is_zero() {
+        if self.max_connections == 0
+            || self.acquire_timeout.is_zero()
+            || std::time::Instant::now()
+                .checked_add(self.acquire_timeout)
+                .is_none()
+        {
             return Err(MySqlQueueError::Configuration(
                 "pool size and acquire timeout must be positive",
             ));
