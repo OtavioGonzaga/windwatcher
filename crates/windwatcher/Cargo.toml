@@ -15,6 +15,7 @@ jwt-hs256 = ["dep:hmac"]
 sqlite = ["dep:sqlx", "sqlx/sqlite"]
 queue-sqlite = ["dep:sqlx", "sqlx/sqlite"]
 queue-postgres = ["dep:sqlx", "sqlx/postgres", "sqlx/uuid", "sqlx/time", "sqlx/json", "sqlx/tls-rustls-ring"]
+queue-mysql = ["dep:sqlx", "sqlx/mysql", "sqlx/time", "sqlx/json", "sqlx/tls-rustls-ring"]
 
 [dependencies]
 argon2 = { version = "0.5", features = ["std", "zeroize"] }
