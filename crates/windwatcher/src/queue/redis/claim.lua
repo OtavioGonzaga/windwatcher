@@ -8,12 +8,12 @@ for i=1,64 do
     if b and (not a or b < a) then m = b; old = 'leased' end
     local id = job_id(m)
     local k = hash(id)
-    if redis.call('HGET',k,'status') ~= old then error('inconsistent queue index') end
-    local attempts = tonumber(redis.call('HGET',k,'attempts'))
-    local maximum = tonumber(redis.call('HGET',k,'max_attempts'))
-    if not attempts or not maximum or attempts < 0 or maximum < 1 or maximum > 4294967295 then error('invalid queue attempts') end
+    if redis.call('HGET',k,'status') ~= old then corrupt('inconsistent-index') end
+    local field = old == 'pending' and 'available_at' or 'lease_expires_at'
+    if m ~= stored_time(k,field) .. ':' .. id then corrupt('inconsistent-index') end
+    local attempts, maximum = counters(k)
     if attempts >= maximum then
-        if old ~= 'leased' then error('exhausted pending job') end
+        if old ~= 'leased' then corrupt('exhausted-pending') end
         exhausted(k,id,now)
     else
         -- Validate metadata before mutation; payload remains opaque.

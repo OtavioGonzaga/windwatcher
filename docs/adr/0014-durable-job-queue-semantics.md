@@ -23,6 +23,11 @@ floored before comparison/addition; enqueue results match persisted precision.
 Claim/renew reject leases below one microsecond and expiration overflow before
 mutation, using the common library expiration calculation.
 
+Adapters persist the common signed Unix-microsecond representation rather than
+imposing native database timestamp ranges. Payload and failure-text storage must
+preserve values accepted by the portable model; native JSON/text restrictions do
+not become adapter-specific application invariants.
+
 The standalone worker is a separate process role with configurable execution
 slots. SQL queue state uses a dedicated database and explicit migration lifecycle
 separate from primary storage. Redis uses atomic server-side scripts and has no

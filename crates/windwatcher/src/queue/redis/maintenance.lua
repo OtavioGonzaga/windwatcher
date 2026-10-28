@@ -8,13 +8,13 @@ for _,m in ipairs(rows) do
     local id = job_id(m)
     local k = hash(id)
     if phase == '0' then
-        if redis.call('HGET',k,'status') ~= 'leased' then error('inconsistent queue index') end
-        local attempts = tonumber(redis.call('HGET',k,'attempts'))
-        local maximum = tonumber(redis.call('HGET',k,'max_attempts'))
-        if not attempts or not maximum then error('invalid queue attempts') end
+        if redis.call('HGET',k,'status') ~= 'leased' then corrupt('inconsistent-index') end
+        if m ~= stored_time(k,'lease_expires_at') .. ':' .. id then corrupt('inconsistent-index') end
+        local attempts, maximum = counters(k)
         if attempts >= maximum then exhausted(k,id,ARGV[2]); changed = changed+1 end
     else
-        if redis.call('HGET',k,'status') ~= 'completed' then error('inconsistent queue index') end
+        if redis.call('HGET',k,'status') ~= 'completed' then corrupt('inconsistent-index') end
+        if m ~= stored_time(k,'completed_at') .. ':' .. id then corrupt('inconsistent-index') end
         local listing = member(k,id)
         redis.call('ZREM',all,listing)
         redis.call('ZREM',index('completed'),listing)

@@ -133,11 +133,20 @@ timestamps and durations are floored before comparison/addition, including for
 negative Unix timestamps. Enqueue returns the same normalized timestamps that
 are persisted. Claim/renew reject durations below 1 µs or expiration overflow
 before mutating state; lease expiry is computed by the common library helper.
-Physical timestamp ranges remain backend limits: MySQL `DATETIME(6)` supports
-years 1000 through 9999. Unsupported timestamps/payload representations are
-infrastructure errors, never silently truncated or coerced (for example JSONB
-cannot store a JSON string containing NUL). Supported timestamps round-trip at
-exact microsecond precision.
+All adapters persist signed Unix microseconds, not native database date/time
+types. SQLite uses `INTEGER`, PostgreSQL/MySQL use signed `BIGINT`, and Redis
+encodes the same `i64` lexicographically. The supported `OffsetDateTime` range is
+the common model's range, including its minimum and maximum after microsecond
+normalization; no adapter imposes its own year or timezone/session restrictions.
+
+Payloads are opaque serialized UTF-8 JSON: PostgreSQL uses `BYTEA`, MySQL uses
+`MEDIUMBLOB`, SQLite retains text, and Redis retains strings. No database JSON
+parser transforms or restricts their contents. Valid payloads preserve NUL,
+Unicode, numeric values and nesting beyond database JSON/default decoder limits.
+Restoration uses a shared stack-growing decoder without a fixed nesting limit;
+malformed JSON or non-object roots still follow the invalid-payload failure path.
+Diagnostic messages likewise preserve all UTF-8 allowed by `JobFailure`, including
+NUL, within its existing 4096-byte limit; PostgreSQL/MySQL store them as bytes.
 
 ## Redis operations
 

@@ -2,9 +2,7 @@ local id = ARGV[1]
 local k = key(id)
 check_type(k,'hash')
 if not fenced(k,ARGV[2],ARGV[3]) then return 0 end
-local attempts = tonumber(redis.call('HGET',k,'attempts'))
-local maximum = tonumber(redis.call('HGET',k,'max_attempts'))
-if not attempts or not maximum then error('invalid queue attempts') end
+local attempts, maximum = counters(k)
 member(k,id)
 remove_due(k,id,'leased')
 clear_lease(k)

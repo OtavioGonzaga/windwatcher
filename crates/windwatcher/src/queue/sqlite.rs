@@ -224,12 +224,10 @@ fn read_job_with_payload(
     let version =
         u16::try_from(version).map_err(|_| SqliteQueueError::Corrupt("invalid payload version"))?;
     let payload_json: String = row.try_get("payload_json").map_err(db_error)?;
-    let (payload, invalid_payload) = match serde_json::from_str::<serde_json::Value>(&payload_json)
-    {
-        Ok(serde_json::Value::Object(fields)) => (JobPayload::new(fields), false),
-        Ok(_) | Err(_) if allow_invalid_payload => (JobPayload::new(serde_json::Map::new()), true),
-        Ok(_) => return Err(SqliteQueueError::Corrupt("payload root is not object")),
-        Err(_) => return Err(SqliteQueueError::Corrupt("invalid payload JSON")),
+    let (payload, invalid_payload) = match super::payload::restore(payload_json.as_bytes()) {
+        Ok(payload) => (payload, false),
+        Err(_) if allow_invalid_payload => (JobPayload::new(serde_json::Map::new()), true),
+        Err(_) => return Err(SqliteQueueError::Corrupt("invalid payload JSON object")),
     };
     let state = read_status(&row.try_get::<String, _>("status").map_err(db_error)?)?;
     let attempts = u32::try_from(row.try_get::<i64, _>("attempts").map_err(db_error)?)

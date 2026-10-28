@@ -107,11 +107,13 @@ impl From<PostgresQueueError> for QueueStoreError {
 fn db(error: impl Error + Send + Sync + 'static) -> PostgresQueueError {
     PostgresQueueError::Database(Box::new(error))
 }
-fn normalize(value: OffsetDateTime) -> OffsetDateTime {
-    value
-        .to_offset(time::UtcOffset::UTC)
-        .replace_nanosecond(value.nanosecond() / 1000 * 1000)
-        .expect("valid microseconds")
+fn micros(value: OffsetDateTime) -> Result<i64, PostgresQueueError> {
+    i64::try_from(value.unix_timestamp_nanos().div_euclid(1000))
+        .map_err(|_| PostgresQueueError::Corrupt("timestamp out of range"))
+}
+fn datetime(value: i64) -> Result<OffsetDateTime, PostgresQueueError> {
+    OffsetDateTime::from_unix_timestamp_nanos(i128::from(value) * 1000)
+        .map_err(|_| PostgresQueueError::Corrupt("invalid timestamp"))
 }
 fn status(value: JobStatus) -> &'static str {
     match value {
@@ -210,35 +212,43 @@ fn read_job(row: &PgRow) -> Result<Job, PostgresQueueError> {
         "failed" => JobStatus::Failed,
         _ => return Err(PostgresQueueError::Corrupt("unknown status")),
     };
-    let payload: serde_json::Value = row.try_get("payload_json").map_err(db)?;
-    let invalid = !payload.is_object();
-    let payload = JobPayload::new(payload.as_object().cloned().unwrap_or_default());
+    let payload_bytes: Vec<u8> = row.try_get("payload_json").map_err(db)?;
+    let payload = super::payload::restore(&payload_bytes).ok();
+    let invalid = payload.is_none();
+    let payload = payload.unwrap_or_else(|| JobPayload::new(Default::default()));
     let lease = match (
         row.try_get::<Option<Uuid>, _>("lease_id").map_err(db)?,
         row.try_get::<Option<Uuid>, _>("lease_owner").map_err(db)?,
-        row.try_get::<Option<OffsetDateTime>, _>("lease_expires_at")
+        row.try_get::<Option<i64>, _>("lease_expires_at")
             .map_err(db)?,
     ) {
-        (Some(l), Some(w), Some(t)) => Some(JobLease::new(id(l)?, id(w)?, t)),
+        (Some(l), Some(w), Some(t)) => Some(JobLease::new(id(l)?, id(w)?, datetime(t)?)),
         (None, None, None) => None,
         _ => return Err(PostgresQueueError::Corrupt("incoherent lease")),
     };
     let failure = match (
         row.try_get::<Option<String>, _>("last_error_code")
             .map_err(db)?,
-        row.try_get::<Option<String>, _>("last_error_message")
+        row.try_get::<Option<Vec<u8>>, _>("last_error_message")
             .map_err(db)?,
     ) {
         (Some(c), Some(m)) => Some(
             JobFailure::new(
                 JobFailureCode::new(c)
                     .map_err(|_| PostgresQueueError::Corrupt("invalid failure code"))?,
-                m,
+                String::from_utf8(m)
+                    .map_err(|_| PostgresQueueError::Corrupt("invalid failure UTF-8"))?,
             )
             .map_err(|_| PostgresQueueError::Corrupt("invalid failure"))?,
         ),
         (None, None) => None,
         _ => return Err(PostgresQueueError::Corrupt("incoherent failure")),
+    };
+    let optional_time = |name: &str| -> Result<Option<OffsetDateTime>, PostgresQueueError> {
+        row.try_get::<Option<i64>, _>(name)
+            .map_err(db)?
+            .map(datetime)
+            .transpose()
     };
     let mut job = Job::restore(
         id(row.try_get("id").map_err(db)?)?,
@@ -248,16 +258,16 @@ fn read_job(row: &PgRow) -> Result<Job, PostgresQueueError> {
             .map_err(|_| PostgresQueueError::Corrupt("invalid version"))?,
         payload,
         state,
-        row.try_get("available_at").map_err(db)?,
+        datetime(row.try_get("available_at").map_err(db)?)?,
         u32::try_from(row.try_get::<i64, _>("attempts").map_err(db)?)
             .map_err(|_| PostgresQueueError::Corrupt("invalid attempts"))?,
         u32::try_from(row.try_get::<i64, _>("max_attempts").map_err(db)?)
             .map_err(|_| PostgresQueueError::Corrupt("invalid max attempts"))?,
         lease,
         failure,
-        row.try_get("created_at").map_err(db)?,
-        row.try_get("completed_at").map_err(db)?,
-        row.try_get("failed_at").map_err(db)?,
+        datetime(row.try_get("created_at").map_err(db)?)?,
+        optional_time("completed_at")?,
+        optional_time("failed_at")?,
     )
     .map_err(|_| PostgresQueueError::Corrupt("inconsistent job state"))?;
     job.payload_invalid = invalid;
@@ -268,8 +278,8 @@ impl QueueStore for PostgresQueue {
     async fn enqueue(&self, job: &Job) -> Result<(), QueueStoreError> {
         sqlx::query("INSERT INTO queue_jobs (id,kind,payload_version,payload_json,status,available_at,attempts,max_attempts,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)")
             .bind(job.id().as_uuid()).bind(job.kind().as_str()).bind(i32::from(job.payload_version()))
-            .bind(sqlx::types::Json(job.payload())).bind(status(job.status())).bind(job.available_at())
-            .bind(i64::from(job.attempts())).bind(i64::from(job.max_attempts())).bind(job.created_at())
+            .bind(serde_json::to_vec(job.payload()).map_err(db)?).bind(status(job.status())).bind(micros(job.available_at())?)
+            .bind(i64::from(job.attempts())).bind(i64::from(job.max_attempts())).bind(micros(job.created_at())?)
             .execute(&self.pool).await.map_err(db)?;
         Ok(())
     }
@@ -280,8 +290,8 @@ impl QueueStore for PostgresQueue {
         duration: Duration,
         now: OffsetDateTime,
     ) -> Result<Option<ClaimedJob>, QueueStoreError> {
-        let expires = JobLease::expiration(now, duration).map_err(QueueStoreError::new)?;
-        let now = normalize(now);
+        let expires = micros(JobLease::expiration(now, duration).map_err(QueueStoreError::new)?)?;
+        let now = micros(now)?;
         let mut tx = self.pool.begin().await.map_err(db)?;
         sqlx::query("WITH exhausted AS (SELECT id FROM queue_jobs WHERE status='leased' AND lease_expires_at<=$1 AND attempts>=max_attempts LIMIT 64 FOR UPDATE SKIP LOCKED) UPDATE queue_jobs SET status='failed',failed_at=$1,lease_id=NULL,lease_owner=NULL,lease_expires_at=NULL,last_error_code='queue.attempts_exhausted',last_error_message='maximum attempts exhausted' WHERE id IN (SELECT id FROM exhausted)")
             .bind(now).execute(&mut *tx).await.map_err(db)?;
@@ -309,9 +319,9 @@ impl QueueStore for PostgresQueue {
         duration: Duration,
         now: OffsetDateTime,
     ) -> Result<LeaseMutationOutcome, QueueStoreError> {
-        let expires = JobLease::expiration(now, duration).map_err(QueueStoreError::new)?;
+        let expires = micros(JobLease::expiration(now, duration).map_err(QueueStoreError::new)?)?;
         Ok(applied(sqlx::query("UPDATE queue_jobs SET lease_expires_at=$1 WHERE id=$2 AND status='leased' AND lease_id=$3 AND lease_expires_at>$4")
-            .bind(expires).bind(job.as_uuid()).bind(lease.as_uuid()).bind(normalize(now)).execute(&self.pool).await.map_err(db)?.rows_affected()))
+            .bind(expires).bind(job.as_uuid()).bind(lease.as_uuid()).bind(micros(now)?).execute(&self.pool).await.map_err(db)?.rows_affected()))
     }
     async fn complete(
         &self,
@@ -320,7 +330,7 @@ impl QueueStore for PostgresQueue {
         now: OffsetDateTime,
     ) -> Result<LeaseMutationOutcome, QueueStoreError> {
         Ok(applied(sqlx::query("UPDATE queue_jobs SET status='completed',completed_at=$1,lease_id=NULL,lease_owner=NULL,lease_expires_at=NULL,last_error_code=NULL,last_error_message=NULL WHERE id=$2 AND status='leased' AND lease_id=$3 AND lease_expires_at>$1")
-            .bind(normalize(now)).bind(job.as_uuid()).bind(lease.as_uuid()).execute(&self.pool).await.map_err(db)?.rows_affected()))
+            .bind(micros(now)?).bind(job.as_uuid()).bind(lease.as_uuid()).execute(&self.pool).await.map_err(db)?.rows_affected()))
     }
     async fn retry(
         &self,
@@ -331,7 +341,7 @@ impl QueueStore for PostgresQueue {
         now: OffsetDateTime,
     ) -> Result<RetryOutcome, QueueStoreError> {
         let row = sqlx::query("UPDATE queue_jobs SET status=CASE WHEN attempts<max_attempts THEN 'pending' ELSE 'failed' END,available_at=$1,failed_at=CASE WHEN attempts<max_attempts THEN NULL ELSE $2 END,lease_id=NULL,lease_owner=NULL,lease_expires_at=NULL,last_error_code=$3,last_error_message=$4 WHERE id=$5 AND status='leased' AND lease_id=$6 AND lease_expires_at>$2 RETURNING status")
-            .bind(normalize(available_at)).bind(normalize(now)).bind(failure.code().as_str()).bind(failure.message()).bind(job.as_uuid()).bind(lease.as_uuid()).fetch_optional(&self.pool).await.map_err(db)?;
+            .bind(micros(available_at)?).bind(micros(now)?).bind(failure.code().as_str()).bind(failure.message().as_bytes()).bind(job.as_uuid()).bind(lease.as_uuid()).fetch_optional(&self.pool).await.map_err(db)?;
         Ok(match row {
             None => RetryOutcome::LeaseLost,
             Some(row) => {
@@ -351,7 +361,7 @@ impl QueueStore for PostgresQueue {
         now: OffsetDateTime,
     ) -> Result<LeaseMutationOutcome, QueueStoreError> {
         Ok(applied(sqlx::query("UPDATE queue_jobs SET status='failed',failed_at=$1,lease_id=NULL,lease_owner=NULL,lease_expires_at=NULL,last_error_code=$2,last_error_message=$3 WHERE id=$4 AND status='leased' AND lease_id=$5 AND lease_expires_at>$1")
-            .bind(normalize(now)).bind(failure.code().as_str()).bind(failure.message()).bind(job.as_uuid()).bind(lease.as_uuid()).execute(&self.pool).await.map_err(db)?.rows_affected()))
+            .bind(micros(now)?).bind(failure.code().as_str()).bind(failure.message().as_bytes()).bind(job.as_uuid()).bind(lease.as_uuid()).execute(&self.pool).await.map_err(db)?.rows_affected()))
     }
     async fn list(&self, options: QueueListOptions) -> Result<Vec<Job>, QueueStoreError> {
         let rows = sqlx::query("SELECT * FROM queue_jobs WHERE ($1::text IS NULL OR status=$1) ORDER BY created_at DESC,id DESC LIMIT $2")
@@ -367,7 +377,7 @@ impl QueueStore for PostgresQueue {
         now: OffsetDateTime,
     ) -> Result<RetryFailedOutcome, QueueStoreError> {
         let row = sqlx::query("UPDATE queue_jobs SET status='pending',attempts=0,available_at=$1,failed_at=NULL,completed_at=NULL,lease_id=NULL,lease_owner=NULL,lease_expires_at=NULL,last_error_code=NULL,last_error_message=NULL WHERE id=$2 AND status='failed' RETURNING id")
-            .bind(normalize(now)).bind(job.as_uuid()).fetch_optional(&self.pool).await.map_err(db)?;
+            .bind(micros(now)?).bind(job.as_uuid()).fetch_optional(&self.pool).await.map_err(db)?;
         if row.is_some() {
             return Ok(RetryFailedOutcome::Retried);
         }
@@ -388,21 +398,19 @@ impl QueueStore for PostgresQueue {
         now: OffsetDateTime,
         retention: Duration,
     ) -> Result<QueueMaintenanceReport, QueueStoreError> {
-        let now = normalize(now);
+        let now = micros(now)?;
         let exhausted = sqlx::query("UPDATE queue_jobs SET status='failed',failed_at=$1,lease_id=NULL,lease_owner=NULL,lease_expires_at=NULL,last_error_code='queue.attempts_exhausted',last_error_message='maximum attempts exhausted' WHERE status='leased' AND lease_expires_at<=$1 AND attempts>=max_attempts")
             .bind(now).execute(&self.pool).await.map_err(db)?.rows_affected();
-        let cutoff = now.checked_sub(time::Duration::microseconds(
-            i64::try_from(retention.as_micros()).unwrap_or(i64::MAX),
-        ));
-        let pruned = if let Some(cutoff) = cutoff {
+        let cutoff = now
+            .checked_sub(i64::try_from(retention.as_micros()).unwrap_or(i64::MAX))
+            .unwrap_or(i64::MIN);
+        let pruned = {
             sqlx::query("DELETE FROM queue_jobs WHERE status='completed' AND completed_at<=$1")
-                .bind(normalize(cutoff))
+                .bind(cutoff)
                 .execute(&self.pool)
                 .await
                 .map_err(db)?
                 .rows_affected()
-        } else {
-            0
         };
         Ok(QueueMaintenanceReport::new(exhausted, pruned))
     }

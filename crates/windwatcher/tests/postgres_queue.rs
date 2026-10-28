@@ -103,6 +103,75 @@ async fn shared_contract_and_independent_pools() {
             .unwrap(),
         LeaseMutationOutcome::Applied
     );
+    let columns: Vec<(String,String)> = sqlx::query_as("SELECT column_name,data_type FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='queue_jobs'").fetch_all(&mut conn).await.unwrap();
+    for column in [
+        "available_at",
+        "created_at",
+        "lease_expires_at",
+        "completed_at",
+        "failed_at",
+    ] {
+        assert!(columns.contains(&(column.into(), "bigint".into())));
+    }
+    for column in ["payload_json", "last_error_message"] {
+        assert!(columns.contains(&(column.into(), "bytea".into())));
+    }
+    let malformed = EnqueueJob::new(&a, JobPolicy::default())
+        .execute(
+            JobKind::new("test.invalid-payload").unwrap(),
+            1,
+            JobPayload::new(Default::default()),
+            EnqueueOptions::new(),
+            later,
+        )
+        .await
+        .unwrap();
+    sqlx::query("UPDATE queue_jobs SET payload_json=$1 WHERE id=$2")
+        .bind(b"invalid\xff".as_slice())
+        .bind(malformed.id().as_uuid())
+        .execute(&mut conn)
+        .await
+        .unwrap();
+    let claimed = a
+        .claim_next(
+            WorkerId::new(),
+            LeaseId::new(),
+            Duration::from_secs(10),
+            later,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(claimed.job().id(), malformed.id());
+    assert!(claimed.payload_invalid());
+    a.fail(
+        malformed.id(),
+        claimed.lease().id(),
+        &JobFailure::new(
+            JobFailureCode::new("payload.invalid").unwrap(),
+            "invalid payload",
+        )
+        .unwrap(),
+        later,
+    )
+    .await
+    .unwrap();
+    sqlx::query("UPDATE queue_jobs SET last_error_message=$1 WHERE id=$2")
+        .bind(b"invalid\xff".as_slice())
+        .bind(malformed.id().as_uuid())
+        .execute(&mut conn)
+        .await
+        .unwrap();
+    let error = a
+        .list(QueueListOptions::new(None, 100).unwrap())
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        std::error::Error::source(&error)
+            .unwrap()
+            .downcast_ref::<PostgresQueueError>(),
+        Some(PostgresQueueError::Corrupt(_))
+    ));
     let checksum: Vec<u8> =
         sqlx::query_scalar("SELECT checksum FROM _sqlx_migrations WHERE version=1")
             .fetch_one(&mut conn)

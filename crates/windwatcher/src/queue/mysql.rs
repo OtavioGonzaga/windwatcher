@@ -9,7 +9,7 @@ use sqlx::{
     mysql::{MySqlConnectOptions, MySqlPoolOptions, MySqlRow},
 };
 use std::{error::Error, fmt, str::FromStr, time::Duration};
-use time::{OffsetDateTime, PrimitiveDateTime, UtcOffset};
+use time::OffsetDateTime;
 use uuid::Uuid;
 
 static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations/queue/mysql");
@@ -104,16 +104,13 @@ impl From<MySqlQueueError> for QueueStoreError {
 fn db(error: impl Error + Send + Sync + 'static) -> MySqlQueueError {
     MySqlQueueError::Database(Box::new(error))
 }
-fn datetime(value: OffsetDateTime) -> Result<PrimitiveDateTime, MySqlQueueError> {
-    let value = value.to_offset(UtcOffset::UTC);
-    if !(1000..=9999).contains(&value.year()) {
-        return Err(MySqlQueueError::Configuration(
-            "timestamp outside MySQL DATETIME range",
-        ));
-    }
-    Ok(PrimitiveDateTime::new(value.date(), value.time())
-        .replace_nanosecond(value.nanosecond() / 1000 * 1000)
-        .expect("valid microseconds"))
+fn micros(value: OffsetDateTime) -> Result<i64, MySqlQueueError> {
+    i64::try_from(value.unix_timestamp_nanos().div_euclid(1000))
+        .map_err(|_| MySqlQueueError::Corrupt("timestamp out of range"))
+}
+fn datetime(value: i64) -> Result<OffsetDateTime, MySqlQueueError> {
+    OffsetDateTime::from_unix_timestamp_nanos(i128::from(value) * 1000)
+        .map_err(|_| MySqlQueueError::Corrupt("invalid timestamp"))
 }
 fn bytes<T: Into<Uuid>>(value: T) -> Vec<u8> {
     value.into().into_bytes().to_vec()
@@ -221,31 +218,33 @@ fn read_job(row: &MySqlRow) -> Result<Job, MySqlQueueError> {
         "failed" => JobStatus::Failed,
         _ => return Err(MySqlQueueError::Corrupt("unknown status")),
     };
-    let payload: serde_json::Value = row.try_get("payload_json").map_err(db)?;
-    let invalid = !payload.is_object();
-    let payload = JobPayload::new(payload.as_object().cloned().unwrap_or_default());
+    let payload_bytes: Vec<u8> = row.try_get("payload_json").map_err(db)?;
+    let payload = super::payload::restore(&payload_bytes).ok();
+    let invalid = payload.is_none();
+    let payload = payload.unwrap_or_else(|| JobPayload::new(Default::default()));
     let lease = match (
         row.try_get::<Option<Vec<u8>>, _>("lease_id").map_err(db)?,
         row.try_get::<Option<Vec<u8>>, _>("lease_owner")
             .map_err(db)?,
-        row.try_get::<Option<PrimitiveDateTime>, _>("lease_expires_at")
+        row.try_get::<Option<i64>, _>("lease_expires_at")
             .map_err(db)?,
     ) {
-        (Some(l), Some(w), Some(t)) => Some(JobLease::new(id(l)?, id(w)?, t.assume_utc())),
+        (Some(l), Some(w), Some(t)) => Some(JobLease::new(id(l)?, id(w)?, datetime(t)?)),
         (None, None, None) => None,
         _ => return Err(MySqlQueueError::Corrupt("incoherent lease")),
     };
     let failure = match (
         row.try_get::<Option<String>, _>("last_error_code")
             .map_err(db)?,
-        row.try_get::<Option<String>, _>("last_error_message")
+        row.try_get::<Option<Vec<u8>>, _>("last_error_message")
             .map_err(db)?,
     ) {
         (Some(c), Some(m)) => Some(
             JobFailure::new(
                 JobFailureCode::new(c)
                     .map_err(|_| MySqlQueueError::Corrupt("invalid failure code"))?,
-                m,
+                String::from_utf8(m)
+                    .map_err(|_| MySqlQueueError::Corrupt("invalid failure UTF-8"))?,
             )
             .map_err(|_| MySqlQueueError::Corrupt("invalid failure"))?,
         ),
@@ -253,10 +252,10 @@ fn read_job(row: &MySqlRow) -> Result<Job, MySqlQueueError> {
         _ => return Err(MySqlQueueError::Corrupt("incoherent failure")),
     };
     let optional = |name: &str| -> Result<Option<OffsetDateTime>, MySqlQueueError> {
-        Ok(row
-            .try_get::<Option<PrimitiveDateTime>, _>(name)
+        row.try_get::<Option<i64>, _>(name)
             .map_err(db)?
-            .map(PrimitiveDateTime::assume_utc))
+            .map(datetime)
+            .transpose()
     };
     let mut job = Job::restore(
         id(row.try_get("id").map_err(db)?)?,
@@ -266,18 +265,14 @@ fn read_job(row: &MySqlRow) -> Result<Job, MySqlQueueError> {
             .map_err(|_| MySqlQueueError::Corrupt("invalid version"))?,
         payload,
         state,
-        row.try_get::<PrimitiveDateTime, _>("available_at")
-            .map_err(db)?
-            .assume_utc(),
+        datetime(row.try_get("available_at").map_err(db)?)?,
         u32::try_from(row.try_get::<i64, _>("attempts").map_err(db)?)
             .map_err(|_| MySqlQueueError::Corrupt("invalid attempts"))?,
         u32::try_from(row.try_get::<i64, _>("max_attempts").map_err(db)?)
             .map_err(|_| MySqlQueueError::Corrupt("invalid max attempts"))?,
         lease,
         failure,
-        row.try_get::<PrimitiveDateTime, _>("created_at")
-            .map_err(db)?
-            .assume_utc(),
+        datetime(row.try_get("created_at").map_err(db)?)?,
         optional("completed_at")?,
         optional("failed_at")?,
     )
@@ -288,7 +283,7 @@ fn read_job(row: &MySqlRow) -> Result<Job, MySqlQueueError> {
 impl QueueStore for MySqlQueue {
     async fn enqueue(&self, job: &Job) -> Result<(), QueueStoreError> {
         sqlx::query("INSERT INTO queue_jobs (id,kind,payload_version,payload_json,status,available_at,attempts,max_attempts,created_at) VALUES (?,?,?,?,?,?,?,?,?)")
-            .bind(bytes(job.id())).bind(job.kind().as_str()).bind(i32::from(job.payload_version())).bind(sqlx::types::Json(job.payload())).bind(status(job.status())).bind(datetime(job.available_at())?).bind(i64::from(job.attempts())).bind(i64::from(job.max_attempts())).bind(datetime(job.created_at())?).execute(&self.pool).await.map_err(db)?;
+            .bind(bytes(job.id())).bind(job.kind().as_str()).bind(i32::from(job.payload_version())).bind(serde_json::to_vec(job.payload()).map_err(db)?).bind(status(job.status())).bind(micros(job.available_at())?).bind(i64::from(job.attempts())).bind(i64::from(job.max_attempts())).bind(micros(job.created_at())?).execute(&self.pool).await.map_err(db)?;
         Ok(())
     }
     async fn claim_next(
@@ -298,8 +293,8 @@ impl QueueStore for MySqlQueue {
         duration: Duration,
         now: OffsetDateTime,
     ) -> Result<Option<ClaimedJob>, QueueStoreError> {
-        let expires = datetime(JobLease::expiration(now, duration).map_err(QueueStoreError::new)?)?;
-        let now = datetime(now)?;
+        let expires = micros(JobLease::expiration(now, duration).map_err(QueueStoreError::new)?)?;
+        let now = micros(now)?;
         let mut tx = self.pool.begin().await.map_err(db)?;
         let exhausted: Vec<Vec<u8>> = sqlx::query_scalar("SELECT id FROM queue_jobs WHERE status='leased' AND lease_expires_at<=? AND attempts>=max_attempts LIMIT 64 FOR UPDATE SKIP LOCKED").bind(now).fetch_all(&mut *tx).await.map_err(db)?;
         for id in exhausted {
@@ -335,8 +330,8 @@ impl QueueStore for MySqlQueue {
         duration: Duration,
         now: OffsetDateTime,
     ) -> Result<LeaseMutationOutcome, QueueStoreError> {
-        let expires = datetime(JobLease::expiration(now, duration).map_err(QueueStoreError::new)?)?;
-        Ok(applied(sqlx::query("UPDATE queue_jobs SET lease_expires_at=? WHERE id=? AND status='leased' AND lease_id=? AND lease_expires_at>?").bind(expires).bind(bytes(job)).bind(bytes(lease)).bind(datetime(now)?).execute(&self.pool).await.map_err(db)?.rows_affected()))
+        let expires = micros(JobLease::expiration(now, duration).map_err(QueueStoreError::new)?)?;
+        Ok(applied(sqlx::query("UPDATE queue_jobs SET lease_expires_at=? WHERE id=? AND status='leased' AND lease_id=? AND lease_expires_at>?").bind(expires).bind(bytes(job)).bind(bytes(lease)).bind(micros(now)?).execute(&self.pool).await.map_err(db)?.rows_affected()))
     }
     async fn complete(
         &self,
@@ -344,7 +339,7 @@ impl QueueStore for MySqlQueue {
         lease: LeaseId,
         now: OffsetDateTime,
     ) -> Result<LeaseMutationOutcome, QueueStoreError> {
-        let now = datetime(now)?;
+        let now = micros(now)?;
         Ok(applied(sqlx::query("UPDATE queue_jobs SET status='completed',completed_at=?,lease_id=NULL,lease_owner=NULL,lease_expires_at=NULL,last_error_code=NULL,last_error_message=NULL WHERE id=? AND status='leased' AND lease_id=? AND lease_expires_at>?").bind(now).bind(bytes(job)).bind(bytes(lease)).bind(now).execute(&self.pool).await.map_err(db)?.rows_affected()))
     }
     async fn retry(
@@ -355,10 +350,10 @@ impl QueueStore for MySqlQueue {
         available_at: OffsetDateTime,
         now: OffsetDateTime,
     ) -> Result<RetryOutcome, QueueStoreError> {
-        let now = datetime(now)?;
+        let now = micros(now)?;
         let mut tx = self.pool.begin().await.map_err(db)?;
         let changed = sqlx::query("UPDATE queue_jobs SET status=CASE WHEN attempts<max_attempts THEN 'pending' ELSE 'failed' END,available_at=?,failed_at=CASE WHEN attempts<max_attempts THEN NULL ELSE ? END,lease_id=NULL,lease_owner=NULL,lease_expires_at=NULL,last_error_code=?,last_error_message=? WHERE id=? AND status='leased' AND lease_id=? AND lease_expires_at>?")
-            .bind(datetime(available_at)?).bind(now).bind(failure.code().as_str()).bind(failure.message()).bind(bytes(job)).bind(bytes(lease)).bind(now).execute(&mut *tx).await.map_err(db)?.rows_affected();
+            .bind(micros(available_at)?).bind(now).bind(failure.code().as_str()).bind(failure.message().as_bytes()).bind(bytes(job)).bind(bytes(lease)).bind(now).execute(&mut *tx).await.map_err(db)?.rows_affected();
         let result = if changed == 0 {
             RetryOutcome::LeaseLost
         } else {
@@ -383,8 +378,8 @@ impl QueueStore for MySqlQueue {
         failure: &JobFailure,
         now: OffsetDateTime,
     ) -> Result<LeaseMutationOutcome, QueueStoreError> {
-        let now = datetime(now)?;
-        Ok(applied(sqlx::query("UPDATE queue_jobs SET status='failed',failed_at=?,lease_id=NULL,lease_owner=NULL,lease_expires_at=NULL,last_error_code=?,last_error_message=? WHERE id=? AND status='leased' AND lease_id=? AND lease_expires_at>?").bind(now).bind(failure.code().as_str()).bind(failure.message()).bind(bytes(job)).bind(bytes(lease)).bind(now).execute(&self.pool).await.map_err(db)?.rows_affected()))
+        let now = micros(now)?;
+        Ok(applied(sqlx::query("UPDATE queue_jobs SET status='failed',failed_at=?,lease_id=NULL,lease_owner=NULL,lease_expires_at=NULL,last_error_code=?,last_error_message=? WHERE id=? AND status='leased' AND lease_id=? AND lease_expires_at>?").bind(now).bind(failure.code().as_str()).bind(failure.message().as_bytes()).bind(bytes(job)).bind(bytes(lease)).bind(now).execute(&self.pool).await.map_err(db)?.rows_affected()))
     }
     async fn list(&self, options: QueueListOptions) -> Result<Vec<Job>, QueueStoreError> {
         let rows = if let Some(state) = options.status() {
@@ -413,7 +408,7 @@ impl QueueStore for MySqlQueue {
         now: OffsetDateTime,
     ) -> Result<RetryFailedOutcome, QueueStoreError> {
         let mut tx = self.pool.begin().await.map_err(db)?;
-        let changed = sqlx::query("UPDATE queue_jobs SET status='pending',attempts=0,available_at=?,failed_at=NULL,completed_at=NULL,lease_id=NULL,lease_owner=NULL,lease_expires_at=NULL,last_error_code=NULL,last_error_message=NULL WHERE id=? AND status='failed'").bind(datetime(now)?).bind(bytes(job)).execute(&mut *tx).await.map_err(db)?.rows_affected();
+        let changed = sqlx::query("UPDATE queue_jobs SET status='pending',attempts=0,available_at=?,failed_at=NULL,completed_at=NULL,lease_id=NULL,lease_owner=NULL,lease_expires_at=NULL,last_error_code=NULL,last_error_message=NULL WHERE id=? AND status='failed'").bind(micros(now)?).bind(bytes(job)).execute(&mut *tx).await.map_err(db)?.rows_affected();
         let result = if changed == 1 {
             RetryFailedOutcome::Retried
         } else {
@@ -436,7 +431,7 @@ impl QueueStore for MySqlQueue {
         now: OffsetDateTime,
         retention: Duration,
     ) -> Result<QueueMaintenanceReport, QueueStoreError> {
-        let now_sql = datetime(now)?;
+        let now_sql = micros(now)?;
         let mut tx = self.pool.begin().await.map_err(db)?;
         let ids: Vec<Vec<u8>> = sqlx::query_scalar("SELECT id FROM queue_jobs WHERE status='leased' AND lease_expires_at<=? AND attempts>=max_attempts FOR UPDATE SKIP LOCKED").bind(now_sql).fetch_all(&mut *tx).await.map_err(db)?;
         let exhausted = ids.len() as u64;
@@ -444,22 +439,16 @@ impl QueueStore for MySqlQueue {
             sqlx::query("UPDATE queue_jobs SET status='failed',failed_at=?,lease_id=NULL,lease_owner=NULL,lease_expires_at=NULL,last_error_code='queue.attempts_exhausted',last_error_message='maximum attempts exhausted' WHERE id=?").bind(now_sql).bind(id).execute(&mut *tx).await.map_err(db)?;
         }
         let cutoff = now_sql
-            .assume_utc()
-            .checked_sub(time::Duration::microseconds(
-                i64::try_from(retention.as_micros()).unwrap_or(i64::MAX),
-            ))
-            .filter(|t| t.year() >= 1000);
-        let mut pruned = 0;
-        if let Some(cutoff) = cutoff {
-            let ids: Vec<Vec<u8>> = sqlx::query_scalar("SELECT id FROM queue_jobs WHERE status='completed' AND completed_at<=? FOR UPDATE SKIP LOCKED").bind(datetime(cutoff)?).fetch_all(&mut *tx).await.map_err(db)?;
-            pruned = ids.len() as u64;
-            for id in ids {
-                sqlx::query("DELETE FROM queue_jobs WHERE id=?")
-                    .bind(id)
-                    .execute(&mut *tx)
-                    .await
-                    .map_err(db)?;
-            }
+            .checked_sub(i64::try_from(retention.as_micros()).unwrap_or(i64::MAX))
+            .unwrap_or(i64::MIN);
+        let ids: Vec<Vec<u8>> = sqlx::query_scalar("SELECT id FROM queue_jobs WHERE status='completed' AND completed_at<=? FOR UPDATE SKIP LOCKED").bind(cutoff).fetch_all(&mut *tx).await.map_err(db)?;
+        let pruned = ids.len() as u64;
+        for id in ids {
+            sqlx::query("DELETE FROM queue_jobs WHERE id=?")
+                .bind(id)
+                .execute(&mut *tx)
+                .await
+                .map_err(db)?;
         }
         tx.commit().await.map_err(db)?;
         Ok(QueueMaintenanceReport::new(exhausted, pruned))

@@ -35,6 +35,170 @@ async fn cleanup(url: &str, prefix: &str) {
         }
     }
 }
+
+fn assert_corrupt(error: QueueStoreError) {
+    assert!(
+        matches!(
+            std::error::Error::source(&error)
+                .unwrap()
+                .downcast_ref::<RedisQueueError>(),
+            Some(RedisQueueError::Corrupt(_))
+        ),
+        "{error:?}"
+    );
+    assert!(!format!("{error:?}").contains("private-queue-value"));
+}
+
+#[tokio::test]
+#[ignore = "requires disposable Redis; set WINDWATCHER_TEST_REDIS_URL"]
+async fn script_corruption_is_distinct_from_operational_failure() {
+    let url = std::env::var("WINDWATCHER_TEST_REDIS_URL").expect("set WINDWATCHER_TEST_REDIS_URL");
+    let prefix = format!("windwatcher:test:{}", uuid::Uuid::now_v7());
+    let queue = RedisQueue::connect(RedisQueueOptions::new(&url).key_prefix(&prefix))
+        .await
+        .unwrap();
+    let mut conn = redis::Client::open(url.as_str())
+        .unwrap()
+        .get_multiplexed_async_connection()
+        .await
+        .unwrap();
+    let now = OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap();
+    for scenario in ["missing", "index", "attempts", "timestamp", "key-type"] {
+        let job = EnqueueJob::new(&queue, JobPolicy::default())
+            .execute(
+                JobKind::new("test.corruption").unwrap(),
+                1,
+                JobPayload::new(Default::default()),
+                EnqueueOptions::new(),
+                now,
+            )
+            .await
+            .unwrap();
+        let key = format!("{prefix}:job:{}", job.id());
+        match scenario {
+            "missing" => {
+                let _: u64 = redis::cmd("DEL")
+                    .arg(&key)
+                    .query_async(&mut conn)
+                    .await
+                    .unwrap();
+            }
+            "key-type" => {
+                let _: () = redis::cmd("SET")
+                    .arg(&key)
+                    .arg("private-queue-value")
+                    .query_async(&mut conn)
+                    .await
+                    .unwrap();
+            }
+            _ => {
+                let (field, value) = match scenario {
+                    "index" => ("status", "failed"),
+                    "attempts" => ("attempts", "private-queue-value"),
+                    _ => ("available_at", "invalid-time"),
+                };
+                let _: u64 = redis::cmd("HSET")
+                    .arg(&key)
+                    .arg(field)
+                    .arg(value)
+                    .query_async(&mut conn)
+                    .await
+                    .unwrap();
+            }
+        }
+        assert_corrupt(
+            queue
+                .claim_next(WorkerId::new(), LeaseId::new(), Duration::from_secs(1), now)
+                .await
+                .unwrap_err(),
+        );
+        cleanup(&url, &prefix).await;
+    }
+    let job = EnqueueJob::new(&queue, JobPolicy::default())
+        .execute(
+            JobKind::new("test.fenced-corruption").unwrap(),
+            1,
+            JobPayload::new(Default::default()),
+            EnqueueOptions::new().max_attempts(1),
+            now,
+        )
+        .await
+        .unwrap();
+    let duplicate = queue.enqueue(&job).await.unwrap_err();
+    assert!(
+        matches!(
+            std::error::Error::source(&duplicate)
+                .unwrap()
+                .downcast_ref::<RedisQueueError>(),
+            Some(RedisQueueError::Database(_))
+        ),
+        "duplicate ID is an invariant/operational error, not stored corruption"
+    );
+    let claimed = queue
+        .claim_next(WorkerId::new(), LeaseId::new(), Duration::from_secs(1), now)
+        .await
+        .unwrap()
+        .unwrap();
+    // All transitions share the script error mapping, not just list hydration.
+    let _: () = redis::cmd("SET")
+        .arg(format!("{prefix}:index:all"))
+        .arg("private-queue-value")
+        .query_async(&mut conn)
+        .await
+        .unwrap();
+    let failure = JobFailure::new(JobFailureCode::new("test.failure").unwrap(), "safe").unwrap();
+    assert_corrupt(queue.enqueue(&job).await.unwrap_err());
+    assert_corrupt(
+        queue
+            .renew(job.id(), claimed.lease().id(), Duration::from_secs(1), now)
+            .await
+            .unwrap_err(),
+    );
+    assert_corrupt(
+        queue
+            .complete(job.id(), claimed.lease().id(), now)
+            .await
+            .unwrap_err(),
+    );
+    assert_corrupt(
+        queue
+            .retry(job.id(), claimed.lease().id(), &failure, now, now)
+            .await
+            .unwrap_err(),
+    );
+    assert_corrupt(
+        queue
+            .fail(job.id(), claimed.lease().id(), &failure, now)
+            .await
+            .unwrap_err(),
+    );
+    assert_corrupt(queue.retry_failed(job.id(), now).await.unwrap_err());
+    assert_corrupt(
+        queue
+            .maintain(now, Duration::from_secs(1))
+            .await
+            .unwrap_err(),
+    );
+    assert_corrupt(
+        queue
+            .list(QueueListOptions::new(None, 100).unwrap())
+            .await
+            .unwrap_err(),
+    );
+    let _: u64 = redis::cmd("DEL")
+        .arg(format!("{prefix}:index:all"))
+        .arg(format!("{prefix}:job:{}", job.id()))
+        .query_async(&mut conn)
+        .await
+        .unwrap();
+    assert_corrupt(
+        queue
+            .maintain(now + time::Duration::seconds(1), Duration::from_secs(1))
+            .await
+            .unwrap_err(),
+    );
+    cleanup(&url, &prefix).await;
+}
 #[tokio::test]
 #[ignore = "requires disposable Redis; set WINDWATCHER_TEST_REDIS_URL"]
 async fn shared_contract_independent_clients_and_namespace_isolation() {

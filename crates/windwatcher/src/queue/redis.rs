@@ -99,7 +99,42 @@ impl From<RedisQueueError> for QueueStoreError {
     }
 }
 fn db(value: impl Error + Send + Sync + 'static) -> RedisQueueError {
+    if let Some(error) = (&value as &dyn Error).downcast_ref::<redis::RedisError>() {
+        let reason = if error.code() == Some("WRONGTYPE") {
+            Some("indexed queue key has the wrong type")
+        } else {
+            error.detail().and_then(script_corruption)
+        }
+        .or_else(|| {
+            error.clone().into_server_errors().and_then(|errors| {
+                errors.iter().find_map(|(_, error)| {
+                    if error.code() == "WRONGTYPE" {
+                        Some("indexed queue key has the wrong type")
+                    } else {
+                        error.details().and_then(script_corruption)
+                    }
+                })
+            })
+        });
+        if let Some(reason) = reason {
+            return RedisQueueError::Corrupt(reason);
+        }
+    }
     RedisQueueError::Database(Box::new(value))
+}
+// Recognize only application-owned markers and return static, value-free diagnostics.
+fn script_corruption(detail: &str) -> Option<&'static str> {
+    detail
+        .split_whitespace()
+        .find_map(|token| match token.strip_prefix("WW_CORRUPT:")? {
+            "key-type" => Some("queue key has the wrong type"),
+            "missing-indexed-job" => Some("indexed job is missing"),
+            "inconsistent-index" => Some("inconsistent queue index"),
+            "invalid-attempts" => Some("invalid attempt counts"),
+            "exhausted-pending" => Some("pending job has exhausted its attempts"),
+            "invalid-timestamp" => Some("invalid persisted timestamp"),
+            _ => None,
+        })
 }
 fn encode(value: i64) -> String {
     format!("{:016x}", (value as u64) ^ (1_u64 << 63))
@@ -161,9 +196,7 @@ fn read_job(row: &Hash) -> Result<Job, RedisQueueError> {
         "failed" => JobStatus::Failed,
         _ => return Err(RedisQueueError::Corrupt("unknown status")),
     };
-    let payload = serde_json::from_str::<serde_json::Value>(required(row, "payload_json")?)
-        .ok()
-        .and_then(|v| v.as_object().cloned());
+    let payload = super::payload::restore(required(row, "payload_json")?.as_bytes()).ok();
     let invalid = payload.is_none();
     let lease = match (
         row.get("lease_id"),
@@ -192,7 +225,7 @@ fn read_job(row: &Hash) -> Result<Job, RedisQueueError> {
         JobKind::new(required(row, "kind")?)
             .map_err(|_| RedisQueueError::Corrupt("invalid kind"))?,
         parse(required(row, "payload_version")?)?,
-        JobPayload::new(payload.unwrap_or_default()),
+        payload.unwrap_or_else(|| JobPayload::new(Default::default())),
         state,
         datetime(required(row, "available_at")?)?,
         parse(required(row, "attempts")?)?,
@@ -408,17 +441,7 @@ impl QueueStore for RedisQueue {
         let rows: Vec<Hash> = pipeline
             .query_async(&mut self.connection.clone())
             .await
-            .map_err(|error: redis::RedisError| {
-                if error.code() == Some("WRONGTYPE")
-                    || error.clone().into_server_errors().is_some_and(|errors| {
-                        errors.iter().any(|(_, error)| error.code() == "WRONGTYPE")
-                    })
-                {
-                    RedisQueueError::Corrupt("indexed job is not a hash")
-                } else {
-                    db(error)
-                }
-            })?;
+            .map_err(db)?;
         let mut jobs = Vec::with_capacity(rows.len());
         for ((row, id), member) in rows.iter().zip(ids).zip(members) {
             let job = read_job(row)?;

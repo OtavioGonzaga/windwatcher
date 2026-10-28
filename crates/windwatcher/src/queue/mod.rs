@@ -27,3 +27,4 @@ pub use postgres::{PostgresQueue, PostgresQueueError, PostgresQueueOptions};
 pub use redis::{RedisQueue, RedisQueueError, RedisQueueOptions};
 #[cfg(feature = "queue-sqlite")]
 pub use sqlite::{SqliteQueue, SqliteQueueError, SqliteQueueOptions};
+mod payload;
