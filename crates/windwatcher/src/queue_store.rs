@@ -139,7 +139,8 @@ pub trait QueueStore: Sync {
         failure: &JobFailure,
         now: OffsetDateTime,
     ) -> impl Future<Output = Result<LeaseMutationOutcome, QueueStoreError>> + Send;
-    /// Lists jobs, ordered for operator presentation rather than execution.
+    /// Lists jobs by `created_at DESC, id DESC`, with optional status filtering.
+    /// This operator presentation order makes no execution-order guarantee.
     fn list(
         &self,
         options: QueueListOptions,

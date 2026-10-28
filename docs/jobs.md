@@ -72,6 +72,11 @@ Workers periodically finalize exhausted expired leases and prune completed jobs
 older than the configured retention (seven days by default). Maintenance is
 idempotent and concurrency-safe; there is no distributed maintenance lock.
 
+Adapters share the portable queue contract suite, covering expired-lease reclaim
+and stale fencing, attempt exhaustion, permanent failure, manual retry, listing
+order/filtering and concurrent maintenance/retention. Physical schema and
+connection behavior remain adapter-specific tests.
+
 ## SQLite and migrations
 
 Queue SQLite is a separate adapter, database file (`queue.db` by default), and
