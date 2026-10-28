@@ -250,7 +250,23 @@ impl ConversationStore for MySqlStorage {
         c: ConversationId,
         u: UserId,
     ) -> Result<Option<ConversationMember>, ConversationStoreError> {
-        sqlx::query("SELECT m.conversation_id,m.user_id,m.role,m.joined_at,m.last_read_message_id FROM conversation_members m WHERE m.conversation_id=? AND m.user_id=?").bind(raw(c)).bind(raw(u)).fetch_optional(&self.pool).await.map_err(db)?.map(|r|read_member(&r)).transpose()
+        sqlx::query("SELECT m.conversation_id,m.user_id,m.role,m.joined_at,m.last_read_message_id,c.kind FROM conversation_members m JOIN conversations c ON c.id=m.conversation_id WHERE m.conversation_id=? AND m.user_id=?")
+            .bind(raw(c))
+            .bind(raw(u))
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(db)?
+            .map(|row| {
+                let member = read_member(&row)?;
+                let kind: String = row.try_get("kind").map_err(db)?;
+                if matches!((kind.as_str(), member.role()),
+                    ("direct", MembershipRole::Direct) | ("group", MembershipRole::Group(_))) {
+                    Ok(member)
+                } else {
+                    Err(bad("incompatible persisted membership role"))
+                }
+            })
+            .transpose()
     }
     async fn add_group_member(
         &self,

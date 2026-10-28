@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Reject persisted MySQL memberships whose role is incompatible with the
+  conversation kind.
+
 - Serialize SQL message authorization and keyed command reservations, and use
   explicit consistent snapshots independently of database isolation defaults.
 

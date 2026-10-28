@@ -115,6 +115,7 @@ async fn explicit_migration_lifecycle_and_physical_schema() {
         assert_eq!(usize::from(a.unwrap() == windwatcher::RefreshRotationResult::Rotated) + usize::from(b.unwrap() == windwatcher::RefreshRotationResult::Rotated), 1);
         conversation_contract::disabled_memberships(&storage, owner.clone(), other.clone(), disabled.clone()).await;
         let pool = sqlx::MySqlPool::connect(&url).await.unwrap();
+        incompatible_memberships_are_rejected(&storage, &pool, command_actor.id(), command_peer.id()).await;
         authorization_races!(&second_pool, &pool, sqlx::MySql, |id: uuid::Uuid| id.into_bytes().to_vec(), command_actor.id(), command_peer.id());
         let types: Vec<(String, String, String)> = sqlx::query_as("SELECT table_name, column_name, data_type FROM information_schema.columns WHERE table_schema=DATABASE()")
             .fetch_all(&pool).await.unwrap();
@@ -129,6 +130,66 @@ async fn explicit_migration_lifecycle_and_physical_schema() {
     }.await;
     drop_database(&name).await;
     result.unwrap();
+}
+
+async fn incompatible_memberships_are_rejected(
+    storage: &MySqlStorage,
+    pool: &sqlx::MySqlPool,
+    owner: windwatcher::UserId,
+    peer: windwatcher::UserId,
+) {
+    use windwatcher::{
+        Conversation, ConversationId, ConversationStoreError, GroupTitle, StartDirectStoreOutcome,
+    };
+    let now = time::OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap();
+    let group = Conversation::new_group(
+        ConversationId::new(),
+        GroupTitle::new("membership integrity").unwrap(),
+        now,
+    );
+    storage.create_group(&group, owner, &[peer]).await.unwrap();
+    let candidate = Conversation::new_direct(ConversationId::new(), now);
+    let direct = match storage
+        .get_or_create_direct(&candidate, owner, owner)
+        .await
+        .unwrap()
+    {
+        StartDirectStoreOutcome::Created(conversation)
+        | StartDirectStoreOutcome::Existing(conversation) => conversation,
+    };
+    for (conversation, user, invalid_role, valid_role) in [
+        (group.id(), peer, "direct", "member"),
+        (direct.id(), owner, "member", "direct"),
+    ] {
+        let original = storage
+            .find_member(conversation, user)
+            .await
+            .unwrap()
+            .unwrap();
+        // Both role strings satisfy the table CHECK; only kind × role is invalid.
+        sqlx::query("UPDATE conversation_members SET role=? WHERE conversation_id=? AND user_id=?")
+            .bind(invalid_role)
+            .bind(conversation.as_uuid().into_bytes().to_vec())
+            .bind(user.as_uuid().into_bytes().to_vec())
+            .execute(pool)
+            .await
+            .unwrap();
+        assert!(matches!(
+            storage.find_member(conversation, user).await,
+            Err(ConversationStoreError::Unexpected(_))
+        ));
+        sqlx::query("UPDATE conversation_members SET role=? WHERE conversation_id=? AND user_id=?")
+            .bind(valid_role)
+            .bind(conversation.as_uuid().into_bytes().to_vec())
+            .bind(user.as_uuid().into_bytes().to_vec())
+            .execute(pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            storage.find_member(conversation, user).await.unwrap(),
+            Some(original)
+        );
+    }
 }
 
 #[test]

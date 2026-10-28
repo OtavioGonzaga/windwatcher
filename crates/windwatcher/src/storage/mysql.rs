@@ -26,7 +26,8 @@ mod snapshot_regression {
         MySqlStorageOptions,
         sqlx::MySql,
         sqlx::MySqlPool,
-        "WINDWATCHER_TEST_MYSQL_URL"
+        "WINDWATCHER_TEST_MYSQL_URL",
+        "SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED"
     );
 }
 

@@ -22,7 +22,8 @@ mod snapshot_regression {
         PostgresStorageOptions,
         sqlx::Postgres,
         sqlx::PgPool,
-        "WINDWATCHER_TEST_POSTGRES_URL"
+        "WINDWATCHER_TEST_POSTGRES_URL",
+        "SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL READ COMMITTED"
     );
 }
 mod commands;

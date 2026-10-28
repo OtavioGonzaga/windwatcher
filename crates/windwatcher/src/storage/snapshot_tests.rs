@@ -1,7 +1,7 @@
 // Each invocation runs against a disposable test service. Identifiers contain
 // only a fixed prefix and generated UUID hex, never external SQL input.
 macro_rules! snapshot_test {
-    ($storage:ty, $options:ty, $db:ty, $pool:ty, $variable:literal) => {
+    ($storage:ty, $options:ty, $db:ty, $pool:ty, $variable:literal, $session_setup:literal) => {
         #[tokio::test]
         #[ignore = "requires a disposable database; set WINDWATCHER_TEST_*_URL"]
         async fn read_snapshot_survives_read_committed_session_default() {
@@ -11,7 +11,7 @@ macro_rules! snapshot_test {
                 .unwrap();
             // Force the pool's only connection to RC, even if the service is RR.
             let mut connection = storage.pool.acquire().await.unwrap();
-            sqlx::query("SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED")
+            sqlx::query($session_setup)
                 .execute(&mut *connection)
                 .await
                 .unwrap();
