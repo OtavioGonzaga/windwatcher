@@ -2,10 +2,12 @@
 
 use sqlx::{ConnectOptions, Connection};
 use windwatcher::{
-    IdentityStore, PasswordHasher, PostgresStorage, PostgresStorageOptions, RefreshTokenProvider,
-    SessionStore,
+    ConversationStore, IdentityStore, PasswordHasher, PostgresStorage, PostgresStorageOptions,
+    RefreshTokenProvider, SessionStore,
 };
 
+#[path = "support/conversation_store_contract.rs"]
+mod conversation_contract;
 #[path = "support/identity_store_contract.rs"]
 mod identity_contract;
 #[path = "support/session_store_contract.rs"]
@@ -51,16 +53,25 @@ async fn explicit_migration_lifecycle_and_physical_schema() {
         storage.migrate().await.unwrap();
         assert!(storage.check_schema().await.unwrap().is_current());
         identity_contract::run(&storage).await;
-        let hasher = windwatcher::Argon2idPasswordHasher::default();
+        let hasher = windwatcher::Argon2idPasswordHasher;
         let hash = hasher.hash(&windwatcher::SecretPassword::new("integration password".to_owned()).unwrap()).await.unwrap();
         let now = time::OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap();
         let owner = windwatcher::User::new(windwatcher::UserId::new(), "owner_one".parse().unwrap(), now);
         let other = windwatcher::User::new(windwatcher::UserId::new(), "owner_two".parse().unwrap(), now);
         let mut disabled = windwatcher::User::new(windwatcher::UserId::new(), "owner_disabled".parse().unwrap(), now);
         disabled.disable(now);
-        for user in [&owner, &other, &disabled] { storage.create_local_user(user, &hash).await.unwrap(); }
-        session_contract::run(&storage, owner.id(), other.id(), disabled.id(), windwatcher::UserId::new()).await;
+        let admin = windwatcher::User::new(windwatcher::UserId::new(), "conv_admin".parse().unwrap(), now);
+        let member = windwatcher::User::new(windwatcher::UserId::new(), "conv_member".parse().unwrap(), now);
+        let outsider = windwatcher::User::new(windwatcher::UserId::new(), "conv_outsider".parse().unwrap(), now);
+        for user in [&owner, &other, &disabled, &admin, &member, &outsider] { storage.create_local_user(user, &hash).await.unwrap(); }
+        conversation_contract::run(&storage, owner.id(), admin.id(), member.id(), outsider.id()).await;
         let second_pool = PostgresStorage::connect(PostgresStorageOptions::new(&url)).await.unwrap();
+        let direct_a = windwatcher::Conversation::new_direct(windwatcher::ConversationId::new(), now);
+        let direct_b = windwatcher::Conversation::new_direct(windwatcher::ConversationId::new(), now);
+        let (direct_result_a, direct_result_b) = tokio::join!(storage.get_or_create_direct(&direct_a, owner.id(), other.id()), second_pool.get_or_create_direct(&direct_b, other.id(), owner.id()));
+        let id_of = |outcome: windwatcher::StartDirectStoreOutcome| match outcome { windwatcher::StartDirectStoreOutcome::Created(c) | windwatcher::StartDirectStoreOutcome::Existing(c) => c.id() };
+        assert_eq!(id_of(direct_result_a.unwrap()), id_of(direct_result_b.unwrap()));
+        session_contract::run(&storage, owner.id(), other.id(), disabled.id(), windwatcher::UserId::new()).await;
         let first_race = windwatcher::User::new(windwatcher::UserId::new(), "race_username".parse().unwrap(), now);
         let second_race = windwatcher::User::new(windwatcher::UserId::new(), "race_username".parse().unwrap(), now);
         let (left, right) = tokio::join!(storage.create_local_user(&first_race, &hash), second_pool.create_local_user(&second_race, &hash));
@@ -78,6 +89,7 @@ async fn explicit_migration_lifecycle_and_physical_schema() {
         let rotate_at = now + time::Duration::seconds(1);
         let (a, b) = tokio::join!(storage.rotate_refresh_token(session.id(), &old_hash, &replacement_a_hash, rotate_at), second_pool.rotate_refresh_token(session.id(), &old_hash, &replacement_b_hash, rotate_at));
         assert_eq!(usize::from(a.unwrap() == windwatcher::RefreshRotationResult::Rotated) + usize::from(b.unwrap() == windwatcher::RefreshRotationResult::Rotated), 1);
+        conversation_contract::disabled_memberships(&storage, owner.clone(), other.clone(), disabled.clone()).await;
         let pool = sqlx::PgPool::connect(&url).await.unwrap();
         let columns: Vec<(String, String)> = sqlx::query_as("SELECT table_name || '.' || column_name, data_type FROM information_schema.columns WHERE table_schema=current_schema()")
             .fetch_all(&pool).await.unwrap();
