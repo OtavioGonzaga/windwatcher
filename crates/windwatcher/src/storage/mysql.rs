@@ -11,6 +11,8 @@ use std::{error::Error, fmt, str::FromStr, time::Duration};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
+mod conversations;
+
 static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations/mysql");
 
 /// Connection settings for a dedicated MySQL 8 primary-storage database.
