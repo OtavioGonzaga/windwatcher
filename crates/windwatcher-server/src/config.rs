@@ -413,6 +413,8 @@ pub fn resolve_queue(
     let shutdown_grace_period = queue.shutdown_grace_period.parse()?;
     let job_policy = JobPolicy::new(queue.max_payload_bytes, queue.default_max_attempts)
         .map_err(|error| AppError::Config(format!("queue: {error}")))?;
+    windwatcher::JobLease::expiration(time::OffsetDateTime::now_utc(), lease_duration)
+        .map_err(|error| AppError::Config(format!("queue.lease_duration: {error}")))?;
     if queue.concurrency == 0
         || lease_duration.is_zero()
         || lease_renew_interval.is_zero()
@@ -656,6 +658,14 @@ mod tests {
         raw.queue.as_mut().unwrap().lease_renew_interval = DurationValue("60s".into());
         assert!(resolve_queue(&raw, &paths).is_err());
         raw.queue.as_mut().unwrap().lease_renew_interval = DurationValue("20s".into());
+        raw.queue.as_mut().unwrap().lease_duration = DurationValue("999ns".into());
+        assert!(
+            resolve_queue(&raw, &paths)
+                .unwrap_err()
+                .to_string()
+                .contains("at least 1 microsecond")
+        );
+        raw.queue.as_mut().unwrap().lease_duration = DurationValue("60s".into());
         raw.queue.as_mut().unwrap().sqlite.path = Some(paths.data_dir.join("windwatcher.db"));
         assert!(resolve_queue(&raw, &paths).is_err());
     }

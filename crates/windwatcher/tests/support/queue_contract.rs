@@ -8,6 +8,7 @@ pub async fn run<S: QueueStore>(store: &S) {
     enqueue_claim_retry(store).await;
     expired_lease_reclaim(store).await;
     exhaustion_and_manual_retry(store).await;
+    temporal_precision(store).await;
     listing_and_maintenance(store).await;
 }
 
@@ -457,6 +458,86 @@ async fn exhaustion_and_manual_retry<S: QueueStore>(store: &S) {
     assert!(exhausted.lease().is_none());
     assert!(exhausted.last_failure().is_some());
     assert_fenced(store, abandoned.id(), last.lease().id(), at(50)).await;
+}
+
+async fn temporal_precision<S: QueueStore>(store: &S) {
+    let raw = at(55) + TimeDuration::nanoseconds(999);
+    let job = enqueue(store, raw, EnqueueOptions::new().available_at(raw)).await;
+    assert_eq!(job.created_at(), at(55));
+    assert_eq!(job.available_at(), at(55));
+    assert_eq!(listed(store, job.id()).await, job);
+    for duration in [Duration::ZERO, Duration::from_nanos(999), Duration::MAX] {
+        assert!(
+            store
+                .claim_next(WorkerId::new(), LeaseId::new(), duration, raw)
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            listed(store, job.id()).await,
+            job,
+            "invalid duration must not consume an attempt"
+        );
+    }
+    let claimed = store
+        .claim_next(
+            WorkerId::new(),
+            LeaseId::new(),
+            Duration::from_nanos(1999),
+            raw,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(claimed.job().id(), job.id());
+    assert_eq!(
+        claimed.lease().expires_at(),
+        at(55) + TimeDuration::microseconds(1)
+    );
+    assert!(
+        store
+            .renew(
+                job.id(),
+                claimed.lease().id(),
+                Duration::from_nanos(999),
+                raw
+            )
+            .await
+            .is_err()
+    );
+    assert_eq!(listed(store, job.id()).await, *claimed.job());
+    assert_eq!(
+        store
+            .renew(
+                job.id(),
+                claimed.lease().id(),
+                Duration::from_nanos(2999),
+                raw
+            )
+            .await
+            .unwrap(),
+        LeaseMutationOutcome::Applied
+    );
+    let expires = at(55) + TimeDuration::microseconds(2);
+    assert_eq!(
+        listed(store, job.id()).await.lease().unwrap().expires_at(),
+        expires
+    );
+    assert_eq!(
+        store
+            .complete(
+                job.id(),
+                claimed.lease().id(),
+                at(55) + TimeDuration::nanoseconds(1999)
+            )
+            .await
+            .unwrap(),
+        LeaseMutationOutcome::Applied
+    );
+    assert_eq!(
+        listed(store, job.id()).await.completed_at(),
+        Some(at(55) + TimeDuration::microseconds(1))
+    );
 }
 
 async fn listing_and_maintenance<S: QueueStore>(store: &S) {

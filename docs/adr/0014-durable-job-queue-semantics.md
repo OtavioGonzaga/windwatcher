@@ -18,6 +18,11 @@ not proof that its execution is unique. Each successful claim consumes one
 attempt. Retryable failures use bounded exponential backoff with full jitter;
 permanent failures fail immediately. Delayed work remains pending until available.
 
+The portable clock precision is UTC microseconds. Timestamps and durations are
+floored before comparison/addition; enqueue results match persisted precision.
+Claim/renew reject leases below one microsecond and expiration overflow before
+mutation, using the common library expiration calculation.
+
 The standalone worker is a separate process role with configurable execution
 slots. SQLite queue state uses a separate database and migration lifecycle from
 primary storage. Maintenance is idempotent and safe under concurrent workers,

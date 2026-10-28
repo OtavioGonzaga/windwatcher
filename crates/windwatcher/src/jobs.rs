@@ -89,6 +89,7 @@ impl<'a, S: QueueStore> EnqueueJob<'a, S> {
         Self { store, policy }
     }
     /// Validates and persists a new pending job at the caller-supplied time.
+    /// Returned and persisted timestamps are floored to UTC microseconds.
     pub async fn execute(
         &self,
         kind: JobKind,

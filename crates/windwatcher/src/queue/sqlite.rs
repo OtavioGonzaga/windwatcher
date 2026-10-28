@@ -331,16 +331,9 @@ impl QueueStore for SqliteQueue {
         duration: Duration,
         now: OffsetDateTime,
     ) -> Result<Option<ClaimedJob>, QueueStoreError> {
-        if duration.is_zero() {
-            return Err(queue_error(SqliteQueueError::Configuration(
-                "lease duration must be positive".into(),
-            )));
-        }
+        let expiration = JobLease::expiration(now, duration).map_err(QueueStoreError::new)?;
         let now_us = micros(now).map_err(queue_error)?;
-        let lease_us = i64::try_from(duration.as_micros())
-            .ok()
-            .and_then(|d| now_us.checked_add(d))
-            .ok_or_else(|| queue_error(SqliteQueueError::Corrupt("lease expiry out of range")))?;
+        let lease_us = micros(expiration).map_err(queue_error)?;
         sqlx::query("UPDATE queue_jobs SET status='failed', failed_at=?, lease_id=NULL, lease_owner=NULL, lease_expires_at=NULL, last_error_code='queue.attempts_exhausted', last_error_message='maximum attempts exhausted' WHERE status='leased' AND lease_expires_at<=? AND attempts>=max_attempts")
             .bind(now_us).bind(now_us).execute(&self.pool).await.map_err(|e| queue_error(db_error(e)))?;
         let row = sqlx::query("UPDATE queue_jobs SET status='leased', attempts=attempts+1, lease_id=?, lease_owner=?, lease_expires_at=? WHERE id=(SELECT id FROM queue_jobs WHERE attempts<max_attempts AND ((status='pending' AND available_at<=?) OR (status='leased' AND lease_expires_at<=?)) ORDER BY available_at,id LIMIT 1) RETURNING *")
@@ -366,17 +359,9 @@ impl QueueStore for SqliteQueue {
         duration: Duration,
         now: OffsetDateTime,
     ) -> Result<LeaseMutationOutcome, QueueStoreError> {
-        if duration.is_zero() {
-            return Err(queue_error(SqliteQueueError::Configuration(
-                "lease duration must be positive".into(),
-            )));
-        }
+        let expiration = JobLease::expiration(now, duration).map_err(QueueStoreError::new)?;
         let now_us = micros(now).map_err(queue_error)?;
-        let duration_us = i64::try_from(duration.as_micros())
-            .map_err(|_| queue_error(SqliteQueueError::Corrupt("lease duration out of range")))?;
-        let expires = now_us
-            .checked_add(duration_us)
-            .ok_or_else(|| queue_error(SqliteQueueError::Corrupt("lease expiry out of range")))?;
+        let expires = micros(expiration).map_err(queue_error)?;
         let result = sqlx::query("UPDATE queue_jobs SET lease_expires_at=? WHERE id=? AND status='leased' AND lease_id=? AND lease_expires_at>?").bind(expires).bind(uuid_bytes(job)).bind(uuid_bytes(lease)).bind(now_us).execute(&self.pool).await.map_err(|e| queue_error(db_error(e)))?;
         Ok(if result.rows_affected() == 1 {
             LeaseMutationOutcome::Applied

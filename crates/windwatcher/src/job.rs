@@ -1,6 +1,6 @@
-use std::fmt;
+use std::{fmt, time::Duration};
 
-use time::OffsetDateTime;
+use time::{OffsetDateTime, UtcOffset};
 
 use crate::{JobId, LeaseId, WorkerId};
 
@@ -23,6 +23,16 @@ pub enum JobValueError {
     /// Failure message exceeds the portable limit.
     #[error("failure message exceeds 4096 UTF-8 bytes")]
     FailureMessageTooLong,
+    /// Lease duration is below one microsecond or overflows the timestamp range.
+    #[error("lease duration must be at least 1 microsecond and produce a representable expiration")]
+    InvalidLeaseDuration,
+}
+
+fn normalize_timestamp(value: OffsetDateTime) -> OffsetDateTime {
+    value
+        .to_offset(UtcOffset::UTC)
+        .replace_nanosecond(value.nanosecond() / 1000 * 1000)
+        .expect("truncated nanoseconds remain valid")
 }
 
 fn validate_code(value: &str) -> Result<(), JobValueError> {
@@ -158,13 +168,31 @@ pub struct JobLease {
     expires_at: OffsetDateTime,
 }
 impl JobLease {
-    /// Constructs a lease value.
+    /// Constructs a lease value, flooring expiration to UTC microsecond precision.
     pub fn new(id: LeaseId, worker_id: WorkerId, expires_at: OffsetDateTime) -> Self {
         Self {
             id,
             worker_id,
-            expires_at,
+            expires_at: normalize_timestamp(expires_at),
         }
+    }
+    /// Calculates the portable `now + duration` expiration for claim or renewal.
+    ///
+    /// Both inputs are floored to microsecond precision before addition. Durations
+    /// below one microsecond and timestamp overflow are rejected before mutation.
+    pub fn expiration(
+        now: OffsetDateTime,
+        duration: Duration,
+    ) -> Result<OffsetDateTime, JobValueError> {
+        let duration = Duration::new(duration.as_secs(), duration.subsec_micros() * 1000);
+        if duration.is_zero() {
+            return Err(JobValueError::InvalidLeaseDuration);
+        }
+        let duration =
+            time::Duration::try_from(duration).map_err(|_| JobValueError::InvalidLeaseDuration)?;
+        normalize_timestamp(now)
+            .checked_add(duration)
+            .ok_or(JobValueError::InvalidLeaseDuration)
     }
     /// Returns the fencing token.
     pub fn id(&self) -> LeaseId {
@@ -199,7 +227,8 @@ pub struct Job {
     pub(crate) payload_invalid: bool,
 }
 impl Job {
-    /// Restores persisted state while enforcing structural invariants.
+    /// Restores state while enforcing structural invariants and flooring all
+    /// timestamps to the portable UTC microsecond precision.
     #[allow(clippy::too_many_arguments)]
     pub fn restore(
         id: JobId,
@@ -253,14 +282,14 @@ impl Job {
             payload_version,
             payload,
             status,
-            available_at,
+            available_at: normalize_timestamp(available_at),
             attempts,
             max_attempts,
             lease,
             last_failure,
-            created_at,
-            completed_at,
-            failed_at,
+            created_at: normalize_timestamp(created_at),
+            completed_at: completed_at.map(normalize_timestamp),
+            failed_at: failed_at.map(normalize_timestamp),
             payload_invalid: false,
         })
     }
@@ -365,6 +394,25 @@ impl ClaimedJob {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lease_expiration_uses_portable_microseconds_and_rejects_invalid_duration() {
+        let before_epoch = OffsetDateTime::from_unix_timestamp_nanos(-1).unwrap();
+        let lease = JobLease::new(LeaseId::new(), WorkerId::new(), before_epoch);
+        assert_eq!(lease.expires_at().unix_timestamp_nanos(), -1000);
+        let now = OffsetDateTime::from_unix_timestamp_nanos(1999)
+            .unwrap()
+            .to_offset(UtcOffset::from_hms(2, 0, 0).unwrap());
+        let expires = JobLease::expiration(now, Duration::from_nanos(1999)).unwrap();
+        assert_eq!(expires.unix_timestamp_nanos(), 2000);
+        assert_eq!(expires.offset(), UtcOffset::UTC);
+        for duration in [Duration::ZERO, Duration::from_nanos(999), Duration::MAX] {
+            assert_eq!(
+                JobLease::expiration(now, duration),
+                Err(JobValueError::InvalidLeaseDuration)
+            );
+        }
+    }
 
     #[test]
     fn validates_open_kinds_and_failure_codes() {

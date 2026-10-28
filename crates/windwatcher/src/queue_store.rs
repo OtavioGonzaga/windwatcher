@@ -100,29 +100,12 @@ impl QueueListOptions {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn listing_limits_are_validated_before_reaching_any_adapter() {
-        for limit in [0, 101, u32::MAX] {
-            assert_eq!(
-                QueueListOptions::new(None, limit),
-                Err(QueueListOptionsError)
-            );
-        }
-        for limit in [1, 100] {
-            let options = QueueListOptions::new(Some(JobStatus::Failed), limit).unwrap();
-            assert_eq!(options.limit(), limit);
-            assert_eq!(options.status(), Some(JobStatus::Failed));
-        }
-    }
-}
-
 /// Portable durable queue persistence contract.
 ///
 /// All time-sensitive operations receive an explicit UTC `now` from the caller.
+/// Adapters floor timestamps (including `now`) and durations to microseconds.
+/// Claim/renew use [`crate::JobLease::expiration`] and reject durations below
+/// one microsecond or expiration overflow before changing any state.
 /// Implementations provide at-least-once delivery and make no processing-order
 /// guarantee. Every post-claim mutation is fenced by `LeaseId`.
 pub trait QueueStore: Sync {
@@ -186,4 +169,24 @@ pub trait QueueStore: Sync {
         now: OffsetDateTime,
         completed_retention: Duration,
     ) -> impl Future<Output = Result<QueueMaintenanceReport, QueueStoreError>> + Send;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn listing_limits_are_validated_before_reaching_any_adapter() {
+        for limit in [0, 101, u32::MAX] {
+            assert_eq!(
+                QueueListOptions::new(None, limit),
+                Err(QueueListOptionsError)
+            );
+        }
+        for limit in [1, 100] {
+            let options = QueueListOptions::new(Some(JobStatus::Failed), limit).unwrap();
+            assert_eq!(options.limit(), limit);
+            assert_eq!(options.status(), Some(JobStatus::Failed));
+        }
+    }
 }

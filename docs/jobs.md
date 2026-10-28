@@ -102,5 +102,10 @@ windwatcher migrate status --queue
 
 Worker and jobs commands check schema compatibility but never migrate. Queue
 operations receive explicit caller-supplied UTC time; distributed hosts should
-maintain normal clock synchronization. PostgreSQL, MySQL and Redis adapters are
+maintain normal clock synchronization. All adapters use UTC microsecond precision:
+timestamps and durations are floored before comparison/addition, including for
+negative Unix timestamps. Enqueue returns the same normalized timestamps that
+are persisted. Claim/renew reject durations below 1 µs or expiration overflow
+before mutating state; lease expiry is computed by the common library helper.
+PostgreSQL, MySQL and Redis adapters are
 out of scope for PR 13.

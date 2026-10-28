@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   job lifecycle operations, plus a shared portable queue contract test suite.
 
 - Queue listing options validate the portable `1..=100` limit before adapter I/O.
+- Portable UTC microsecond queue timestamps and common lease-expiration validation;
+  enqueue results match persisted precision and sub-microsecond leases are rejected.
 
 ### Changed
 
