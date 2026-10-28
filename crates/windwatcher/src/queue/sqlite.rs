@@ -235,6 +235,13 @@ fn read_status(value: &str) -> Result<JobStatus, SqliteQueueError> {
     }
 }
 fn read_job(row: &SqliteRow) -> Result<Job, SqliteQueueError> {
+    read_job_with_payload(row, true).map(|(job, _)| job)
+}
+
+fn read_job_with_payload(
+    row: &SqliteRow,
+    allow_invalid_payload: bool,
+) -> Result<(Job, bool), SqliteQueueError> {
     let id = read_id(row.try_get("id").map_err(db_error)?)?;
     let kind = JobKind::new(row.try_get::<String, _>("kind").map_err(db_error)?)
         .map_err(|_| SqliteQueueError::Corrupt("invalid kind"))?;
@@ -242,10 +249,13 @@ fn read_job(row: &SqliteRow) -> Result<Job, SqliteQueueError> {
     let version =
         u16::try_from(version).map_err(|_| SqliteQueueError::Corrupt("invalid payload version"))?;
     let payload_json: String = row.try_get("payload_json").map_err(db_error)?;
-    let decoded: serde_json::Value = serde_json::from_str(&payload_json)
-        .map_err(|_| SqliteQueueError::Corrupt("invalid payload JSON"))?;
-    let payload = JobPayload::try_from(decoded)
-        .map_err(|_| SqliteQueueError::Corrupt("payload root is not object"))?;
+    let (payload, invalid_payload) = match serde_json::from_str::<serde_json::Value>(&payload_json)
+    {
+        Ok(serde_json::Value::Object(fields)) => (JobPayload::new(fields), false),
+        Ok(_) | Err(_) if allow_invalid_payload => (JobPayload::new(serde_json::Map::new()), true),
+        Ok(_) => return Err(SqliteQueueError::Corrupt("payload root is not object")),
+        Err(_) => return Err(SqliteQueueError::Corrupt("invalid payload JSON")),
+    };
     let state = read_status(&row.try_get::<String, _>("status").map_err(db_error)?)?;
     let attempts = u32::try_from(row.try_get::<i64, _>("attempts").map_err(db_error)?)
         .map_err(|_| SqliteQueueError::Corrupt("invalid attempts"))?;
@@ -283,7 +293,7 @@ fn read_job(row: &SqliteRow) -> Result<Job, SqliteQueueError> {
             .map(datetime)
             .transpose()
     };
-    Job::restore(
+    let mut job = Job::restore(
         id,
         kind,
         version,
@@ -298,7 +308,9 @@ fn read_job(row: &SqliteRow) -> Result<Job, SqliteQueueError> {
         optional_time("completed_at")?,
         optional_time("failed_at")?,
     )
-    .map_err(|_| SqliteQueueError::Corrupt("inconsistent job state"))
+    .map_err(|_| SqliteQueueError::Corrupt("inconsistent job state"))?;
+    job.payload_invalid = invalid_payload;
+    Ok((job, invalid_payload))
 }
 fn queue_error(error: SqliteQueueError) -> QueueStoreError {
     QueueStoreError::new(error)
@@ -334,12 +346,16 @@ impl QueueStore for SqliteQueue {
         let row = sqlx::query("UPDATE queue_jobs SET status='leased', attempts=attempts+1, lease_id=?, lease_owner=?, lease_expires_at=? WHERE id=(SELECT id FROM queue_jobs WHERE attempts<max_attempts AND ((status='pending' AND available_at<=?) OR (status='leased' AND lease_expires_at<=?)) ORDER BY available_at,id LIMIT 1) RETURNING *")
             .bind(uuid_bytes(lease)).bind(uuid_bytes(worker)).bind(lease_us).bind(now_us).bind(now_us).fetch_optional(&self.pool).await.map_err(|e| queue_error(db_error(e)))?;
         row.map(|row| {
-            let job = read_job(&row).map_err(queue_error)?;
+            let (job, invalid_payload) = read_job_with_payload(&row, true).map_err(queue_error)?;
             let lease = job.lease().cloned().ok_or_else(|| {
                 queue_error(SqliteQueueError::Corrupt("claimed job has no lease"))
             })?;
-            ClaimedJob::new(job, lease)
-                .map_err(|_| queue_error(SqliteQueueError::Corrupt("invalid claimed state")))
+            let claim = if invalid_payload {
+                ClaimedJob::invalid_payload(job, lease)
+            } else {
+                ClaimedJob::new(job, lease)
+            };
+            claim.map_err(|_| queue_error(SqliteQueueError::Corrupt("invalid claimed state")))
         })
         .transpose()
     }

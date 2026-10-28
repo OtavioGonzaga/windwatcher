@@ -142,7 +142,9 @@ mod tests {
 
     use uuid::{Uuid, Variant, Version};
 
-    use super::{ConversationId, IdentifierError, MessageId, SessionId, UserId};
+    use super::{
+        ConversationId, IdentifierError, JobId, LeaseId, MessageId, SessionId, UserId, WorkerId,
+    };
 
     macro_rules! identifier_tests {
         ($module:ident, $type:ident) => {
@@ -238,4 +240,7 @@ mod tests {
     identifier_tests!(session_id, SessionId);
     identifier_tests!(conversation_id, ConversationId);
     identifier_tests!(message_id, MessageId);
+    identifier_tests!(job_id, JobId);
+    identifier_tests!(lease_id, LeaseId);
+    identifier_tests!(worker_id, WorkerId);
 }

@@ -173,3 +173,312 @@ async fn exhausted_retry_fails_without_an_extra_claim() {
         job.id()
     );
 }
+
+#[tokio::test]
+async fn abandoned_final_claim_is_failed_without_periodic_maintenance() {
+    let (_directory, queue) = queue().await;
+    let at = now();
+    let job = EnqueueJob::new(&queue, JobPolicy::default())
+        .execute(
+            JobKind::new("test.crash").unwrap(),
+            1,
+            payload(),
+            EnqueueOptions::new().max_attempts(1),
+            at,
+        )
+        .await
+        .unwrap();
+    queue
+        .claim_next(WorkerId::new(), LeaseId::new(), Duration::from_secs(5), at)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        queue
+            .claim_next(
+                WorkerId::new(),
+                LeaseId::new(),
+                Duration::from_secs(5),
+                at + time::Duration::seconds(5)
+            )
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let failed = queue
+        .list(QueueListOptions::new(Some(JobStatus::Failed), 10))
+        .await
+        .unwrap();
+    assert_eq!(failed[0].id(), job.id());
+    assert_eq!(
+        failed[0].last_failure().unwrap().code().as_str(),
+        "queue.attempts_exhausted"
+    );
+}
+
+#[tokio::test]
+async fn manual_retry_preserves_identity_and_policy_and_clears_failure() {
+    let (_directory, queue) = queue().await;
+    let at = now();
+    let job = EnqueueJob::new(&queue, JobPolicy::default())
+        .execute(
+            JobKind::new("test.operator").unwrap(),
+            1,
+            payload(),
+            EnqueueOptions::new().max_attempts(7),
+            at,
+        )
+        .await
+        .unwrap();
+    let claim = queue
+        .claim_next(WorkerId::new(), LeaseId::new(), Duration::from_secs(5), at)
+        .await
+        .unwrap()
+        .unwrap();
+    let failure =
+        JobFailure::new(JobFailureCode::new("test.permanent").unwrap(), "diagnostic").unwrap();
+    queue
+        .fail(job.id(), claim.lease().id(), &failure, at)
+        .await
+        .unwrap();
+    assert_eq!(
+        queue
+            .retry_failed(job.id(), at + time::Duration::seconds(1))
+            .await
+            .unwrap(),
+        windwatcher::RetryFailedOutcome::Retried
+    );
+    let retried = queue
+        .list(QueueListOptions::new(Some(JobStatus::Pending), 10))
+        .await
+        .unwrap()
+        .remove(0);
+    assert_eq!(retried.id(), job.id());
+    assert_eq!(retried.attempts(), 0);
+    assert_eq!(retried.max_attempts(), 7);
+    assert!(retried.last_failure().is_none());
+    assert_eq!(
+        queue.retry_failed(job.id(), at).await.unwrap(),
+        windwatcher::RetryFailedOutcome::NotFailed
+    );
+}
+
+#[tokio::test]
+async fn two_queue_instances_cannot_claim_the_same_initial_job() {
+    let directory = TempDir::new().unwrap();
+    let url = format!("sqlite://{}", directory.path().join("queue.db").display());
+    let first = SqliteQueue::connect(SqliteQueueOptions::new(&url))
+        .await
+        .unwrap();
+    first.migrate().await.unwrap();
+    let second = SqliteQueue::connect(SqliteQueueOptions::new(&url))
+        .await
+        .unwrap();
+    let at = now();
+    let job = EnqueueJob::new(&first, JobPolicy::default())
+        .execute(
+            JobKind::new("test.race").unwrap(),
+            1,
+            payload(),
+            EnqueueOptions::new(),
+            at,
+        )
+        .await
+        .unwrap();
+    let (left, right) = tokio::join!(
+        first.claim_next(WorkerId::new(), LeaseId::new(), Duration::from_secs(20), at),
+        second.claim_next(WorkerId::new(), LeaseId::new(), Duration::from_secs(20), at),
+    );
+    let claims = [left.unwrap(), right.unwrap()]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+    assert_eq!(claims.len(), 1);
+    assert_eq!(claims[0].job().id(), job.id());
+}
+
+#[tokio::test]
+async fn maintenance_prunes_only_expired_completed_jobs_and_is_idempotent() {
+    let (_directory, queue) = queue().await;
+    let now = now();
+    let old_time = now - time::Duration::days(30);
+    let completed = EnqueueJob::new(&queue, JobPolicy::default())
+        .execute(
+            JobKind::new("test.retained").unwrap(),
+            1,
+            payload(),
+            EnqueueOptions::new(),
+            old_time,
+        )
+        .await
+        .unwrap();
+    let completed_claim = queue
+        .claim_next(
+            WorkerId::new(),
+            LeaseId::new(),
+            Duration::from_secs(10),
+            old_time,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    queue
+        .complete(
+            completed.id(),
+            completed_claim.lease().id(),
+            old_time + time::Duration::seconds(1),
+        )
+        .await
+        .unwrap();
+
+    let failed = EnqueueJob::new(&queue, JobPolicy::default())
+        .execute(
+            JobKind::new("test.failed").unwrap(),
+            1,
+            payload(),
+            EnqueueOptions::new(),
+            now,
+        )
+        .await
+        .unwrap();
+    let failed_claim = queue
+        .claim_next(
+            WorkerId::new(),
+            LeaseId::new(),
+            Duration::from_secs(10),
+            now,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    let failure = JobFailure::new(JobFailureCode::new("test.failed").unwrap(), "retained").unwrap();
+    queue
+        .fail(failed.id(), failed_claim.lease().id(), &failure, now)
+        .await
+        .unwrap();
+
+    let pending = EnqueueJob::new(&queue, JobPolicy::default())
+        .execute(
+            JobKind::new("test.pending").unwrap(),
+            1,
+            payload(),
+            EnqueueOptions::new().available_at(now + time::Duration::days(2)),
+            now,
+        )
+        .await
+        .unwrap();
+    let leased = EnqueueJob::new(&queue, JobPolicy::default())
+        .execute(
+            JobKind::new("test.leased").unwrap(),
+            1,
+            payload(),
+            EnqueueOptions::new(),
+            now,
+        )
+        .await
+        .unwrap();
+    queue
+        .claim_next(
+            WorkerId::new(),
+            LeaseId::new(),
+            Duration::from_secs(86_400),
+            now,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+
+    let (left, right) = tokio::join!(
+        queue.maintain(now, Duration::from_secs(7 * 86_400)),
+        queue.maintain(now, Duration::from_secs(7 * 86_400))
+    );
+    assert_eq!(
+        left.unwrap().completed_jobs_pruned() + right.unwrap().completed_jobs_pruned(),
+        1
+    );
+    assert!(
+        queue
+            .list(QueueListOptions::new(Some(JobStatus::Completed), 100))
+            .await
+            .unwrap()
+            .iter()
+            .all(|job| job.id() != completed.id())
+    );
+    assert!(
+        queue
+            .list(QueueListOptions::new(Some(JobStatus::Failed), 100))
+            .await
+            .unwrap()
+            .iter()
+            .any(|job| job.id() == failed.id())
+    );
+    assert!(
+        queue
+            .list(QueueListOptions::new(Some(JobStatus::Pending), 100))
+            .await
+            .unwrap()
+            .iter()
+            .any(|job| job.id() == pending.id())
+    );
+    assert!(
+        queue
+            .list(QueueListOptions::new(Some(JobStatus::Leased), 100))
+            .await
+            .unwrap()
+            .iter()
+            .any(|job| job.id() == leased.id())
+    );
+}
+
+#[tokio::test]
+async fn malformed_persisted_payload_is_claimed_for_permanent_failure() {
+    let directory = TempDir::new().unwrap();
+    let url = format!("sqlite://{}", directory.path().join("queue.db").display());
+    let queue = SqliteQueue::connect(SqliteQueueOptions::new(&url))
+        .await
+        .unwrap();
+    queue.migrate().await.unwrap();
+    let at = now();
+    let job = EnqueueJob::new(&queue, JobPolicy::default())
+        .execute(
+            JobKind::new("test.corrupt").unwrap(),
+            1,
+            payload(),
+            EnqueueOptions::new(),
+            at,
+        )
+        .await
+        .unwrap();
+    let pool = sqlx::SqlitePool::connect(&url).await.unwrap();
+    sqlx::query("UPDATE queue_jobs SET payload_json='not-json' WHERE id=?")
+        .bind(job.id().as_uuid().as_bytes().to_vec())
+        .execute(&pool)
+        .await
+        .unwrap();
+    let claim = queue
+        .claim_next(WorkerId::new(), LeaseId::new(), Duration::from_secs(10), at)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(claim.payload_invalid());
+    let failure = JobFailure::new(
+        JobFailureCode::new("payload.invalid").unwrap(),
+        "persisted job payload is invalid",
+    )
+    .unwrap();
+    queue
+        .fail(job.id(), claim.lease().id(), &failure, at)
+        .await
+        .unwrap();
+    assert_eq!(
+        queue
+            .list(QueueListOptions::new(Some(JobStatus::Failed), 10))
+            .await
+            .unwrap()[0]
+            .last_failure()
+            .unwrap()
+            .code()
+            .as_str(),
+        "payload.invalid"
+    );
+}

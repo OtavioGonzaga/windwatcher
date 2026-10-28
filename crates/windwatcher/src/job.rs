@@ -196,6 +196,7 @@ pub struct Job {
     pub(crate) created_at: OffsetDateTime,
     pub(crate) completed_at: Option<OffsetDateTime>,
     pub(crate) failed_at: Option<OffsetDateTime>,
+    pub(crate) payload_invalid: bool,
 }
 impl Job {
     /// Restores persisted state while enforcing structural invariants.
@@ -249,6 +250,7 @@ impl Job {
             created_at,
             completed_at,
             failed_at,
+            payload_invalid: false,
         })
     }
     /// Returns job identifier.
@@ -303,6 +305,10 @@ impl Job {
     pub fn failed_at(&self) -> Option<OffsetDateTime> {
         self.failed_at
     }
+    /// Returns whether the adapter restored malformed persisted payload JSON.
+    pub fn payload_invalid(&self) -> bool {
+        self.payload_invalid
+    }
 }
 
 /// Job together with the lease proving this claim's authority.
@@ -310,6 +316,7 @@ impl Job {
 pub struct ClaimedJob {
     job: Job,
     lease: JobLease,
+    payload_invalid: bool,
 }
 impl ClaimedJob {
     /// Creates a claimed view when the job and lease agree.
@@ -317,7 +324,17 @@ impl ClaimedJob {
         if job.status != JobStatus::Leased || job.lease.as_ref() != Some(&lease) {
             return Err(JobValueError::InvalidJobState);
         }
-        Ok(Self { job, lease })
+        let payload_invalid = job.payload_invalid;
+        Ok(Self {
+            job,
+            lease,
+            payload_invalid,
+        })
+    }
+    pub(crate) fn invalid_payload(job: Job, lease: JobLease) -> Result<Self, JobValueError> {
+        let mut claimed = Self::new(job, lease)?;
+        claimed.payload_invalid = true;
+        Ok(claimed)
     }
     /// Returns the job state.
     pub fn job(&self) -> &Job {
@@ -326,6 +343,10 @@ impl ClaimedJob {
     /// Returns authoritative claim lease.
     pub fn lease(&self) -> &JobLease {
         &self.lease
+    }
+    /// Returns whether the adapter found malformed persisted payload JSON.
+    pub fn payload_invalid(&self) -> bool {
+        self.payload_invalid
     }
 }
 
