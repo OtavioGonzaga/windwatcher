@@ -17,7 +17,10 @@ CREATE TABLE conversation_members (
     PRIMARY KEY(conversation_id,user_id),
     UNIQUE KEY conversation_members_one_owner(owner_conversation_id),
     INDEX conversation_members_user_id_conversation_id(user_id,conversation_id),
-    CONSTRAINT conversation_members_conversation_fk FOREIGN KEY(conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
+    -- MySQL does not permit ON DELETE CASCADE when the child table has an
+    -- indexed generated column depending on the cascading key. Owner-only Group
+    -- deletion therefore removes memberships explicitly in its transaction.
+    CONSTRAINT conversation_members_conversation_fk FOREIGN KEY(conversation_id) REFERENCES conversations(id) ON DELETE NO ACTION,
     CONSTRAINT conversation_members_user_fk FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE RESTRICT,
     CHECK (role IN ('direct','owner','admin','member'))
 ) ENGINE=InnoDB;
