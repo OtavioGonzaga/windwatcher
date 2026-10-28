@@ -21,7 +21,7 @@ mod messages;
 mod pagination;
 mod password;
 mod queries;
-#[cfg(feature = "queue-sqlite")]
+#[cfg(any(feature = "queue-sqlite", feature = "queue-postgres"))]
 mod queue;
 mod queue_store;
 mod read_models;
@@ -106,8 +106,12 @@ pub use job::{
     JobValueError,
 };
 pub use jobs::{EnqueueJob, EnqueueJobError, EnqueueOptions, JobPolicy, JobPolicyError};
+#[cfg(any(feature = "queue-sqlite", feature = "queue-postgres"))]
+pub use queue::QueueMigrationStatus;
+#[cfg(feature = "queue-postgres")]
+pub use queue::{PostgresQueue, PostgresQueueError, PostgresQueueOptions};
 #[cfg(feature = "queue-sqlite")]
-pub use queue::{QueueMigrationStatus, SqliteQueue, SqliteQueueError, SqliteQueueOptions};
+pub use queue::{SqliteQueue, SqliteQueueError, SqliteQueueOptions};
 pub use queue_store::{
     LeaseMutationOutcome, QueueListOptions, QueueListOptionsError, QueueMaintenanceReport,
     QueueStore, QueueStoreError, RetryFailedOutcome, RetryOutcome,
