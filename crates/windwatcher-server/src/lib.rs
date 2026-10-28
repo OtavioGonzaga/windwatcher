@@ -65,7 +65,7 @@ async fn run() -> Result<(), AppError> {
                 "Configuration valid.\nMode: {}\nStorage: SQLite\nQueue: {}",
                 if cli.system { "system" } else { "user" },
                 if raw.queue.is_some() {
-                    "SQLite"
+                    config::resolve_queue(&raw, &paths)?.provider.backend_name()
                 } else {
                     "disabled"
                 }
@@ -89,42 +89,49 @@ async fn run() -> Result<(), AppError> {
                     .migration_status()
                     .await
                     .map_err(|e| AppError::MigrationStatus(Box::new(e)))?;
-                if matches!(args.command, Some(MigrateCommand::Status)) {
-                    println!("Queue: {}", queue.backend_name());
-                    println!(
-                        "Current version: {}",
-                        status
-                            .current_version()
-                            .map_or_else(|| "none".into(), |v| v.to_string())
-                    );
-                    println!(
-                        "Latest version: {}",
-                        status
-                            .latest_version()
-                            .map_or_else(|| "none".into(), |v| v.to_string())
-                    );
-                    println!("Pending migrations: {}", status.pending());
-                    println!(
-                        "Status: {}",
-                        if status.is_current() {
-                            "current"
-                        } else {
-                            "pending"
-                        }
-                    );
+                if let queue::QueueMigrationState::Applicable(status) = status {
+                    if matches!(args.command, Some(MigrateCommand::Status)) {
+                        println!("Queue: {}", queue.backend_name());
+                        println!(
+                            "Current version: {}",
+                            status
+                                .current_version()
+                                .map_or_else(|| "none".into(), |v| v.to_string())
+                        );
+                        println!(
+                            "Latest version: {}",
+                            status
+                                .latest_version()
+                                .map_or_else(|| "none".into(), |v| v.to_string())
+                        );
+                        println!("Pending migrations: {}", status.pending());
+                        println!(
+                            "Status: {}",
+                            if status.is_current() {
+                                "current"
+                            } else {
+                                "pending"
+                            }
+                        );
+                    } else {
+                        let pending = status.pending();
+                        queue
+                            .migrate()
+                            .await
+                            .map_err(|e| AppError::Migration(Box::new(e)))?;
+                        println!(
+                            "Queue: {}",
+                            if pending == 0 {
+                                "No pending migrations.".to_owned()
+                            } else {
+                                format!("Applied {pending} migration(s).")
+                            }
+                        );
+                    }
                 } else {
-                    let pending = status.pending();
-                    queue
-                        .migrate()
-                        .await
-                        .map_err(|e| AppError::Migration(Box::new(e)))?;
                     println!(
-                        "Queue: {}",
-                        if pending == 0 {
-                            "No pending migrations.".to_owned()
-                        } else {
-                            format!("Applied {pending} migration(s).")
-                        }
+                        "Queue ({}): migrations not applicable",
+                        queue.backend_name()
                     );
                 }
             }
@@ -171,15 +178,21 @@ async fn connect_queue(
     paths: &ResolvedPaths,
 ) -> Result<queue::ConfiguredQueue, AppError> {
     let resolved = config::resolve_queue(raw, paths)?;
-    if resolved.derived_path && resolved.create_if_missing {
+    if resolved.provider.needs_data_directory() {
         std::fs::create_dir_all(&paths.data_dir).map_err(|source| AppError::DataDirectory {
             path: paths.data_dir.clone(),
             source,
         })?;
     }
-    queue::ConfiguredQueue::connect(resolved.options)
+    let backend = resolved.provider.backend_name();
+    let queue = queue::ConfiguredQueue::connect(resolved.provider)
         .await
-        .map_err(|error| AppError::Storage(Box::new(error)))
+        .map_err(|error| AppError::QueueConnection {
+            backend,
+            source: Box::new(error),
+        })?;
+    tracing::info!(queue_backend = backend, "queue backend selected");
+    Ok(queue)
 }
 
 async fn connect_storage(

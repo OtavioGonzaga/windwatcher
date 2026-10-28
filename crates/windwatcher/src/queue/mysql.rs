@@ -438,9 +438,11 @@ impl QueueStore for MySqlQueue {
         for id in ids {
             sqlx::query("UPDATE queue_jobs SET status='failed',failed_at=?,lease_id=NULL,lease_owner=NULL,lease_expires_at=NULL,last_error_code='queue.attempts_exhausted',last_error_message='maximum attempts exhausted' WHERE id=?").bind(now_sql).bind(id).execute(&mut *tx).await.map_err(db)?;
         }
-        let cutoff = time::Duration::try_from(retention)
-            .ok()
-            .and_then(|r| now.checked_sub(r))
+        let cutoff = now_sql
+            .assume_utc()
+            .checked_sub(time::Duration::microseconds(
+                i64::try_from(retention.as_micros()).unwrap_or(i64::MAX),
+            ))
             .filter(|t| t.year() >= 1000);
         let mut pruned = 0;
         if let Some(cutoff) = cutoff {

@@ -10,8 +10,9 @@ use figment::{
 };
 use serde::{Deserialize, Deserializer, Serialize};
 use windwatcher::{
-    Hs256JwtAccessTokenCodec, Hs256SigningSecret, JobPolicy, MessagePolicy, RegistrationPolicy,
-    SessionPolicy, SqliteQueueOptions, SqliteStorageOptions,
+    Hs256JwtAccessTokenCodec, Hs256SigningSecret, JobPolicy, MessagePolicy, MySqlQueueOptions,
+    PostgresQueueOptions, RedisQueueOptions, RegistrationPolicy, SessionPolicy, SqliteQueueOptions,
+    SqliteStorageOptions,
 };
 
 use crate::{cli::LogFormat, error::AppError, paths::ResolvedPaths};
@@ -65,6 +66,9 @@ pub struct RawQueue {
     pub maintenance_interval: DurationValue,
     pub shutdown_grace_period: DurationValue,
     pub sqlite: RawQueueSqlite,
+    pub postgres: RawQueueSqlNetwork,
+    pub mysql: RawQueueSqlNetwork,
+    pub redis: RawQueueRedis,
 }
 impl Default for RawQueue {
     fn default() -> Self {
@@ -82,6 +86,9 @@ impl Default for RawQueue {
             maintenance_interval: DurationValue("5m".into()),
             shutdown_grace_period: DurationValue("30s".into()),
             sqlite: RawQueueSqlite::default(),
+            postgres: RawQueueSqlNetwork::default(),
+            mysql: RawQueueSqlNetwork::default(),
+            redis: RawQueueRedis::default(),
         }
     }
 }
@@ -92,6 +99,62 @@ pub struct RawQueueSqlite {
     pub create_if_missing: Option<bool>,
     pub max_connections: Option<u32>,
     pub busy_timeout: Option<DurationValue>,
+}
+
+#[derive(Clone, Default, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct RawQueueSqlNetwork {
+    pub url: Option<String>,
+    pub max_connections: Option<u32>,
+    pub acquire_timeout: Option<String>,
+}
+impl fmt::Debug for RawQueueSqlNetwork {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RawQueueSqlNetwork").finish_non_exhaustive()
+    }
+}
+#[derive(Clone, Default, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct RawQueueRedis {
+    pub url: Option<String>,
+    pub key_prefix: Option<String>,
+}
+impl fmt::Debug for RawQueueRedis {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RawQueueRedis").finish_non_exhaustive()
+    }
+}
+
+#[derive(Clone, Debug)]
+pub enum ResolvedQueueProvider {
+    Sqlite {
+        options: SqliteQueueOptions,
+        create_if_missing: bool,
+        derived_path: bool,
+    },
+    Postgres(PostgresQueueOptions),
+    MySql(MySqlQueueOptions),
+    Redis(RedisQueueOptions),
+}
+impl ResolvedQueueProvider {
+    pub fn backend_name(&self) -> &'static str {
+        match self {
+            Self::Sqlite { .. } => "SQLite",
+            Self::Postgres(_) => "PostgreSQL",
+            Self::MySql(_) => "MySQL",
+            Self::Redis(_) => "Redis",
+        }
+    }
+    pub fn needs_data_directory(&self) -> bool {
+        matches!(
+            self,
+            Self::Sqlite {
+                derived_path: true,
+                create_if_missing: true,
+                ..
+            }
+        )
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -106,9 +169,7 @@ pub struct ResolvedQueueConfig {
     pub completed_retention: Duration,
     pub maintenance_interval: Duration,
     pub shutdown_grace_period: Duration,
-    pub options: SqliteQueueOptions,
-    pub create_if_missing: bool,
-    pub derived_path: bool,
+    pub provider: ResolvedQueueProvider,
 }
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
@@ -400,8 +461,10 @@ pub fn resolve_queue(
             "queue is not configured; add a [queue] section".into(),
         ));
     };
-    if queue.provider != "sqlite" {
-        return Err(AppError::Config("queue.provider must be `sqlite`".into()));
+    if !["sqlite", "postgres", "mysql", "redis"].contains(&queue.provider.as_str()) {
+        return Err(AppError::Config(
+            "queue.provider must be `sqlite`, `postgres`, `mysql` or `redis`".into(),
+        ));
     }
     let lease_duration = queue.lease_duration.parse()?;
     let lease_renew_interval = queue.lease_renew_interval.parse()?;
@@ -444,42 +507,128 @@ pub fn resolve_queue(
             ));
         }
     }
-    let derived_path = queue.sqlite.path.is_none();
-    let path = queue
-        .sqlite
-        .path
-        .clone()
-        .unwrap_or_else(|| paths.data_dir.join("queue.db"));
-    let storage_location = raw
-        .storage
-        .sqlite
-        .as_ref()
-        .and_then(|s| s.url.as_deref())
-        .map(PathBuf::from)
-        .unwrap_or_else(|| paths.data_dir.join("windwatcher.db"));
-    if same_database_path(&path, &storage_location) {
-        return Err(AppError::Config("storage.sqlite and queue.sqlite resolve to the same database file; queue requires a separate database".into()));
-    }
-    let create_if_missing = queue.sqlite.create_if_missing.unwrap_or(true);
-    let mut options = SqliteQueueOptions::new(path.to_string_lossy().to_string())
-        .create_if_missing(create_if_missing);
-    if let Some(connections) = queue.sqlite.max_connections {
-        if connections == 0 {
-            return Err(AppError::Config(
-                "queue.sqlite.max_connections must be greater than zero".into(),
-            ));
+    let provider = match queue.provider.as_str() {
+        "postgres" | "mysql" => {
+            let block = if queue.provider == "postgres" {
+                &queue.postgres
+            } else {
+                &queue.mysql
+            };
+            let field = if queue.provider == "postgres" {
+                "queue.postgres"
+            } else {
+                "queue.mysql"
+            };
+            let url = block
+                .url
+                .as_deref()
+                .filter(|v| !v.is_empty())
+                .ok_or_else(|| AppError::Config(format!("{field}.url is required")))?;
+            let connections = block.max_connections.unwrap_or(8);
+            if connections == 0 {
+                return Err(AppError::Config(format!(
+                    "{field}.max_connections must be greater than zero"
+                )));
+            }
+            let timeout =
+                humantime::parse_duration(block.acquire_timeout.as_deref().unwrap_or("5s"))
+                    .map_err(|_| {
+                        AppError::Config(format!(
+                            "{field}.acquire_timeout must be a valid duration"
+                        ))
+                    })?;
+            if timeout.is_zero() {
+                return Err(AppError::Config(format!(
+                    "{field}.acquire_timeout must be greater than zero"
+                )));
+            }
+            if queue.provider == "postgres" {
+                let options = PostgresQueueOptions::new(url)
+                    .max_connections(connections)
+                    .acquire_timeout(timeout);
+                options.validate().map_err(|_| {
+                    AppError::Config("queue.postgres.url must be a valid PostgreSQL URL".into())
+                })?;
+                ResolvedQueueProvider::Postgres(options)
+            } else {
+                let options = MySqlQueueOptions::new(url)
+                    .max_connections(connections)
+                    .acquire_timeout(timeout);
+                options.validate().map_err(|_| {
+                    AppError::Config("queue.mysql.url must be a valid MySQL URL".into())
+                })?;
+                ResolvedQueueProvider::MySql(options)
+            }
         }
-        options = options.max_connections(connections);
-    }
-    if let Some(timeout) = &queue.sqlite.busy_timeout {
-        let timeout = timeout.parse()?;
-        if timeout.is_zero() {
-            return Err(AppError::Config(
-                "queue.sqlite.busy_timeout must be greater than zero".into(),
-            ));
+        "redis" => {
+            let url = queue
+                .redis
+                .url
+                .as_deref()
+                .filter(|v| !v.is_empty())
+                .ok_or_else(|| AppError::Config("queue.redis.url is required".into()))?;
+            let options = RedisQueueOptions::new(url);
+            options.validate().map_err(|_| {
+                AppError::Config("queue.redis.url must be a valid Redis URL".into())
+            })?;
+            let options = options.key_prefix(
+                queue
+                    .redis
+                    .key_prefix
+                    .as_deref()
+                    .unwrap_or("windwatcher:queue"),
+            );
+            options.validate().map_err(|_| {
+                AppError::Config(
+                    "queue.redis.key_prefix must contain 1..=256 bytes without controls".into(),
+                )
+            })?;
+            ResolvedQueueProvider::Redis(options)
         }
-        options = options.busy_timeout(timeout);
-    }
+        _ => {
+            let derived_path = queue.sqlite.path.is_none();
+            let path = queue
+                .sqlite
+                .path
+                .clone()
+                .unwrap_or_else(|| paths.data_dir.join("queue.db"));
+            let storage_location = raw
+                .storage
+                .sqlite
+                .as_ref()
+                .and_then(|s| s.url.as_deref())
+                .map(PathBuf::from)
+                .unwrap_or_else(|| paths.data_dir.join("windwatcher.db"));
+            if same_database_path(&path, &storage_location) {
+                return Err(AppError::Config("storage.sqlite and queue.sqlite resolve to the same database file; queue requires a separate database".into()));
+            }
+            let create_if_missing = queue.sqlite.create_if_missing.unwrap_or(true);
+            let mut options = SqliteQueueOptions::new(path.to_string_lossy().to_string())
+                .create_if_missing(create_if_missing);
+            if let Some(connections) = queue.sqlite.max_connections {
+                if connections == 0 {
+                    return Err(AppError::Config(
+                        "queue.sqlite.max_connections must be greater than zero".into(),
+                    ));
+                }
+                options = options.max_connections(connections);
+            }
+            if let Some(timeout) = &queue.sqlite.busy_timeout {
+                let timeout = timeout.parse()?;
+                if timeout.is_zero() {
+                    return Err(AppError::Config(
+                        "queue.sqlite.busy_timeout must be greater than zero".into(),
+                    ));
+                }
+                options = options.busy_timeout(timeout);
+            }
+            ResolvedQueueProvider::Sqlite {
+                options,
+                create_if_missing,
+                derived_path,
+            }
+        }
+    };
     Ok(ResolvedQueueConfig {
         job_policy,
         concurrency: queue.concurrency,
@@ -491,9 +640,7 @@ pub fn resolve_queue(
         completed_retention,
         maintenance_interval,
         shutdown_grace_period,
-        options,
-        create_if_missing,
-        derived_path,
+        provider,
     })
 }
 
@@ -648,8 +795,13 @@ mod tests {
         let resolved = resolve_queue(&raw, &paths).unwrap();
         assert_eq!(resolved.job_policy.default_max_attempts(), 20);
         assert_eq!(resolved.job_policy.max_payload_bytes(), 65_536);
-        assert!(resolved.derived_path);
-        let _ = resolved.options;
+        assert!(matches!(
+            resolved.provider,
+            ResolvedQueueProvider::Sqlite {
+                derived_path: true,
+                ..
+            }
+        ));
         assert_eq!(
             directory.path().join("windwatcher.db"),
             paths.data_dir.join("windwatcher.db")
@@ -667,6 +819,91 @@ mod tests {
         );
         raw.queue.as_mut().unwrap().lease_duration = DurationValue("60s".into());
         raw.queue.as_mut().unwrap().sqlite.path = Some(paths.data_dir.join("windwatcher.db"));
+        assert!(resolve_queue(&raw, &paths).is_err());
+    }
+
+    #[test]
+    fn network_queue_config_is_selected_common_and_redacted() {
+        let paths = ResolvedPaths {
+            config_file: "unused".into(),
+            data_dir: "unused".into(),
+        };
+        let secret = "recognizable_fake_password";
+        for (provider, scheme, label) in [
+            ("postgres", "postgresql", "PostgreSQL"),
+            ("mysql", "mysql", "MySQL"),
+            ("redis", "redis", "Redis"),
+        ] {
+            let mut queue = RawQueue {
+                provider: provider.into(),
+                default_max_attempts: 20,
+                max_payload_bytes: 65_536,
+                ..RawQueue::default()
+            };
+            let mut raw = RawConfig {
+                queue: Some(queue.clone()),
+                ..RawConfig::default()
+            };
+            assert!(
+                resolve_queue(&raw, &paths)
+                    .unwrap_err()
+                    .to_string()
+                    .contains(&format!("queue.{provider}.url"))
+            );
+            let url = format!("{scheme}://user:{secret}@localhost/0");
+            match provider {
+                "postgres" => queue.postgres.url = Some(url),
+                "mysql" => queue.mysql.url = Some(url),
+                _ => queue.redis.url = Some(url),
+            }
+            raw.queue = Some(queue.clone());
+            let resolved = resolve_queue(&raw, &paths).unwrap();
+            assert_eq!(resolved.provider.backend_name(), label);
+            assert!(!resolved.provider.needs_data_directory());
+            assert_eq!(resolved.job_policy.default_max_attempts(), 20);
+            assert_eq!(resolved.job_policy.max_payload_bytes(), 65_536);
+            assert!(!format!("{raw:?} {resolved:?}").contains(secret));
+            if provider != "redis" {
+                let selected = if provider == "postgres" {
+                    &mut queue.postgres
+                } else {
+                    &mut queue.mysql
+                };
+                selected.max_connections = Some(0);
+                raw.queue = Some(queue.clone());
+                assert!(resolve_queue(&raw, &paths).is_err());
+                let selected = if provider == "postgres" {
+                    &mut queue.postgres
+                } else {
+                    &mut queue.mysql
+                };
+                selected.max_connections = None;
+                selected.acquire_timeout = Some("0s".into());
+            } else {
+                queue.redis.key_prefix = Some(String::new());
+            }
+            raw.queue = Some(queue);
+            let error = resolve_queue(&raw, &paths).unwrap_err();
+            assert!(!format!("{error:?} {error}").contains(secret));
+        }
+        let queue = RawQueue {
+            postgres: RawQueueSqlNetwork {
+                url: Some(secret.into()),
+                max_connections: Some(0),
+                acquire_timeout: Some("invalid".into()),
+            },
+            redis: RawQueueRedis {
+                key_prefix: Some(String::new()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut raw = RawConfig {
+            queue: Some(queue),
+            ..Default::default()
+        };
+        assert!(resolve_queue(&raw, &paths).is_ok());
+        raw.queue.as_mut().unwrap().provider = "unknown".into();
         assert!(resolve_queue(&raw, &paths).is_err());
     }
 

@@ -320,9 +320,11 @@ mod tests {
             completed_retention: Duration::from_secs(3600),
             maintenance_interval: Duration::from_secs(3600),
             shutdown_grace_period: Duration::from_millis(100),
-            options: windwatcher::SqliteQueueOptions::new(":memory:"),
-            create_if_missing: true,
-            derived_path: false,
+            provider: crate::config::ResolvedQueueProvider::Sqlite {
+                options: windwatcher::SqliteQueueOptions::new(":memory:"),
+                create_if_missing: true,
+                derived_path: false,
+            },
         }
     }
 

@@ -386,9 +386,9 @@ impl QueueStore for PostgresQueue {
         let now = normalize(now);
         let exhausted = sqlx::query("UPDATE queue_jobs SET status='failed',failed_at=$1,lease_id=NULL,lease_owner=NULL,lease_expires_at=NULL,last_error_code='queue.attempts_exhausted',last_error_message='maximum attempts exhausted' WHERE status='leased' AND lease_expires_at<=$1 AND attempts>=max_attempts")
             .bind(now).execute(&self.pool).await.map_err(db)?.rows_affected();
-        let cutoff = time::Duration::try_from(retention)
-            .ok()
-            .and_then(|r| now.checked_sub(r));
+        let cutoff = now.checked_sub(time::Duration::microseconds(
+            i64::try_from(retention.as_micros()).unwrap_or(i64::MAX),
+        ));
         let pruned = if let Some(cutoff) = cutoff {
             sqlx::query("DELETE FROM queue_jobs WHERE status='completed' AND completed_at<=$1")
                 .bind(normalize(cutoff))
