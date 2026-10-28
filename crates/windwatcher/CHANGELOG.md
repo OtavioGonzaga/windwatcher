@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Portable durable-job identifiers, validated job envelope and state types,
+  enqueue policy/application operation, and the reusable `QueueStore` contract.
+
 ### Changed
 
 - **Breaking:** mutating use cases now return `Outcome<T>` with explicit typed

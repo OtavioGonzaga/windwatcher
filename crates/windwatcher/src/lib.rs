@@ -12,6 +12,8 @@ mod id;
 mod idempotency;
 mod identity;
 mod identity_store;
+mod job;
+mod jobs;
 mod local_users;
 mod message;
 mod message_store;
@@ -19,6 +21,7 @@ mod messages;
 mod pagination;
 mod password;
 mod queries;
+mod queue_store;
 mod read_models;
 mod session;
 #[cfg(feature = "sqlite")]
@@ -94,7 +97,17 @@ pub use session::{
 pub use session::{Hs256JwtAccessTokenCodec, Hs256SigningSecret, Hs256SigningSecretError};
 
 pub use id::{ConversationId, IdentifierError, MessageId, SessionId, UserId};
+pub use id::{JobId, LeaseId, WorkerId};
 pub use identity::{User, Username, UsernameError};
+pub use job::{
+    ClaimedJob, Job, JobFailure, JobFailureCode, JobKind, JobLease, JobPayload, JobStatus,
+    JobValueError,
+};
+pub use jobs::{EnqueueJob, EnqueueJobError, EnqueueOptions, JobPolicy, JobPolicyError};
+pub use queue_store::{
+    LeaseMutationOutcome, QueueListOptions, QueueMaintenanceReport, QueueStore, QueueStoreError,
+    RetryFailedOutcome, RetryOutcome,
+};
 #[cfg(feature = "sqlite")]
 pub use storage::{MigrationStatus, SqliteStorage, SqliteStorageError, SqliteStorageOptions};
 pub use users::{GetUser, GetUserError};
