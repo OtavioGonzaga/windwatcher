@@ -59,14 +59,6 @@ pub struct CreateResult<T> {
     pub disposition: CreateDisposition,
 }
 
-impl<T> std::ops::Deref for CreateResult<T> {
-    type Target = T;
-
-    fn deref(&self) -> &Self::Target {
-        &self.value
-    }
-}
-
 /// Application conversation creation input, independent of transport JSON.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ConversationCreateRequest {

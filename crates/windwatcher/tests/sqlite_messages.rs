@@ -198,8 +198,8 @@ async fn keyed_sends_are_atomic_concurrent_persistent_and_store_only_hashes() {
     );
     let a = a.unwrap();
     let b = b.unwrap();
-    assert_eq!(a.value().id(), b.value().id());
-    assert_ne!(a.disposition, b.disposition);
+    assert_eq!(a.value().value.id(), b.value().value.id());
+    assert_ne!(a.value().disposition, b.value().disposition);
     let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM messages")
         .fetch_one(&f.pool)
         .await
@@ -230,7 +230,7 @@ async fn keyed_sends_are_atomic_concurrent_persistent_and_store_only_hashes() {
         .execute(f.owner, f.conversation, "same", None, Some(&key), now())
         .await
         .unwrap();
-    assert_eq!(replay.value().id(), a.value().id());
+    assert_eq!(replay.value().value.id(), a.value().value.id());
     assert_eq!(replay.value().disposition, CreateDisposition::Replayed);
     sqlx::query("CREATE TRIGGER reject_command_record BEFORE INSERT ON idempotency_records BEGIN SELECT RAISE(ABORT, 'test failure'); END").execute(&f.pool).await.unwrap();
     let other = IdempotencyKey::new("rollback-key").unwrap();
@@ -261,9 +261,11 @@ async fn keyed_sends_are_atomic_concurrent_persistent_and_store_only_hashes() {
             .is_ok()
     );
     let expired = now() + time::Duration::days(1);
-    send.execute(f.owner, f.conversation, "renew", None, Some(&key), expired)
+    let renewed_send = send
+        .execute(f.owner, f.conversation, "renew", None, Some(&key), expired)
         .await
         .unwrap();
+    assert_eq!(renewed_send.events().len(), 1);
     let count: i64 =
         sqlx::query_scalar("SELECT COUNT(*) FROM idempotency_records WHERE expires_at <= ?")
             .bind(expired.unix_timestamp() * 1_000_000)
@@ -289,7 +291,7 @@ async fn keyed_groups_are_concurrent_atomic_and_cleanup_keeps_active_records() {
     let a = a.unwrap();
     let b = b.unwrap();
     assert_eq!(a.value().value, b.value().value);
-    assert_ne!(a.disposition, b.disposition);
+    assert_ne!(a.value().disposition, b.value().disposition);
     let count: i64 =
         sqlx::query_scalar("SELECT COUNT(*) FROM conversations WHERE title = 'one group'")
             .fetch_one(&f.pool)
@@ -314,7 +316,7 @@ async fn keyed_groups_are_concurrent_atomic_and_cleanup_keeps_active_records() {
         .execute(&f.pool)
         .await
         .unwrap();
-    create
+    let renewed_create = create
         .execute(
             f.owner,
             request(),
@@ -323,6 +325,7 @@ async fn keyed_groups_are_concurrent_atomic_and_cleanup_keeps_active_records() {
         )
         .await
         .unwrap();
+    assert_eq!(renewed_create.events().len(), 1);
     let renewed = create
         .execute(
             f.owner,
@@ -852,10 +855,10 @@ async fn storage_rolls_back_failures_rejects_corruption_and_loads_large_history(
         .await
         .unwrap();
     let smaller = MessagePolicy::new(64_000);
-    assert!(smaller.validate(large.content().unwrap()).is_err());
+    assert!(smaller.validate(large.value().content().unwrap()).is_err());
     assert_eq!(
         GetMessage::new(&f.store)
-            .execute(f.owner, large.id())
+            .execute(f.owner, large.value().id())
             .await
             .unwrap(),
         large.clone().into_value()
@@ -880,7 +883,7 @@ async fn storage_rolls_back_failures_rejects_corruption_and_loads_large_history(
         f.store
             .edit_message(
                 f.owner,
-                large.id(),
+                large.value().id(),
                 &MessageContent::new("changed").unwrap(),
                 now()
             )
@@ -889,7 +892,7 @@ async fn storage_rolls_back_failures_rejects_corruption_and_loads_large_history(
     );
     assert_eq!(
         GetMessage::new(&f.store)
-            .execute(f.owner, large.id())
+            .execute(f.owner, large.value().id())
             .await
             .unwrap(),
         large.clone().into_value()
@@ -900,12 +903,12 @@ async fn storage_rolls_back_failures_rejects_corruption_and_loads_large_history(
         .unwrap();
     sqlx::query("UPDATE messages SET content = ? WHERE id = ?")
         .bind("bad\0content")
-        .bind(bytes(large.id()))
+        .bind(bytes(large.value().id()))
         .execute(&f.pool)
         .await
         .unwrap();
     assert!(matches!(
-        f.store.get_message(f.owner, large.id()).await,
+        f.store.get_message(f.owner, large.value().id()).await,
         Err(MessageStoreError::Unexpected(_))
     ));
     sqlx::query(

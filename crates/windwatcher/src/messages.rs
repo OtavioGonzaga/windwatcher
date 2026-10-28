@@ -179,10 +179,12 @@ impl MarkReadOutcome {
 /// # conversation: ConversationId, now: time::OffsetDateTime)
 /// # -> Result<(), Box<dyn std::error::Error>> {
 /// let policy = MessagePolicy::default();
-/// let message = SendMessage::new(storage, &policy)
+/// let message_outcome = SendMessage::new(storage, &policy)
 ///     .execute(actor, conversation, "hello", None, now).await?;
-/// let reply = SendMessage::new(storage, &policy)
+/// let message = message_outcome.value();
+/// let reply_outcome = SendMessage::new(storage, &policy)
 ///     .execute(actor, conversation, "reply", Some(message.id()), now).await?;
+/// let reply = reply_outcome.value();
 /// // Sending either message did not implicitly advance the read marker.
 /// MarkConversationReadThrough::new(storage)
 ///     .execute(actor, conversation, reply.id()).await?;

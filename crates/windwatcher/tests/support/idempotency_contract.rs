@@ -262,6 +262,7 @@ pub async fn run<S: CreateCommandStore + ConversationStore + MessageStore>(
             .execute(actor, request(), Some(&direct_key), now)
             .await
             .unwrap()
+            .value()
             .disposition,
         CreateDisposition::Replayed
     );

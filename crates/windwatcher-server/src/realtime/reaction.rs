@@ -127,22 +127,34 @@ impl RealtimeService {
                 message.created_at(),
                 &[],
             ),
-            DomainEvent::MessageEdited { message } => self.notify(
-                message.conversation_id(),
-                EventData::MessageUpdated {
-                    message: message.clone().into(),
-                },
-                message.edited_at().unwrap_or_else(OffsetDateTime::now_utc),
-                &[],
-            ),
-            DomainEvent::MessageDeleted { message } => self.notify(
-                message.conversation_id(),
-                EventData::MessageDeleted {
-                    message: message.clone().into(),
-                },
-                message.deleted_at().unwrap_or_else(OffsetDateTime::now_utc),
-                &[],
-            ),
+            DomainEvent::MessageEdited { message } => {
+                let Some(occurred_at) = message.edited_at() else {
+                    tracing::warn!(message_id = %message.id(), "domain_event_invariant_violation");
+                    return;
+                };
+                self.notify(
+                    message.conversation_id(),
+                    EventData::MessageUpdated {
+                        message: message.clone().into(),
+                    },
+                    occurred_at,
+                    &[],
+                );
+            }
+            DomainEvent::MessageDeleted { message } => {
+                let Some(occurred_at) = message.deleted_at() else {
+                    tracing::warn!(message_id = %message.id(), "domain_event_invariant_violation");
+                    return;
+                };
+                self.notify(
+                    message.conversation_id(),
+                    EventData::MessageDeleted {
+                        message: message.clone().into(),
+                    },
+                    occurred_at,
+                    &[],
+                );
+            }
             DomainEvent::ConversationReadStateAdvanced {
                 user_id,
                 conversation_id,

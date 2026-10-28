@@ -104,7 +104,8 @@ pub async fn run<S: MessagingQueryStore + ConversationStore + MessageStore + Ide
             now + Duration::seconds(10),
         )
         .await
-        .unwrap();
+        .unwrap()
+        .into_value();
     let detail = GetConversationSummary::new(store)
         .execute(actor, ids[0])
         .await
@@ -112,7 +113,7 @@ pub async fn run<S: MessagingQueryStore + ConversationStore + MessageStore + Ide
     assert_eq!(detail.activity_at, message.created_at());
     assert_eq!(detail.unread_count, 1);
     assert_eq!(detail.membership.last_read_message_id(), None);
-    assert_eq!(detail.last_message.as_ref().unwrap(), message.value());
+    assert_eq!(detail.last_message.as_ref().unwrap(), &message);
     assert!(matches!(
         GetConversationSummary::new(store)
             .execute(outsider.id(), ids[0])
@@ -145,7 +146,8 @@ pub async fn run<S: MessagingQueryStore + ConversationStore + MessageStore + Ide
             now + Duration::seconds(20),
         )
         .await
-        .unwrap();
+        .unwrap()
+        .into_value();
     store
         .delete_message(peer.id(), message.id(), now + Duration::seconds(30))
         .await
@@ -358,7 +360,8 @@ async fn activity_and_unread<S: MessagingQueryStore + ConversationStore + Messag
     let own = SendMessage::new(store, &policy)
         .execute(actor, a.id(), "own", None, now + Duration::seconds(1))
         .await
-        .unwrap();
+        .unwrap()
+        .into_value();
     assert_eq!(
         GetConversationSummary::new(store)
             .execute(actor, a.id())
@@ -378,7 +381,8 @@ async fn activity_and_unread<S: MessagingQueryStore + ConversationStore + Messag
     let incoming = SendMessage::new(store, &policy)
         .execute(other, a.id(), "incoming", None, now + Duration::seconds(2))
         .await
-        .unwrap();
+        .unwrap()
+        .into_value();
     assert_eq!(
         GetConversationSummary::new(store)
             .execute(actor, a.id())
@@ -403,7 +407,8 @@ async fn activity_and_unread<S: MessagingQueryStore + ConversationStore + Messag
     let latest = SendMessage::new(store, &policy)
         .execute(actor, a.id(), "latest", None, now + Duration::seconds(4))
         .await
-        .unwrap();
+        .unwrap()
+        .into_value();
     assert_eq!(
         GetConversationSummary::new(store)
             .execute(joining, a.id())
@@ -420,10 +425,11 @@ async fn activity_and_unread<S: MessagingQueryStore + ConversationStore + Messag
         .mark_read_through(actor, a.id(), incoming.id())
         .await
         .unwrap();
-    EditMessage::new(store, &policy)
+    let edited = EditMessage::new(store, &policy)
         .execute(actor, own.id(), "old edit", now + Duration::seconds(6))
         .await
         .unwrap();
+    assert_eq!(edited.events().len(), 1);
     let summary = GetConversationSummary::new(store)
         .execute(actor, a.id())
         .await

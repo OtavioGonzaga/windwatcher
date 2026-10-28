@@ -5,6 +5,9 @@ operation-specific result and its `DomainEvent` list records meaningful facts
 committed by that operation. The wrapper has private fields and exposes borrowed
 value/event access plus consuming value/parts access.
 
+`Outcome<T>` deliberately does not behave transparently as `T`; callers must
+explicitly decide how to consume the committed value and emitted facts.
+
 Events are constructed only after primary persistence returns a successful
 committed outcome. Failures return `Err`, while no-op mutations, semantic Direct
 reuse and idempotency replays return no events. The vector order is the operation's
