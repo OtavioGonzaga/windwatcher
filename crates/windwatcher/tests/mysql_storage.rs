@@ -18,6 +18,9 @@ mod message_contract;
 mod query_contract;
 #[path = "support/session_store_contract.rs"]
 mod session_contract;
+#[macro_use]
+#[path = "support/sql_authorization_races.rs"]
+mod sql_authorization_races;
 
 async fn disposable_database() -> (String, String) {
     let base = std::env::var("WINDWATCHER_TEST_MYSQL_URL")
@@ -80,6 +83,14 @@ async fn explicit_migration_lifecycle_and_physical_schema() {
         idempotency_contract::run(&storage, command_actor.id(), command_peer.id()).await;
         session_contract::run(&storage, owner.id(), other.id(), disabled.id(), windwatcher::UserId::new()).await;
         let second_pool = MySqlStorage::connect(MySqlStorageOptions::new(&url)).await.unwrap();
+        idempotency_contract::concurrent(&storage, &second_pool, command_actor.id(), command_peer.id()).await;
+        let occupied = windwatcher::Conversation::new_group(windwatcher::ConversationId::new(), windwatcher::GroupTitle::new("occupied ID").unwrap(), now);
+        storage.create_group(&occupied, command_actor.id(), &[]).await.unwrap();
+        let collision = windwatcher::Conversation::new_direct(occupied.id(), now);
+        let fresh = windwatcher::User::new(windwatcher::UserId::new(), "collision_peer".parse().unwrap(), now);
+        storage.create_local_user(&fresh, &hash).await.unwrap();
+        let collision_result = storage.get_or_create_direct(&collision, fresh.id(), fresh.id()).await;
+        assert!(matches!(collision_result, Err(windwatcher::ConversationStoreError::Conflict)), "{collision_result:?}");
         let direct_a = windwatcher::Conversation::new_direct(windwatcher::ConversationId::new(), now);
         let direct_b = windwatcher::Conversation::new_direct(windwatcher::ConversationId::new(), now);
         let (a, b) = tokio::join!(storage.get_or_create_direct(&direct_a, owner.id(), other.id()), second_pool.get_or_create_direct(&direct_b, other.id(), owner.id()));
@@ -104,6 +115,7 @@ async fn explicit_migration_lifecycle_and_physical_schema() {
         assert_eq!(usize::from(a.unwrap() == windwatcher::RefreshRotationResult::Rotated) + usize::from(b.unwrap() == windwatcher::RefreshRotationResult::Rotated), 1);
         conversation_contract::disabled_memberships(&storage, owner.clone(), other.clone(), disabled.clone()).await;
         let pool = sqlx::MySqlPool::connect(&url).await.unwrap();
+        authorization_races!(&second_pool, &pool, sqlx::MySql, |id: uuid::Uuid| id.into_bytes().to_vec(), command_actor.id(), command_peer.id());
         let types: Vec<(String, String, String)> = sqlx::query_as("SELECT table_name, column_name, data_type FROM information_schema.columns WHERE table_schema=DATABASE()")
             .fetch_all(&pool).await.unwrap();
         for (table, field) in [("users", "created_at"), ("sessions", "expires_at"), ("messages", "edited_at"), ("idempotency_records", "expires_at")] {

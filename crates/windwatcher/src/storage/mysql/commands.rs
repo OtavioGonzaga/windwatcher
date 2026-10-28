@@ -39,27 +39,54 @@ struct Record {
     now: OffsetDateTime,
 }
 impl Record {
-    async fn lookup(&self, c: &mut sqlx::MySqlConnection) -> Result<Option<Vec<u8>>, Error> {
+    async fn reserve(
+        &self,
+        c: &mut sqlx::MySqlConnection,
+        candidate: Vec<u8>,
+    ) -> Result<Option<Vec<u8>>, Error> {
         let now = micros(self.now).map_err(corrupt)?;
-        sqlx::query("DELETE FROM idempotency_records WHERE expires_at<=?")
-            .bind(now)
-            .execute(&mut *c)
-            .await
-            .map_err(qerr)?;
-        let row=sqlx::query("SELECT request_hash,resource_id FROM idempotency_records WHERE actor_id=? AND operation=? AND scope_id=? AND key_hash=? AND expires_at>?").bind(self.actor.as_uuid().into_bytes().to_vec()).bind(self.operation).bind(self.scope.as_slice()).bind(self.key_hash.as_slice()).bind(now).fetch_optional(&mut *c).await.map_err(qerr)?;
-        let Some(row) = row else { return Ok(None) };
+        let expiry = micros(
+            self.now
+                .checked_add(Duration::days(1))
+                .ok_or_else(|| corrupt("idempotency expiry overflow"))?,
+        )
+        .map_err(corrupt)?;
+        // A no-op duplicate UPDATE takes an exclusive lock, unlike a failed
+        // INSERT's shared duplicate lock (which can deadlock multiple waiters).
+        // The uncommitted token identifies a new reservation without relying on
+        // CLIENT_FOUND_ROWS; finalization replaces it with the actual resource ID.
+        let token = Uuid::now_v7().into_bytes().to_vec();
+        sqlx::query("INSERT INTO idempotency_records(actor_id,operation,scope_id,key_hash,request_hash,resource_id,created_at,expires_at) VALUES(?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE resource_id=idempotency_records.resource_id")
+            .bind(self.actor.as_uuid().into_bytes().to_vec()).bind(self.operation).bind(self.scope.as_slice()).bind(self.key_hash.as_slice()).bind(self.request_hash.as_slice()).bind(&token).bind(now).bind(expiry).execute(&mut *c).await.map_err(qerr)?;
+        let row=sqlx::query("SELECT request_hash,resource_id,expires_at FROM idempotency_records WHERE actor_id=? AND operation=? AND scope_id=? AND key_hash=? FOR UPDATE").bind(self.actor.as_uuid().into_bytes().to_vec()).bind(self.operation).bind(self.scope.as_slice()).bind(self.key_hash.as_slice()).fetch_one(&mut *c).await.map_err(qerr)?;
+        if row.try_get::<Vec<u8>, _>("resource_id").map_err(qerr)? == token {
+            return Ok(None);
+        }
+        if row.try_get::<i64, _>("expires_at").map_err(qerr)? <= now {
+            sqlx::query("UPDATE idempotency_records SET request_hash=?,resource_id=?,created_at=?,expires_at=? WHERE actor_id=? AND operation=? AND scope_id=? AND key_hash=?")
+                .bind(self.request_hash.as_slice()).bind(&candidate).bind(now).bind(expiry).bind(self.actor.as_uuid().into_bytes().to_vec()).bind(self.operation).bind(self.scope.as_slice()).bind(self.key_hash.as_slice()).execute(c).await.map_err(qerr)?;
+            return Ok(None);
+        }
         let hash: Vec<u8> = row.try_get("request_hash").map_err(qerr)?;
         if hash != self.request_hash {
             return Err(Error::KeyReused);
         }
         Ok(Some(row.try_get("resource_id").map_err(qerr)?))
     }
-    async fn insert(&self, c: &mut sqlx::MySqlConnection, resource: Vec<u8>) -> Result<(), Error> {
-        let expiry = self
-            .now
-            .checked_add(Duration::days(1))
-            .ok_or_else(|| corrupt("idempotency expiry overflow"))?;
-        sqlx::query("INSERT INTO idempotency_records(actor_id,operation,scope_id,key_hash,request_hash,resource_id,created_at,expires_at) VALUES(?,?,?,?,?,?,?,?)").bind(self.actor.as_uuid().into_bytes().to_vec()).bind(self.operation).bind(self.scope.as_slice()).bind(self.key_hash.as_slice()).bind(self.request_hash.as_slice()).bind(&resource).bind(micros(self.now).map_err(corrupt)?).bind(micros(expiry).map_err(corrupt)?).execute(c).await.map_err(qerr)?;
+    async fn finish(&self, c: &mut sqlx::MySqlConnection, resource: Vec<u8>) -> Result<(), Error> {
+        sqlx::query("UPDATE idempotency_records SET resource_id=? WHERE actor_id=? AND operation=? AND scope_id=? AND key_hash=?").bind(&resource).bind(self.actor.as_uuid().into_bytes().to_vec()).bind(self.operation).bind(self.scope.as_slice()).bind(self.key_hash.as_slice()).execute(&mut *c).await.map_err(qerr)?;
+        // Unlike a global DELETE, SKIP LOCKED cannot wait on other reservations
+        // or introduce a reservation/effect lock-order inversion during cleanup.
+        let expired = sqlx::query("SELECT actor_id,operation,scope_id,key_hash FROM idempotency_records WHERE expires_at<=? ORDER BY expires_at LIMIT 64 FOR UPDATE SKIP LOCKED")
+            .bind(micros(self.now).map_err(corrupt)?).fetch_all(&mut *c).await.map_err(qerr)?;
+        for row in expired {
+            sqlx::query("DELETE FROM idempotency_records WHERE actor_id=? AND operation=? AND scope_id=? AND key_hash=?")
+                .bind(row.try_get::<Vec<u8>,_>("actor_id").map_err(qerr)?)
+                .bind(row.try_get::<String,_>("operation").map_err(qerr)?)
+                .bind(row.try_get::<Vec<u8>,_>("scope_id").map_err(qerr)?)
+                .bind(row.try_get::<Vec<u8>,_>("key_hash").map_err(qerr)?)
+                .execute(&mut *c).await.map_err(qerr)?;
+        }
         Ok(())
     }
 }
@@ -145,7 +172,12 @@ impl CreateCommandStore for MySqlStorage {
             now,
         );
         if let Some(rec) = &rec
-            && let Some(resource) = rec.lookup(&mut tx).await?
+            && let Some(resource) = rec
+                .reserve(
+                    &mut tx,
+                    command.conversation.id().as_uuid().into_bytes().to_vec(),
+                )
+                .await?
         {
             let id = ConversationId::try_from(
                 Uuid::from_slice(&resource)
@@ -201,7 +233,7 @@ impl CreateCommandStore for MySqlStorage {
             }
         };
         if let Some(rec) = rec {
-            rec.insert(&mut tx, id.as_uuid().into_bytes().to_vec())
+            rec.finish(&mut tx, id.as_uuid().into_bytes().to_vec())
                 .await?
         }
         tx.commit().await.map_err(qerr)?;
@@ -226,7 +258,9 @@ impl CreateCommandStore for MySqlStorage {
             now,
         );
         if let Some(rec) = &rec
-            && let Some(resource) = rec.lookup(&mut tx).await?
+            && let Some(resource) = rec
+                .reserve(&mut tx, message.id().as_uuid().into_bytes().to_vec())
+                .await?
         {
             let id = MessageId::try_from(
                 Uuid::from_slice(&resource)
@@ -251,7 +285,7 @@ impl CreateCommandStore for MySqlStorage {
         }
         let view = send_in(&mut tx, message).await?;
         if let Some(rec) = rec {
-            rec.insert(&mut tx, view.id().as_uuid().into_bytes().to_vec())
+            rec.finish(&mut tx, view.id().as_uuid().into_bytes().to_vec())
                 .await?
         }
         tx.commit().await.map_err(qerr)?;

@@ -33,6 +33,25 @@ pub async fn run<S: IdentityStore>(store: &S) {
     ));
     assert!(store.find_user(duplicate.id()).await.unwrap().is_none());
 
+    let collision = User::new(
+        user.id(),
+        "different_username".parse().unwrap(),
+        timestamp(2),
+    );
+    assert!(matches!(
+        store.create_local_user(&collision, &hash).await,
+        Err(IdentityStoreError::Unexpected(_))
+    ));
+    assert_eq!(
+        store
+            .find_user(user.id())
+            .await
+            .unwrap()
+            .unwrap()
+            .username(),
+        user.username()
+    );
+
     let mut disabled = loaded;
     disabled.disable(timestamp(20));
     store.update_user(&disabled).await.unwrap();

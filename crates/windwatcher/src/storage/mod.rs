@@ -1,4 +1,7 @@
 mod migration;
+#[cfg(all(test, any(feature = "postgres", feature = "mysql")))]
+#[macro_use]
+mod snapshot_tests;
 #[cfg(feature = "mysql")]
 mod mysql;
 #[cfg(feature = "postgres")]

@@ -18,6 +18,18 @@ mod queries;
 
 static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations/mysql");
 
+#[cfg(test)]
+mod snapshot_regression {
+    use super::*;
+    snapshot_test!(
+        MySqlStorage,
+        MySqlStorageOptions,
+        sqlx::MySql,
+        sqlx::MySqlPool,
+        "WINDWATCHER_TEST_MYSQL_URL"
+    );
+}
+
 /// Connection settings for a dedicated MySQL 8 primary-storage database.
 #[derive(Clone)]
 pub struct MySqlStorageOptions {
@@ -106,6 +118,15 @@ impl MySqlStorage {
         let pool = MySqlPoolOptions::new()
             .max_connections(options.max_connections)
             .acquire_timeout(options.acquire_timeout)
+            .after_connect(|connection, _| {
+                Box::pin(async move {
+                    // Mutations re-read authorization after waiting for row locks.
+                    sqlx::query("SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED")
+                        .execute(connection)
+                        .await?;
+                    Ok(())
+                })
+            })
             .connect_with(connect)
             .await
             .map_err(|e| MySqlStorageError::Connection(Box::new(e)))?;
@@ -136,6 +157,16 @@ impl fmt::Display for Corrupt {
     }
 }
 impl Error for Corrupt {}
+
+impl MySqlStorage {
+    async fn read_snapshot(&self) -> Result<sqlx::Transaction<'static, sqlx::MySql>, sqlx::Error> {
+        let mut connection = self.pool.acquire().await?;
+        sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+            .execute(&mut *connection)
+            .await?;
+        sqlx::Transaction::begin(connection, None).await
+    }
+}
 fn micros(t: OffsetDateTime) -> Result<i64, &'static str> {
     i64::try_from(t.unix_timestamp_nanos().div_euclid(1000)).map_err(|_| "timestamp out of range")
 }
@@ -228,7 +259,7 @@ impl IdentityStore for MySqlStorage {
         p: &PasswordHash,
     ) -> Result<(), IdentityStoreError> {
         let mut tx = self.pool.begin().await.map_err(identity_db)?;
-        let r = sqlx::query(
+        let result = sqlx::query(
             "INSERT INTO users(id,username,disabled_at,created_at,updated_at) VALUES(?,?,?,?,?)",
         )
         .bind(raw(u.id()))
@@ -242,16 +273,20 @@ impl IdentityStore for MySqlStorage {
         .bind(micros(u.created_at()).map_err(|_| bad_identity("timestamp out of range"))?)
         .bind(micros(u.updated_at()).map_err(|_| bad_identity("timestamp out of range"))?)
         .execute(&mut *tx)
-        .await
-        .map_err(|e| {
-            if matches!(&e,sqlx::Error::Database(d) if d.is_unique_violation()) {
-                IdentityStoreError::UsernameConflict
-            } else {
-                identity_db(e)
+        .await;
+        if let Err(error) = result {
+            if matches!(&error,sqlx::Error::Database(d) if d.is_unique_violation()) {
+                let username_exists: Option<Vec<u8>> =
+                    sqlx::query_scalar("SELECT id FROM users WHERE username=? FOR UPDATE")
+                        .bind(u.username().as_str())
+                        .fetch_optional(&mut *tx)
+                        .await
+                        .map_err(identity_db)?;
+                if username_exists.is_some() {
+                    return Err(IdentityStoreError::UsernameConflict);
+                }
             }
-        })?;
-        if r.rows_affected() != 1 {
-            return Err(IdentityStoreError::UsernameConflict);
+            return Err(identity_db(error));
         }
         sqlx::query("INSERT INTO local_credentials(user_id,password_hash) VALUES(?,?)")
             .bind(raw(u.id()))

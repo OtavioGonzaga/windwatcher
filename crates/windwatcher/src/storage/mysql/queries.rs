@@ -110,7 +110,7 @@ impl MessagingQueryStore for MySqlStorage {
         conversation: ConversationId,
         target: UserId,
     ) -> Result<Outcome<Option<ConversationMemberSummary>>, QueryStoreError> {
-        let mut tx = self.pool.begin().await.map_err(db)?;
+        let mut tx = self.read_snapshot().await.map_err(db)?;
         match access(&mut tx, actor, conversation).await? {
             None => return Ok(Outcome::ConversationNotFound),
             Some(false) => return Ok(Outcome::NotMember),
@@ -156,7 +156,7 @@ impl MessagingQueryStore for MySqlStorage {
         before: Option<ConversationBoundary>,
         limit: PageLimit,
     ) -> Result<QuerySlice<ConversationSummary>, QueryStoreError> {
-        let mut tx = self.pool.begin().await.map_err(db)?;
+        let mut tx = self.read_snapshot().await.map_err(db)?;
         let mut q = sqlx::QueryBuilder::<sqlx::MySql>::new("SELECT * FROM (");
         q.push(SUMMARY)
             .push_bind(actor.as_uuid().into_bytes().to_vec())
@@ -188,7 +188,7 @@ impl MessagingQueryStore for MySqlStorage {
         actor: UserId,
         conversation: ConversationId,
     ) -> Result<Outcome<ConversationSummary>, QueryStoreError> {
-        let mut tx = self.pool.begin().await.map_err(db)?;
+        let mut tx = self.read_snapshot().await.map_err(db)?;
         match access(&mut tx, actor, conversation).await? {
             None => return Ok(Outcome::ConversationNotFound),
             Some(false) => return Ok(Outcome::NotMember),
@@ -213,7 +213,7 @@ impl MessagingQueryStore for MySqlStorage {
         after: Option<MemberBoundary>,
         limit: PageLimit,
     ) -> Result<Outcome<QuerySlice<ConversationMemberSummary>>, QueryStoreError> {
-        let mut tx = self.pool.begin().await.map_err(db)?;
+        let mut tx = self.read_snapshot().await.map_err(db)?;
         match access(&mut tx, actor, conversation).await? {
             None => return Ok(Outcome::ConversationNotFound),
             Some(false) => return Ok(Outcome::NotMember),

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Serialize SQL message authorization and keyed command reservations, and use
+  explicit consistent snapshots independently of database isolation defaults.
+
 - Add PostgreSQL and MySQL persistence adapters implementing the existing
   identity, session, conversation, message, query, and create-command contracts.
 - Add independent `postgres` and `mysql` features and engine-specific migrations.

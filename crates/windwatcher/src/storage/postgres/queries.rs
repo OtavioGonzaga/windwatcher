@@ -105,7 +105,7 @@ impl MessagingQueryStore for PostgresStorage {
         conversation: ConversationId,
         target: UserId,
     ) -> Result<Outcome<Option<ConversationMemberSummary>>, QueryStoreError> {
-        let mut tx = self.pool.begin().await.map_err(db)?;
+        let mut tx = self.read_snapshot().await.map_err(db)?;
         match access(&mut tx, actor, conversation).await? {
             None => return Ok(Outcome::ConversationNotFound),
             Some(false) => return Ok(Outcome::NotMember),
@@ -151,11 +151,7 @@ impl MessagingQueryStore for PostgresStorage {
         before: Option<ConversationBoundary>,
         limit: PageLimit,
     ) -> Result<QuerySlice<ConversationSummary>, QueryStoreError> {
-        let mut tx = self.pool.begin().await.map_err(db)?;
-        sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
-            .execute(&mut *tx)
-            .await
-            .map_err(db)?;
+        let mut tx = self.read_snapshot().await.map_err(db)?;
         let mut q = sqlx::QueryBuilder::<sqlx::Postgres>::new("SELECT * FROM (");
         q.push(SUMMARY).push_bind(actor.as_uuid()).push(") inbox");
         if let Some(b) = before {
@@ -185,11 +181,7 @@ impl MessagingQueryStore for PostgresStorage {
         actor: UserId,
         conversation: ConversationId,
     ) -> Result<Outcome<ConversationSummary>, QueryStoreError> {
-        let mut tx = self.pool.begin().await.map_err(db)?;
-        sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
-            .execute(&mut *tx)
-            .await
-            .map_err(db)?;
+        let mut tx = self.read_snapshot().await.map_err(db)?;
         match access(&mut tx, actor, conversation).await? {
             None => return Ok(Outcome::ConversationNotFound),
             Some(false) => return Ok(Outcome::NotMember),
@@ -214,11 +206,7 @@ impl MessagingQueryStore for PostgresStorage {
         after: Option<MemberBoundary>,
         limit: PageLimit,
     ) -> Result<Outcome<QuerySlice<ConversationMemberSummary>>, QueryStoreError> {
-        let mut tx = self.pool.begin().await.map_err(db)?;
-        sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
-            .execute(&mut *tx)
-            .await
-            .map_err(db)?;
+        let mut tx = self.read_snapshot().await.map_err(db)?;
         match access(&mut tx, actor, conversation).await? {
             None => return Ok(Outcome::ConversationNotFound),
             Some(false) => return Ok(Outcome::NotMember),

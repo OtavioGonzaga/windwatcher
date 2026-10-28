@@ -13,6 +13,18 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 
 static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations/postgres");
+
+#[cfg(test)]
+mod snapshot_regression {
+    use super::*;
+    snapshot_test!(
+        PostgresStorage,
+        PostgresStorageOptions,
+        sqlx::Postgres,
+        sqlx::PgPool,
+        "WINDWATCHER_TEST_POSTGRES_URL"
+    );
+}
 mod commands;
 mod conversations;
 mod messages;
@@ -138,6 +150,16 @@ impl fmt::Display for Corrupt {
     }
 }
 impl Error for Corrupt {}
+
+impl PostgresStorage {
+    async fn read_snapshot(
+        &self,
+    ) -> Result<sqlx::Transaction<'static, sqlx::Postgres>, sqlx::Error> {
+        self.pool
+            .begin_with("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY")
+            .await
+    }
+}
 fn micros(t: OffsetDateTime) -> Result<i64, &'static str> {
     i64::try_from(t.unix_timestamp_nanos().div_euclid(1000)).map_err(|_| "timestamp out of range")
 }

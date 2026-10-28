@@ -39,27 +39,38 @@ struct Record {
     now: OffsetDateTime,
 }
 impl Record {
-    async fn lookup(&self, c: &mut PgConnection) -> Result<Option<Uuid>, Error> {
+    async fn reserve(&self, c: &mut PgConnection, candidate: Uuid) -> Result<Option<Uuid>, Error> {
         let now = micros(self.now).map_err(corrupt)?;
-        sqlx::query("DELETE FROM idempotency_records WHERE expires_at<=$1")
-            .bind(now)
-            .execute(&mut *c)
-            .await
-            .map_err(qerr)?;
-        let row=sqlx::query("SELECT request_hash,resource_id FROM idempotency_records WHERE actor_id=$1 AND operation=$2 AND scope_id=$3 AND key_hash=$4 AND expires_at>$5").bind(self.actor.as_uuid()).bind(self.operation).bind(self.scope).bind(self.key_hash.as_slice()).bind(now).fetch_optional(&mut *c).await.map_err(qerr)?;
-        let Some(row) = row else { return Ok(None) };
+        let expiry = micros(
+            self.now
+                .checked_add(Duration::days(1))
+                .ok_or_else(|| corrupt("idempotency expiry overflow"))?,
+        )
+        .map_err(corrupt)?;
+        // Reserve the command identity before effects. A concurrent insert waits
+        // for this transaction, then observes either its committed result or rollback.
+        let inserted = sqlx::query("INSERT INTO idempotency_records(actor_id,operation,scope_id,key_hash,request_hash,resource_id,created_at,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT DO NOTHING")
+            .bind(self.actor.as_uuid()).bind(self.operation).bind(self.scope).bind(self.key_hash.as_slice()).bind(self.request_hash.as_slice()).bind(candidate).bind(now).bind(expiry).execute(&mut *c).await.map_err(qerr)?;
+        if inserted.rows_affected() == 1 {
+            return Ok(None);
+        }
+        let row=sqlx::query("SELECT request_hash,resource_id,expires_at FROM idempotency_records WHERE actor_id=$1 AND operation=$2 AND scope_id=$3 AND key_hash=$4 FOR UPDATE").bind(self.actor.as_uuid()).bind(self.operation).bind(self.scope).bind(self.key_hash.as_slice()).fetch_one(&mut *c).await.map_err(qerr)?;
+        if row.try_get::<i64, _>("expires_at").map_err(qerr)? <= now {
+            sqlx::query("UPDATE idempotency_records SET request_hash=$5,resource_id=$6,created_at=$7,expires_at=$8 WHERE actor_id=$1 AND operation=$2 AND scope_id=$3 AND key_hash=$4")
+                .bind(self.actor.as_uuid()).bind(self.operation).bind(self.scope).bind(self.key_hash.as_slice()).bind(self.request_hash.as_slice()).bind(candidate).bind(now).bind(expiry).execute(c).await.map_err(qerr)?;
+            return Ok(None);
+        }
         let hash: Vec<u8> = row.try_get("request_hash").map_err(qerr)?;
         if hash != self.request_hash {
             return Err(Error::KeyReused);
         }
         Ok(Some(row.try_get("resource_id").map_err(qerr)?))
     }
-    async fn insert(&self, c: &mut PgConnection, resource: Uuid) -> Result<(), Error> {
-        let expiry = self
-            .now
-            .checked_add(Duration::days(1))
-            .ok_or_else(|| corrupt("idempotency expiry overflow"))?;
-        sqlx::query("INSERT INTO idempotency_records(actor_id,operation,scope_id,key_hash,request_hash,resource_id,created_at,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8)").bind(self.actor.as_uuid()).bind(self.operation).bind(self.scope).bind(self.key_hash.as_slice()).bind(self.request_hash.as_slice()).bind(resource).bind(micros(self.now).map_err(corrupt)?).bind(micros(expiry).map_err(corrupt)?).execute(c).await.map_err(qerr)?;
+    async fn finish(&self, c: &mut PgConnection, resource: Uuid) -> Result<(), Error> {
+        sqlx::query("UPDATE idempotency_records SET resource_id=$5 WHERE actor_id=$1 AND operation=$2 AND scope_id=$3 AND key_hash=$4").bind(self.actor.as_uuid()).bind(self.operation).bind(self.scope).bind(self.key_hash.as_slice()).bind(resource).execute(&mut *c).await.map_err(qerr)?;
+        // Bounded housekeeping must never wait for another command reservation.
+        sqlx::query("WITH expired AS (SELECT actor_id,operation,scope_id,key_hash FROM idempotency_records WHERE expires_at<=$1 ORDER BY expires_at LIMIT 64 FOR UPDATE SKIP LOCKED) DELETE FROM idempotency_records r USING expired e WHERE r.actor_id=e.actor_id AND r.operation=e.operation AND r.scope_id=e.scope_id AND r.key_hash=e.key_hash")
+            .bind(micros(self.now).map_err(corrupt)?).execute(c).await.map_err(qerr)?;
         Ok(())
     }
 }
@@ -142,7 +153,9 @@ impl CreateCommandStore for PostgresStorage {
             now,
         );
         if let Some(rec) = &rec
-            && let Some(resource) = rec.lookup(&mut tx).await?
+            && let Some(resource) = rec
+                .reserve(&mut tx, command.conversation.id().as_uuid())
+                .await?
         {
             let id = ConversationId::try_from(resource)
                 .map_err(|_| corrupt("invalid idempotent conversation ID"))?;
@@ -195,7 +208,7 @@ impl CreateCommandStore for PostgresStorage {
             }
         };
         if let Some(rec) = rec {
-            rec.insert(&mut tx, id.as_uuid()).await?
+            rec.finish(&mut tx, id.as_uuid()).await?
         }
         tx.commit().await.map_err(qerr)?;
         Ok(CreateResult {
@@ -219,7 +232,7 @@ impl CreateCommandStore for PostgresStorage {
             now,
         );
         if let Some(rec) = &rec
-            && let Some(resource) = rec.lookup(&mut tx).await?
+            && let Some(resource) = rec.reserve(&mut tx, message.id().as_uuid()).await?
         {
             let id = MessageId::try_from(resource)
                 .map_err(|_| corrupt("invalid idempotent message ID"))?;
@@ -241,7 +254,7 @@ impl CreateCommandStore for PostgresStorage {
         }
         let view = send_in(&mut tx, message).await?;
         if let Some(rec) = rec {
-            rec.insert(&mut tx, view.id().as_uuid()).await?
+            rec.finish(&mut tx, view.id().as_uuid()).await?
         }
         tx.commit().await.map_err(qerr)?;
         Ok(CreateResult {

@@ -125,7 +125,7 @@ async fn access(
         _ => Err(bad("invalid persisted membership role")),
     }
 }
-async fn lock_message_conversation(
+async fn message_conversation(
     c: &mut MySqlConnection,
     message: MessageId,
 ) -> Result<Option<ConversationId>, MessageStoreError> {
@@ -136,6 +136,21 @@ async fn lock_message_conversation(
             .await
             .map_err(db)?;
     raw.map(id).transpose()
+}
+async fn lock_message_conversation(
+    c: &mut MySqlConnection,
+    message: MessageId,
+) -> Result<Option<ConversationId>, MessageStoreError> {
+    let Some(conv) = message_conversation(c, message).await? else {
+        return Ok(None);
+    };
+    let locked: Option<Vec<u8>> =
+        sqlx::query_scalar("SELECT id FROM conversations WHERE id=? FOR UPDATE")
+            .bind(conv.as_uuid().into_bytes().to_vec())
+            .fetch_optional(c)
+            .await
+            .map_err(db)?;
+    locked.map(id).transpose()
 }
 pub(super) async fn by_id(
     c: &mut MySqlConnection,
@@ -170,7 +185,7 @@ impl MessageStore for MySqlStorage {
         before: Option<MessageId>,
         limit: PageLimit,
     ) -> Result<List, MessageStoreError> {
-        let mut tx = self.pool.begin().await.map_err(db)?;
+        let mut tx = self.read_snapshot().await.map_err(db)?;
         match access(&mut tx, actor, conversation).await? {
             Access::Missing => return Ok(List::ConversationNotFound),
             Access::NotMember => return Ok(List::NotMember),
@@ -240,8 +255,8 @@ impl MessageStore for MySqlStorage {
         actor: UserId,
         message: MessageId,
     ) -> Result<Get, MessageStoreError> {
-        let mut tx = self.pool.begin().await.map_err(db)?;
-        let Some(conv) = lock_message_conversation(&mut tx, message).await? else {
+        let mut tx = self.read_snapshot().await.map_err(db)?;
+        let Some(conv) = message_conversation(&mut tx, message).await? else {
             return Ok(Get::MessageNotFound);
         };
         match access(&mut tx, actor, conv).await? {
@@ -406,7 +421,7 @@ impl MessageStore for MySqlStorage {
         actor: UserId,
         conversation: ConversationId,
     ) -> Result<Unread, MessageStoreError> {
-        let mut tx = self.pool.begin().await.map_err(db)?;
+        let mut tx = self.read_snapshot().await.map_err(db)?;
         match access(&mut tx, actor, conversation).await? {
             Access::Missing => return Ok(Unread::ConversationNotFound),
             Access::NotMember => return Ok(Unread::NotMember),

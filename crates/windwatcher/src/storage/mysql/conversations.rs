@@ -172,16 +172,25 @@ pub(super) async fn create_direct(
         enabled(&mut *tx, id).await?;
     }
     let created = micros(conv.created_at()).map_err(bad)?;
-    let result=sqlx::query("INSERT IGNORE INTO conversations(id,kind,title,direct_key,created_at,updated_at) VALUES(?,'direct',NULL,?,?,?)")
+    let result=sqlx::query("INSERT INTO conversations(id,kind,title,direct_key,created_at,updated_at) VALUES(?,'direct',NULL,?,?,?)")
         .bind(raw(conv.id())).bind(&direct_key).bind(created).bind(micros(conv.updated_at()).map_err(bad)?)
-        .execute(&mut *tx).await.map_err(db)?;
-    if result.rows_affected() == 0 {
+        .execute(&mut *tx).await;
+    if let Err(error) = result {
+        if !matches!(&error, sqlx::Error::Database(e) if e.is_unique_violation()) {
+            return Err(db(error));
+        }
         let row=sqlx::query("SELECT id,kind,title,created_at,updated_at FROM conversations WHERE direct_key=? FOR UPDATE")
-            .bind(&direct_key).fetch_one(&mut *tx).await.map_err(db)?;
-        return Ok(StartDirectStoreOutcome::Existing(read_conversation(&row)?));
+            .bind(&direct_key).fetch_optional(&mut *tx).await.map_err(db)?;
+        return match row {
+            Some(row) => Ok(StartDirectStoreOutcome::Existing(read_conversation(&row)?)),
+            None => Err(db(error)),
+        };
     }
-    for id in [a, b] {
-        sqlx::query("INSERT IGNORE INTO conversation_members(conversation_id,user_id,role,joined_at) VALUES(?,?,'direct',?)")
+    let mut members = vec![a, b];
+    members.sort();
+    members.dedup();
+    for id in members {
+        sqlx::query("INSERT INTO conversation_members(conversation_id,user_id,role,joined_at) VALUES(?,?,'direct',?)")
             .bind(raw(conv.id())).bind(raw(id)).bind(created).execute(&mut *tx).await.map_err(db)?;
     }
     Ok(StartDirectStoreOutcome::Created(conv.clone()))
@@ -209,53 +218,10 @@ impl ConversationStore for MySqlStorage {
         a: UserId,
         b: UserId,
     ) -> Result<StartDirectStoreOutcome, ConversationStoreError> {
-        if conv.kind() != ConversationKind::Direct {
-            return Err(ConversationStoreError::InvalidConversationKind {
-                expected: ConversationKind::Direct,
-                actual: conv.kind(),
-            });
-        }
         let mut tx = self.pool.begin().await.map_err(db)?;
-        let mut pair = [a.as_uuid().into_bytes(), b.as_uuid().into_bytes()];
-        pair.sort();
-        let direct_key = [pair[0].as_slice(), pair[1].as_slice()].concat();
-        if let Some(r) = sqlx::query(
-            "SELECT id,kind,title,created_at,updated_at FROM conversations WHERE direct_key=?",
-        )
-        .bind(&direct_key)
-        .fetch_optional(&mut *tx)
-        .await
-        .map_err(db)?
-        {
-            let c = read_conversation(&r)?;
-            tx.commit().await.map_err(db)?;
-            return Ok(StartDirectStoreOutcome::Existing(c));
-        }
-        let mut ids = vec![a, b];
-        ids.sort();
-        ids.dedup();
-        for u in ids {
-            enabled(&mut tx, u).await?
-        }
-        let t = micros(conv.created_at()).map_err(bad)?;
-        let inserted=sqlx::query("INSERT IGNORE INTO conversations(id,kind,title,direct_key,created_at,updated_at) VALUES(?,'direct',NULL,?,?,?)").bind(raw(conv.id())).bind(&direct_key).bind(t).bind(micros(conv.updated_at()).map_err(bad)?).execute(&mut *tx).await.map_err(db)?;
-        if inserted.rows_affected() == 0 {
-            let row = sqlx::query(
-                "SELECT id,kind,title,created_at,updated_at FROM conversations WHERE direct_key=? FOR UPDATE",
-            )
-            .bind(&direct_key)
-            .fetch_one(&mut *tx)
-            .await
-            .map_err(db)?;
-            let existing = read_conversation(&row)?;
-            tx.commit().await.map_err(db)?;
-            return Ok(StartDirectStoreOutcome::Existing(existing));
-        }
-        for u in [a, b] {
-            sqlx::query("INSERT IGNORE INTO conversation_members(conversation_id,user_id,role,joined_at) VALUES(?,?,'direct',?)").bind(raw(conv.id())).bind(raw(u)).bind(t).execute(&mut *tx).await.map_err(db)?;
-        }
+        let result = create_direct(&mut tx, conv, a, b).await?;
         tx.commit().await.map_err(db)?;
-        Ok(StartDirectStoreOutcome::Created(conv.clone()))
+        Ok(result)
     }
     async fn create_group(
         &self,

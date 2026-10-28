@@ -124,7 +124,7 @@ async fn access(
         _ => Err(bad("invalid persisted membership role")),
     }
 }
-async fn lock_message_conversation(
+async fn message_conversation(
     c: &mut PgConnection,
     message: MessageId,
 ) -> Result<Option<ConversationId>, MessageStoreError> {
@@ -134,6 +134,21 @@ async fn lock_message_conversation(
         .await
         .map_err(db)?;
     raw.map(id).transpose()
+}
+async fn lock_message_conversation(
+    c: &mut PgConnection,
+    message: MessageId,
+) -> Result<Option<ConversationId>, MessageStoreError> {
+    let Some(conv) = message_conversation(c, message).await? else {
+        return Ok(None);
+    };
+    let locked: Option<Uuid> =
+        sqlx::query_scalar("SELECT id FROM conversations WHERE id=$1 FOR UPDATE")
+            .bind(conv.as_uuid())
+            .fetch_optional(c)
+            .await
+            .map_err(db)?;
+    locked.map(id).transpose()
 }
 pub(super) async fn by_id(
     c: &mut PgConnection,
@@ -165,12 +180,7 @@ impl MessageStore for PostgresStorage {
         before: Option<MessageId>,
         limit: PageLimit,
     ) -> Result<List, MessageStoreError> {
-        let mut tx = self.pool.begin().await.map_err(db)?;
-        let isolated = sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
-            .execute(&mut *tx)
-            .await
-            .map_err(db)?;
-        let _ = isolated;
+        let mut tx = self.read_snapshot().await.map_err(db)?;
         match access(&mut tx, actor, conversation).await? {
             Access::Missing => return Ok(List::ConversationNotFound),
             Access::NotMember => return Ok(List::NotMember),
@@ -239,12 +249,8 @@ impl MessageStore for PostgresStorage {
         actor: UserId,
         message: MessageId,
     ) -> Result<Get, MessageStoreError> {
-        let mut tx = self.pool.begin().await.map_err(db)?;
-        sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
-            .execute(&mut *tx)
-            .await
-            .map_err(db)?;
-        let Some(conv) = lock_message_conversation(&mut tx, message).await? else {
+        let mut tx = self.read_snapshot().await.map_err(db)?;
+        let Some(conv) = message_conversation(&mut tx, message).await? else {
             return Ok(Get::MessageNotFound);
         };
         match access(&mut tx, actor, conv).await? {
@@ -408,11 +414,7 @@ impl MessageStore for PostgresStorage {
         actor: UserId,
         conversation: ConversationId,
     ) -> Result<Unread, MessageStoreError> {
-        let mut tx = self.pool.begin().await.map_err(db)?;
-        sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
-            .execute(&mut *tx)
-            .await
-            .map_err(db)?;
+        let mut tx = self.read_snapshot().await.map_err(db)?;
         match access(&mut tx, actor, conversation).await? {
             Access::Missing => return Ok(Unread::ConversationNotFound),
             Access::NotMember => return Ok(Unread::NotMember),
