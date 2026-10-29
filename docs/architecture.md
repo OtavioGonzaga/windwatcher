@@ -26,6 +26,11 @@ The server is the application composition root: CLI parsing, runtime paths,
 configuration, secret resolution, tracing, adapter selection, and operator
 workflows belong there rather than in the reusable crate.
 
+Primary persistence is selected independently from the durable job queue.
+The library provides SQLite, PostgreSQL, and MySQL adapters for its persistence
+ports; the official server resolves `storage.provider` and dispatches through a
+single storage facade. Migrations remain explicit operator actions.
+
 ## Architectural principles
 
 - Design library-first.

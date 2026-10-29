@@ -11,8 +11,8 @@ use figment::{
 use serde::{Deserialize, Deserializer, Serialize};
 use windwatcher::{
     Hs256JwtAccessTokenCodec, Hs256SigningSecret, JobPolicy, MessagePolicy, MySqlQueueOptions,
-    PostgresQueueOptions, RedisQueueOptions, RegistrationPolicy, SessionPolicy, SqliteQueueOptions,
-    SqliteStorageOptions,
+    MySqlStorageOptions, PostgresQueueOptions, PostgresStorageOptions, RedisQueueOptions,
+    RegistrationPolicy, SessionPolicy, SqliteQueueOptions, SqliteStorageOptions,
 };
 
 use crate::{cli::LogFormat, error::AppError, paths::ResolvedPaths};
@@ -171,10 +171,34 @@ pub struct ResolvedQueueConfig {
     pub shutdown_grace_period: Duration,
     pub provider: ResolvedQueueProvider,
 }
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct RawStorage {
+    pub provider: String,
     pub sqlite: Option<RawSqlite>,
+    pub postgres: RawQueueSqlNetwork,
+    pub mysql: RawQueueSqlNetwork,
+}
+impl Default for RawStorage {
+    fn default() -> Self {
+        Self {
+            provider: "sqlite".into(),
+            sqlite: None,
+            postgres: RawQueueSqlNetwork::default(),
+            mysql: RawQueueSqlNetwork::default(),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub enum ResolvedStorageProvider {
+    Sqlite {
+        options: SqliteStorageOptions,
+        derived_path: bool,
+        create_if_missing: bool,
+    },
+    Postgres(PostgresStorageOptions),
+    MySql(MySqlStorageOptions),
 }
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
@@ -395,6 +419,90 @@ pub fn resolve_sqlite(
     Ok((options, derived, create_if_missing))
 }
 
+pub fn resolve_storage(
+    raw: &RawConfig,
+    paths: &ResolvedPaths,
+) -> Result<ResolvedStorageProvider, AppError> {
+    match raw.storage.provider.as_str() {
+        "sqlite" => {
+            let (options, derived_path, create_if_missing) = resolve_sqlite(raw, paths)?;
+            Ok(ResolvedStorageProvider::Sqlite {
+                options,
+                derived_path,
+                create_if_missing,
+            })
+        }
+        "postgres" | "mysql" => {
+            let (url, max_connections, timeout) = if raw.storage.provider == "postgres" {
+                (
+                    &raw.storage.postgres.url,
+                    raw.storage.postgres.max_connections,
+                    &raw.storage.postgres.acquire_timeout,
+                )
+            } else {
+                (
+                    &raw.storage.mysql.url,
+                    raw.storage.mysql.max_connections,
+                    &raw.storage.mysql.acquire_timeout,
+                )
+            };
+            let url = url.as_deref().ok_or_else(|| {
+                AppError::Config(format!("storage.{}.url is required", raw.storage.provider))
+            })?;
+            if max_connections == Some(0) {
+                return Err(AppError::Config(format!(
+                    "storage.{}.max_connections must be greater than zero",
+                    raw.storage.provider
+                )));
+            }
+            let timeout = timeout
+                .as_deref()
+                .map(humantime::parse_duration)
+                .transpose()
+                .map_err(|e| {
+                    AppError::Config(format!(
+                        "invalid storage.{}.acquire_timeout: {e}",
+                        raw.storage.provider
+                    ))
+                })?;
+            if timeout.is_some_and(|v| v.is_zero()) {
+                return Err(AppError::Config(format!(
+                    "storage.{}.acquire_timeout must be greater than zero",
+                    raw.storage.provider
+                )));
+            }
+            if raw.storage.provider == "postgres" {
+                let mut options = PostgresStorageOptions::new(url);
+                if let Some(n) = max_connections {
+                    options = options.max_connections(n);
+                }
+                if let Some(t) = timeout {
+                    options = options.acquire_timeout(t);
+                }
+                options
+                    .validate()
+                    .map_err(|e| AppError::Config(e.to_string()))?;
+                Ok(ResolvedStorageProvider::Postgres(options))
+            } else {
+                let mut options = MySqlStorageOptions::new(url);
+                if let Some(n) = max_connections {
+                    options = options.max_connections(n);
+                }
+                if let Some(t) = timeout {
+                    options = options.acquire_timeout(t);
+                }
+                options
+                    .validate()
+                    .map_err(|e| AppError::Config(e.to_string()))?;
+                Ok(ResolvedStorageProvider::MySql(options))
+            }
+        }
+        _ => Err(AppError::Config(
+            "storage.provider must be `sqlite`, `postgres` or `mysql`".into(),
+        )),
+    }
+}
+
 pub fn resolve_registration(raw: &RawConfig) -> Result<RegistrationPolicy, AppError> {
     match raw.auth.registration.as_str() {
         "open" => Ok(RegistrationPolicy::Open),
@@ -439,7 +547,7 @@ pub fn resolve_jwt(raw: &RawConfig) -> Result<Hs256JwtAccessTokenCodec, AppError
 }
 
 pub fn resolve_full(raw: &RawConfig, paths: &ResolvedPaths) -> Result<(), AppError> {
-    resolve_sqlite(raw, paths)?;
+    resolve_storage(raw, paths)?;
     resolve_registration(raw)?;
     resolve_session(raw)?;
     raw.http.resolve().map_err(AppError::Config)?;
@@ -599,7 +707,7 @@ pub fn resolve_queue(
                 .and_then(|s| s.url.as_deref())
                 .map(PathBuf::from)
                 .unwrap_or_else(|| paths.data_dir.join("windwatcher.db"));
-            if same_database_path(&path, &storage_location) {
+            if raw.storage.provider == "sqlite" && same_database_path(&path, &storage_location) {
                 return Err(AppError::Config("storage.sqlite and queue.sqlite resolve to the same database file; queue requires a separate database".into()));
             }
             let create_if_missing = queue.sqlite.create_if_missing.unwrap_or(true);
@@ -822,6 +930,9 @@ mod tests {
         raw.queue.as_mut().unwrap().lease_duration = DurationValue("60s".into());
         raw.queue.as_mut().unwrap().sqlite.path = Some(paths.data_dir.join("windwatcher.db"));
         assert!(resolve_queue(&raw, &paths).is_err());
+        // An inactive SQLite storage block must not conflict with the queue file.
+        raw.storage.provider = "postgres".into();
+        assert!(resolve_queue(&raw, &paths).is_ok());
     }
 
     #[test]
@@ -913,6 +1024,51 @@ mod tests {
             resolve_queue(&raw, &paths).is_ok(),
             "unselected provider options must not be validated"
         );
+    }
+
+    #[test]
+    fn storage_provider_selection_requires_and_redacts_network_urls() {
+        let paths = ResolvedPaths {
+            config_file: "unused".into(),
+            data_dir: "unused".into(),
+        };
+        let secret = "storage_fake_password";
+        for (provider, scheme) in [("postgres", "postgresql"), ("mysql", "mysql")] {
+            let mut raw = RawConfig::default();
+            raw.storage.provider = provider.into();
+            assert!(
+                resolve_storage(&raw, &paths)
+                    .unwrap_err()
+                    .to_string()
+                    .contains(&format!("storage.{provider}.url"))
+            );
+            if provider == "postgres" {
+                raw.storage.postgres.url =
+                    Some(format!("{scheme}://user:{secret}@localhost/windwatcher"));
+            } else {
+                raw.storage.mysql.url =
+                    Some(format!("{scheme}://user:{secret}@localhost/windwatcher"));
+            }
+            let resolved = resolve_storage(&raw, &paths).unwrap();
+            assert!(!format!("{raw:?} {resolved:?}").contains(secret));
+            if provider == "postgres" {
+                raw.storage.postgres.max_connections = Some(0);
+            } else {
+                raw.storage.mysql.max_connections = Some(0);
+            }
+            assert!(resolve_storage(&raw, &paths).is_err());
+            if provider == "postgres" {
+                raw.storage.postgres.max_connections = None;
+                raw.storage.postgres.acquire_timeout = Some("0s".into());
+            } else {
+                raw.storage.mysql.max_connections = None;
+                raw.storage.mysql.acquire_timeout = Some("0s".into());
+            }
+            assert!(resolve_storage(&raw, &paths).is_err());
+        }
+        let mut raw = RawConfig::default();
+        raw.storage.provider = "unknown".into();
+        assert!(resolve_storage(&raw, &paths).is_err());
     }
 
     #[test]

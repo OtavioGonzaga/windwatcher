@@ -28,6 +28,37 @@ Official adapters may use different physical representations, but must preserve
 their atomic creation, uniqueness, refresh-token rotation, and revocation
 semantics. The ports remain independent of SQLx and of any async runtime.
 
+## Official SQL adapters
+
+The library provides SQLite, PostgreSQL, and MySQL implementations of all six
+ports: identity, sessions, conversations, messages, messaging queries, and
+atomic create commands. Enable `sqlite`, `postgres`, or `mysql` independently
+on the `windwatcher` crate; the official server enables all three. Selecting a
+primary storage provider is independent of queue provider selection.
+
+Connections never apply migrations implicitly. Each adapter embeds its own
+forward-only migration set and exposes `migrate`, `check_schema`, and
+`migration_status` operations. The server selects its primary adapter with
+`storage.provider` (`sqlite` by default, or `postgres` / `mysql`) and the
+explicit `windwatcher storage migrate` and `storage status` CLI commands apply
+to the selected database. PostgreSQL and MySQL URLs must target dedicated,
+pre-created databases. See [server configuration](server-configuration.md).
+
+The three adapters preserve the same application ports and shared contracts;
+physical representations and locking strategies remain adapter-specific.
+PostgreSQL uses native UUID and bytea values; MySQL uses binary UUID/hash
+columns. Both network adapters store timestamps as signed Unix microseconds.
+
+Network message mutations lock the conversation before checking current
+membership/role and then lock the message. Membership changes use the same
+conversation lock, so committed removal or demotion cannot be bypassed by stale
+authorization. Consumer projections and multi-statement message reads use explicit
+repeatable-read, read-only transactions, independently of server isolation defaults.
+MySQL mutation connections explicitly use read committed to re-read current state
+after waiting for locks. Keyed commands reserve their scoped identity in the same
+transaction before creating resources; concurrent retries wait and then replay the
+committed result (or report changed input). Failed commands roll back the reservation.
+
 ## SQLite
 
 SQLite is the first official persistence adapter. Enable it with the `sqlite`
@@ -116,9 +147,8 @@ without adopting SQLite-specific physical assertions.
 
 ## Current limitations
 
-Only SQLite is implemented. There is no automatic startup migration or other
-database adapter. Configuration and explicit migration CLI commands belong to
-the server, not the reusable library.
+There is no automatic startup migration. Configuration and explicit migration
+CLI commands belong to the server, not the reusable library.
 
 ## Paginated message history
 
@@ -140,3 +170,20 @@ row determines `has_more` and is removed. No deletion filter excludes tombstones
 The existing unique `(conversation_id, id)` key supports this access path; no
 migration was required. Cursor validation and encoding belong to `ListMessages`,
 not SQLite. See [pagination](pagination.md).
+
+## Real network-adapter regression tests
+
+Set `WINDWATCHER_TEST_POSTGRES_URL` and `WINDWATCHER_TEST_MYSQL_URL` to disposable
+services with database-creation privileges, then run:
+
+```sh
+cargo test -p windwatcher --all-features --test postgres_storage --test mysql_storage -- --include-ignored
+cargo test -p windwatcher --all-features --lib read_snapshot_survives -- --include-ignored
+```
+
+The integration suites create isolated databases and exercise shared contracts,
+concurrent keyed commands, and authorization changes while a second pool holds
+the conversation lock. Snapshot tests explicitly set the reader session default
+to `READ COMMITTED` and verify that a concurrent committed insert is invisible
+until the read transaction ends. They create and remove uniquely named test tables
+in the database named by each URL; never point these URLs at production data.

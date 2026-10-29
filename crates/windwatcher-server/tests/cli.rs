@@ -75,6 +75,33 @@ fn network_queue_config_selection_and_safe_errors() {
     }
 }
 
+#[test]
+fn network_storage_config_selection_and_safe_errors() {
+    let directory = TempDir::new().unwrap();
+    let path = complete_config(&directory, "warn");
+    let base = fs::read_to_string(&path).unwrap();
+    let secret = "primary_storage_fake_password";
+    for (provider, scheme, label) in [
+        ("postgres", "postgresql", "PostgreSQL"),
+        ("mysql", "mysql", "MySQL"),
+    ] {
+        fs::write(&path, format!("{base}\n[storage]\nprovider = '{provider}'\n[storage.{provider}]\nurl = '{scheme}://user:{secret}@localhost/windwatcher'\n")).unwrap();
+        command(&path)
+            .args(["config", "check"])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains(format!("Storage: {label}")))
+            .stdout(predicate::str::contains(secret).not())
+            .stderr(predicate::str::contains(secret).not());
+        fs::write(&path, format!("{base}\n[storage]\nprovider = '{provider}'\n[storage.{provider}]\nurl = '{secret}'\n")).unwrap();
+        command(&path)
+            .args(["config", "check"])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains(secret).not());
+    }
+}
+
 #[tokio::test]
 #[ignore = "requires disposable PostgreSQL, MySQL and Redis; set WINDWATCHER_TEST_*_URL"]
 async fn network_queue_migration_and_jobs_cli() {

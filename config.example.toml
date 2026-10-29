@@ -1,11 +1,29 @@
 # Windwatcher configuration. Precedence: defaults < TOML < WINDWATCHER__... < CLI.
 
+# Primary persistence provider: sqlite, postgres, or mysql. This is independent
+# from the optional queue.provider below.
+[storage]
+provider = "sqlite"
+
 [storage.sqlite]
 # Omit url for the mode-specific default database path.
 # url = "/var/lib/windwatcher/windwatcher.db"
 create_if_missing = true
 max_connections = 8
 busy_timeout = "5s"
+
+# For a dedicated, pre-created PostgreSQL or MySQL primary database, select the
+# provider above and configure only its corresponding block. Keep credentials in
+# environment/secret management rather than committed files.
+# [storage.postgres]
+# url = "postgresql://windwatcher:password@localhost/windwatcher"
+# max_connections = 8
+# acquire_timeout = "5s"
+#
+# [storage.mysql]
+# url = "mysql://windwatcher:password@localhost/windwatcher"
+# max_connections = 8
+# acquire_timeout = "5s"
 
 # Optional durable queue. SQL databases/migrations are separate from storage.
 # Remove this section to disable queue operations.

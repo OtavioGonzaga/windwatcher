@@ -285,6 +285,7 @@ async fn sqlite_satisfies_portable_idempotent_command_contract() {
     let owner = persisted_user(&storage, "command_owner").await;
     let peer = persisted_user(&storage, "command_peer").await;
     support::idempotency_contract::run(&storage, owner.id(), peer.id()).await;
+    support::idempotency_contract::concurrent(&storage, &storage, owner.id(), peer.id()).await;
 }
 
 #[tokio::test]

@@ -1,6 +1,90 @@
 use time::{Duration, OffsetDateTime};
 use windwatcher::*;
 
+/// Independent instances must converge before exposing successful keyed effects.
+pub async fn concurrent<S: CreateCommandStore + ConversationStore + MessageStore>(
+    first: &S,
+    second: &S,
+    actor: UserId,
+    peer: UserId,
+) {
+    let now = OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap();
+    let key = IdempotencyKey::new("concurrent-group").unwrap();
+    let command = |title: &str| ConversationCreateCommand {
+        conversation: Conversation::new_group(
+            ConversationId::new(),
+            GroupTitle::new(title).unwrap(),
+            now,
+        ),
+        actor,
+        participants: vec![peer],
+    };
+    let a = command("concurrent");
+    let b = command("concurrent");
+    let c = command("concurrent");
+    let (a, b, c) = tokio::join!(
+        first.create_conversation_command(&a, Some(&key), now),
+        second.create_conversation_command(&b, Some(&key), now),
+        second.create_conversation_command(&c, Some(&key), now)
+    );
+    let (a, b, c) = (a.unwrap(), b.unwrap(), c.unwrap());
+    assert_eq!(a.value, b.value);
+    assert_eq!(a.value, c.value);
+    let dispositions = [a.disposition, b.disposition, c.disposition];
+    assert_eq!(
+        dispositions
+            .iter()
+            .filter(|d| **d == CreateDisposition::Created)
+            .count(),
+        1
+    );
+    assert_eq!(
+        dispositions
+            .iter()
+            .filter(|d| **d == CreateDisposition::Replayed)
+            .count(),
+        2
+    );
+    let conversation = a.value;
+    let key = IdempotencyKey::new("concurrent-message").unwrap();
+    let message = || {
+        Message::new(
+            MessageId::new(),
+            conversation,
+            actor,
+            MessageContent::new("concurrent").unwrap(),
+            None,
+            now,
+        )
+        .unwrap()
+    };
+    let a = message();
+    let b = message();
+    let (a, b) = tokio::join!(
+        first.send_message_command(&a, Some(&key), now),
+        second.send_message_command(&b, Some(&key), now)
+    );
+    let (a, b) = (a.unwrap(), b.unwrap());
+    assert_eq!(a.value.id(), b.value.id());
+    assert!(matches!(
+        (a.disposition, b.disposition),
+        (CreateDisposition::Created, CreateDisposition::Replayed)
+            | (CreateDisposition::Replayed, CreateDisposition::Created)
+    ));
+    // Different fingerprints racing for the same identity must yield KeyReused.
+    let key = IdempotencyKey::new("concurrent-mismatch").unwrap();
+    let a = command("first");
+    let b = command("second");
+    let (a, b) = tokio::join!(
+        first.create_conversation_command(&a, Some(&key), now),
+        second.create_conversation_command(&b, Some(&key), now)
+    );
+    assert!(matches!(
+        (a, b),
+        (Ok(_), Err(CreateCommandError::KeyReused)) | (Err(CreateCommandError::KeyReused), Ok(_))
+    ));
+}
+
 /// Portable persisted create/replay semantics, with explicit time and no sleeps.
 pub async fn run<S: CreateCommandStore + ConversationStore + MessageStore>(
     store: &S,

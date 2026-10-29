@@ -12,8 +12,12 @@ pub enum AppError {
         #[source]
         source: std::io::Error,
     },
-    #[error("failed to open SQLite database")]
-    Storage(#[source] Box<dyn Error + Send + Sync>),
+    #[error("failed to open {backend} database")]
+    Storage {
+        backend: &'static str,
+        #[source]
+        source: Box<dyn Error + Send + Sync>,
+    },
     #[error("failed to inspect database migrations")]
     MigrationStatus(#[source] Box<dyn Error + Send + Sync>),
     #[error("failed to apply database migrations")]
@@ -67,6 +71,26 @@ impl AppError {
                     }
                     _ => None,
                 })
+                .or_else(|| {
+                    source
+                        .downcast_ref::<windwatcher::PostgresStorageError>()
+                        .and_then(|error| match error {
+                            windwatcher::PostgresStorageError::InvalidMigrationHistory(message) => {
+                                Some(format!("invalid database migration history: {message}"))
+                            }
+                            _ => None,
+                        })
+                })
+                .or_else(|| {
+                    source
+                        .downcast_ref::<windwatcher::MySqlStorageError>()
+                        .and_then(|error| match error {
+                            windwatcher::MySqlStorageError::InvalidMigrationHistory(message) => {
+                                Some(format!("invalid database migration history: {message}"))
+                            }
+                            _ => None,
+                        })
+                })
                 .unwrap_or_else(|| self.to_string()),
             Self::UserCreation(windwatcher::CreateLocalUserError::InvalidUsername(error)) => {
                 format!("invalid username: {error}")
@@ -101,6 +125,27 @@ mod tests {
         assert_eq!(
             migration.operator_message(),
             "invalid database migration history: migration 1 checksum differs"
+        );
+        for source in [
+            Box::new(windwatcher::PostgresStorageError::InvalidMigrationHistory(
+                "migration 1 checksum differs".into(),
+            )) as Box<dyn std::error::Error + Send + Sync>,
+            Box::new(windwatcher::MySqlStorageError::InvalidMigrationHistory(
+                "migration 1 checksum differs".into(),
+            )),
+        ] {
+            assert_eq!(
+                AppError::MigrationStatus(source).operator_message(),
+                migration.operator_message()
+            );
+        }
+        let connection = AppError::Storage {
+            backend: "PostgreSQL",
+            source: Box::new(std::io::Error::other("secret")),
+        };
+        assert_eq!(
+            connection.operator_message(),
+            "failed to open PostgreSQL database"
         );
     }
 }
