@@ -316,7 +316,7 @@ fn init_creates_private_configuration_without_persistence_or_overwrite() {
 fn config_show_displays_effective_redacted_values_without_connecting_or_reading_secret() {
     let directory = TempDir::new().unwrap();
     let path = directory.path().join("show.toml");
-    fs::write(&path, "[auth.jwt]\nsecret = 'JWT_TOP_SECRET'\n[storage]\nprovider = 'postgres'\n[storage.postgres]\nurl = 'postgres://u:PG_TOP_SECRET@127.0.0.1:1/db'\n[storage.mysql]\nurl = 'mysql://u:MYSQL_TOP_SECRET@127.0.0.1:1/db'\n[storage.mongodb]\nurl = 'mongodb://u:MONGO_TOP_SECRET@127.0.0.1:1/'\n[queue]\nprovider = 'redis'\n[queue.redis]\nurl = 'redis://:REDIS_TOP_SECRET@127.0.0.1:1/'\n").unwrap();
+    fs::write(&path, "[auth.jwt]\nsecret = 'JWT_TOP_SECRET'\n[storage]\nprovider = 'postgres'\n[storage.sqlite]\nurl = 'sqlite://SQLITE_TOP_SECRET'\n[storage.postgres]\nurl = 'postgres://u:PG_TOP_SECRET@127.0.0.1:1/db'\n[storage.mysql]\nurl = 'mysql://u:MYSQL_TOP_SECRET@127.0.0.1:1/db'\n[storage.mongodb]\nurl = 'mongodb://u:MONGO_TOP_SECRET@127.0.0.1:1/'\n[queue]\nprovider = 'redis'\n[queue.postgres]\nurl = 'postgres://u:QUEUE_PG_TOP_SECRET@127.0.0.1:1/db'\n[queue.mysql]\nurl = 'mysql://u:QUEUE_MYSQL_TOP_SECRET@127.0.0.1:1/db'\n[queue.redis]\nurl = 'redis://:REDIS_TOP_SECRET@127.0.0.1:1/'\n").unwrap();
     let output = command(&path)
         .env("WINDWATCHER__SERVER__BIND", "[::1]:1234")
         .args([
@@ -338,9 +338,12 @@ fn config_show_displays_effective_redacted_values_without_connecting_or_reading_
     let stderr = String::from_utf8(output.stderr).unwrap();
     for secret in [
         "JWT_TOP_SECRET",
+        "SQLITE_TOP_SECRET",
         "PG_TOP_SECRET",
         "MYSQL_TOP_SECRET",
         "MONGO_TOP_SECRET",
+        "QUEUE_PG_TOP_SECRET",
+        "QUEUE_MYSQL_TOP_SECRET",
         "REDIS_TOP_SECRET",
     ] {
         assert!(!text.contains(secret));
@@ -352,6 +355,20 @@ fn config_show_displays_effective_redacted_values_without_connecting_or_reading_
     assert_eq!(parsed["logging"]["filter"].as_str(), Some("debug"));
     assert_eq!(parsed["logging"]["format"].as_str(), Some("json"));
     assert_eq!(parsed["auth"]["jwt"]["secret"].as_str(), Some("<redacted>"));
+    for (section, provider) in [
+        ("storage", "sqlite"),
+        ("storage", "postgres"),
+        ("storage", "mysql"),
+        ("storage", "mongodb"),
+        ("queue", "postgres"),
+        ("queue", "mysql"),
+        ("queue", "redis"),
+    ] {
+        assert_eq!(
+            parsed[section][provider]["url"].as_str(),
+            Some("<redacted>")
+        );
+    }
     command(&path)
         .env(
             "WINDWATCHER__AUTH__JWT__SECRET_FILE",
