@@ -75,7 +75,7 @@ fn optional_timestamp(
     field: &str,
 ) -> Result<Option<OffsetDateTime>, &'static str> {
     match document.get(field) {
-        None | Some(Bson::Null) => Ok(None),
+        Some(Bson::Null) => Ok(None),
         Some(Bson::Int64(value)) => {
             OffsetDateTime::from_unix_timestamp_nanos(i128::from(*value) * 1_000)
                 .map(Some)
