@@ -58,7 +58,7 @@ pub use conversations::{
     StartDirectConversationError, StartDirectConversationOutcome, TransferGroupOwnership,
     TransferGroupOwnershipError,
 };
-pub use cursor::CursorError;
+pub use cursor::{CursorError, MAX_CURSOR_BYTES};
 pub use events::{DomainEvent, Outcome};
 pub use idempotency::{
     ConversationCreateCommand, ConversationCreateRequest, CreateCommandError, CreateCommandStore,

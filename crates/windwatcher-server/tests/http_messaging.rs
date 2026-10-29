@@ -453,7 +453,12 @@ fn openapi_messaging_surface_has_explicit_security_pages_discriminator_and_heade
         assert_eq!(limit["schema"]["default"], 50);
         assert_eq!(limit["schema"]["minimum"], 1);
         assert_eq!(limit["schema"]["maximum"], 100);
-        assert!(params.iter().any(|p| p["name"] == "cursor"));
+        let cursor = params.iter().find(|p| p["name"] == "cursor").unwrap();
+        assert_eq!(
+            cursor["schema"]["maxLength"],
+            windwatcher::MAX_CURSOR_BYTES,
+            "{cursor}"
+        );
     }
     for (name, fields) in [
         (
@@ -1240,6 +1245,23 @@ async fn extraction_pagination_keys_and_auth_are_normalized() {
         "/v1/conversations/{}",
         self_direct.2["id"].as_str().unwrap()
     );
+    // Syntactically valid base64url, oversized before any cursor decoding.
+    let oversized = "A".repeat(windwatcher::MAX_CURSOR_BYTES + 4);
+    for path in [
+        "/v1/conversations".to_owned(),
+        format!("{base}/members"),
+        format!("{base}/messages"),
+    ] {
+        problem(
+            &send(
+                &f.router,
+                bearer("GET", &format!("{path}?cursor={oversized}"), &token),
+            )
+            .await,
+            400,
+            "pagination.invalid_cursor",
+        );
+    }
     for request in [
         authorized(
             "PUT",

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Bound pagination cursors to 1024 encoded bytes in HTTP validation and OpenAPI.
+
 - Update locked TLS dependencies to patched releases and expand authorization,
   idempotency and secret-redaction regression coverage.
 

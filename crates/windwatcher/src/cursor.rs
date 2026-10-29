@@ -4,6 +4,18 @@ use serde::{Deserialize, Serialize};
 use crate::{ConversationBoundary, MemberBoundary, UserId};
 use crate::{ConversationId, MessageId};
 
+/// Inclusive maximum encoded cursor size, checked before Base64 or JSON decoding.
+pub const MAX_CURSOR_BYTES: usize = 1024;
+
+fn decode_bytes(token: &str) -> Result<Vec<u8>, CursorError> {
+    if token.len() > MAX_CURSOR_BYTES {
+        return Err(CursorError::Malformed);
+    }
+    URL_SAFE_NO_PAD
+        .decode(token)
+        .map_err(|_| CursorError::Malformed)
+}
+
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct OrderedCursorV1 {
@@ -32,9 +44,7 @@ fn decode_ordered(
     kind: &str,
     scope: &str,
 ) -> Result<(time::OffsetDateTime, String), CursorError> {
-    let bytes = URL_SAFE_NO_PAD
-        .decode(token)
-        .map_err(|_| CursorError::Malformed)?;
+    let bytes = decode_bytes(token)?;
     let payload: OrderedCursorV1 =
         serde_json::from_slice(&bytes).map_err(|_| CursorError::Malformed)?;
     if payload.v != 1 {
@@ -99,7 +109,7 @@ pub(crate) fn decode_member(
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum CursorError {
-    /// Invalid encoding, payload or typed identifiers.
+    /// Oversized token, invalid encoding, payload or typed identifiers.
     #[error("malformed cursor")]
     Malformed,
     /// The cursor uses an unsupported format version.
@@ -137,9 +147,7 @@ pub(crate) fn decode_message(
     token: &str,
     conversation: ConversationId,
 ) -> Result<MessageId, CursorError> {
-    let bytes = URL_SAFE_NO_PAD
-        .decode(token)
-        .map_err(|_| CursorError::Malformed)?;
+    let bytes = decode_bytes(token)?;
     let payload: MessageCursorV1 =
         serde_json::from_slice(&bytes).map_err(|_| CursorError::Malformed)?;
     if payload.v != 1 {
@@ -165,6 +173,52 @@ pub(crate) fn decode_message(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn all_cursor_kinds_enforce_the_encoded_byte_limit_before_decoding() {
+        fn check(token: &str, decode: impl Fn(&str) -> Result<(), CursorError>) {
+            assert!(token.len() < MAX_CURSOR_BYTES);
+            assert_eq!(decode(token), Ok(()));
+            let mut payload = URL_SAFE_NO_PAD.decode(token).unwrap();
+            // JSON permits trailing whitespace: both tokens would otherwise decode
+            // successfully. Test the inclusive boundary, not just malformed JSON.
+            payload.resize(MAX_CURSOR_BYTES / 4 * 3, b' ');
+            let exact = URL_SAFE_NO_PAD.encode(&payload);
+            assert_eq!(exact.len(), MAX_CURSOR_BYTES);
+            assert_eq!(decode(&exact), Ok(()));
+            payload.push(b' ');
+            let oversized = URL_SAFE_NO_PAD.encode(&payload);
+            assert!(oversized.len() > MAX_CURSOR_BYTES);
+            assert_eq!(decode(&oversized), Err(CursorError::Malformed));
+            assert_eq!(decode(&"A".repeat(4096)), Err(CursorError::Malformed));
+        }
+        let actor = UserId::new();
+        let conversation = ConversationId::new();
+        let at = time::OffsetDateTime::UNIX_EPOCH;
+        check(
+            &encode_conversation(
+                actor,
+                ConversationBoundary {
+                    activity_at: at,
+                    conversation_id: conversation,
+                },
+            ),
+            |token| decode_conversation(token, actor).map(|_| ()),
+        );
+        check(
+            &encode_member(
+                conversation,
+                MemberBoundary {
+                    joined_at: at,
+                    user_id: actor,
+                },
+            ),
+            |token| decode_member(token, conversation).map(|_| ()),
+        );
+        check(&encode_message(conversation, MessageId::new()), |token| {
+            decode_message(token, conversation).map(|_| ())
+        });
+    }
 
     #[test]
     fn ordered_cursors_preserve_precision_and_enforce_kind_scope_and_strictness() {

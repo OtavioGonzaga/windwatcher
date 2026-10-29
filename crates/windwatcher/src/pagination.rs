@@ -65,6 +65,8 @@ impl PageRequest {
         }
     }
     /// Continues from an opaque token, retaining the requested page size.
+    /// List use cases reject tokens above [`crate::MAX_CURSOR_BYTES`] encoded bytes
+    /// before decoding; this constructor only stores the uninterpreted token.
     pub fn with_cursor(mut self, cursor: impl Into<String>) -> Self {
         self.cursor = Some(cursor.into());
         self

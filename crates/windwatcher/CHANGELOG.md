@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Reject encoded conversation/member/message cursors above 1024 bytes before
+  Base64 or JSON decoding, preserving issued v1 cursor compatibility.
+
 - Update locked TLS dependencies to patched releases for six RustSec advisories.
 
 - Limit Group creation/rename titles to 256 UTF-8 bytes and initial creation to

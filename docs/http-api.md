@@ -106,6 +106,10 @@ watermarks are unread-calculation boundaries, **not read receipts**.
 
 ## Collection pagination and activity
 
+Continuation cursors are limited to 1024 encoded bytes before Base64/JSON decoding,
+also enforced by the reusable library. Oversized values return
+`400 pagination.invalid_cursor`; OpenAPI declares `maxLength: 1024` for the query.
+
 All collection responses are `{ "items": [], "next_cursor": null, "has_more": false }`.
 `has_more` equals cursor presence. Query parameters are `limit` (default 50,
 inclusive range 1..100) and opaque next-only `cursor`; no offset, page number or
