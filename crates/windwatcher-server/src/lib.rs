@@ -57,11 +57,26 @@ async fn run() -> Result<(), AppError> {
         RuntimeMode::User
     };
     let paths = ResolvedPaths::resolve(mode)?;
-    let raw = config::load(&paths, cli.config)?;
-    logging::initialize(&raw.logging, cli.log_filter.as_deref(), cli.log_format)?;
+    let raw = config::load(&paths, cli.config).map_err(|error| {
+        if matches!(command, Command::Doctor) {
+            runtime::doctor::configuration_failure()
+        } else {
+            error
+        }
+    })?;
+    logging::initialize(&raw.logging, cli.log_filter.as_deref(), cli.log_format).map_err(
+        |error| {
+            if matches!(command, Command::Doctor) {
+                runtime::doctor::configuration_failure()
+            } else {
+                error
+            }
+        },
+    )?;
     tracing::info!(mode = ?mode, "configuration loaded");
     match command {
         Command::Serve => runtime::serve::run(&raw, &paths).await,
+        Command::Doctor => runtime::doctor::run(&raw, &paths).await,
         Command::Config {
             command: cli::ConfigCommand::Check,
         } => {

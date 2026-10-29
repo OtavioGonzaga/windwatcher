@@ -26,6 +26,8 @@ pub struct Cli {
 pub enum Command {
     /// Run the standalone HTTP and realtime service (the default command).
     Serve,
+    /// Diagnose configuration, storage and configured queue without changing them.
+    Doctor,
     /// Apply pending database migrations.
     Migrate(MigrateArgs),
     /// Run the standalone background worker.

@@ -105,6 +105,100 @@ fn serve_preflight_requires_existing_current_storage_before_binding() {
 }
 
 #[test]
+fn doctor_is_read_only_and_reports_storage_and_optional_queue_independently() {
+    let directory = TempDir::new().unwrap();
+    let path = complete_config(&directory, "warn");
+    command(&path)
+        .arg("doctor")
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("[fail] storage:"))
+        .stdout(predicate::str::contains("[ok] queue: disabled"))
+        .stdout(predicate::str::contains("Doctor: unhealthy"));
+    assert!(!directory.path().join("windwatcher.db").exists());
+    fs::File::create(directory.path().join("windwatcher.db")).unwrap();
+    command(&path)
+        .arg("doctor")
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("storage migrations: pending"))
+        .stdout(predicate::str::contains("windwatcher migrate --storage"));
+    command(&path)
+        .args(["migrate", "status"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Status: pending"));
+    command(&path).arg("migrate").assert().success();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    command(&path)
+        .env(
+            "WINDWATCHER__SERVER__BIND",
+            listener.local_addr().unwrap().to_string(),
+        )
+        .arg("doctor")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("storage migrations: current"))
+        .stdout(predicate::str::contains("Doctor: healthy"));
+    let base = fs::read_to_string(&path).unwrap();
+    fs::write(
+        &path,
+        format!(
+            "{base}\n[queue]\n[queue.sqlite]\npath = {:?}\n",
+            directory.path().join("queue.db").display().to_string()
+        ),
+    )
+    .unwrap();
+    command(&path).arg("doctor").assert().failure();
+    assert!(!directory.path().join("queue.db").exists());
+    fs::File::create(directory.path().join("queue.db")).unwrap();
+    command(&path)
+        .arg("doctor")
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("queue migrations: pending"))
+        .stdout(predicate::str::contains("windwatcher migrate --queue"));
+    command(&path)
+        .args(["migrate", "--queue"])
+        .assert()
+        .success();
+    command(&path).arg("doctor").assert().success();
+    command(&path)
+        .env("WINDWATCHER__STORAGE__PROVIDER", "postgres")
+        .env(
+            "WINDWATCHER__STORAGE__POSTGRES__URL",
+            "postgresql://user:TOP_SECRET@127.0.0.1:1/db",
+        )
+        .arg("doctor")
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("[fail] storage:"))
+        .stdout(predicate::str::contains("[ok] queue: SQLite"))
+        .stdout(predicate::str::contains("TOP_SECRET").not())
+        .stderr(predicate::str::contains("TOP_SECRET").not());
+}
+
+#[test]
+fn doctor_reports_invalid_configuration_without_quoting_input() {
+    let directory = TempDir::new().unwrap();
+    let path = complete_config(&directory, "warn");
+    for (key, value) in [
+        ("WINDWATCHER__SERVER__BIND", "TOP_SECRET"),
+        ("WINDWATCHER__QUEUE__CONCURRENCY", "TOP_SECRET"),
+    ] {
+        command(&path)
+            .env(key, value)
+            .arg("doctor")
+            .assert()
+            .failure()
+            .stdout(predicate::str::contains("[fail] configuration"))
+            .stdout(predicate::str::contains("Doctor: unhealthy"))
+            .stdout(predicate::str::contains("TOP_SECRET").not())
+            .stderr(predicate::str::contains("TOP_SECRET").not());
+    }
+}
+
+#[test]
 fn network_queue_config_selection_and_safe_errors() {
     let directory = TempDir::new().unwrap();
     let path = complete_config(&directory, "warn");

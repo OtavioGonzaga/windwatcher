@@ -2,6 +2,8 @@ use std::{error::Error, path::PathBuf};
 
 #[derive(Debug, thiserror::Error)]
 pub enum AppError {
+    #[error("installation is unhealthy")]
+    DoctorUnhealthy,
     #[error("failed to bind server listener at {bind}")]
     ListenerBind {
         bind: std::net::SocketAddr,
@@ -92,6 +94,17 @@ impl AppError {
                         Some(format!("invalid database migration history: {message}"))
                     }
                     _ => None,
+                })
+                .or_else(|| {
+                    source.downcast_ref::<crate::queue::QueueLifecycleError>().and_then(|error| {
+                        use crate::queue::QueueLifecycleError as E;
+                        match error {
+                            E::Sqlite(windwatcher::SqliteQueueError::InvalidMigrationHistory(_))
+                            | E::Postgres(windwatcher::PostgresQueueError::InvalidMigrationHistory)
+                            | E::MySql(windwatcher::MySqlQueueError::InvalidMigrationHistory) => Some("invalid queue migration history; inspect the migration ledger before retrying".into()),
+                            _ => None,
+                        }
+                    })
                 })
                 .or_else(|| {
                     source
