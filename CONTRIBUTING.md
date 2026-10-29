@@ -43,26 +43,77 @@ cargo fmt --all -- --check
 
 cargo check \
   --workspace \
-  --all-targets
+  --all-targets \
+  --locked
 
 cargo clippy \
   --workspace \
   --all-targets \
   --all-features \
+  --locked \
   -- \
   -D warnings
 
 cargo test \
   --workspace \
   --all-targets \
-  --all-features
+  --all-features \
+  --locked
 
+cargo test \
+  --workspace \
+  --doc \
+  --all-features \
+  --locked
+
+RUSTDOCFLAGS="-D warnings" \
 cargo doc \
   --workspace \
-  --no-deps
+  --all-features \
+  --no-deps \
+  --locked
 ```
 
-Future CI must reuse these expectations.
+### Continuous integration
+
+The `quality` job in [CI](.github/workflows/ci.yml) runs this baseline, including
+SQLite contracts without external services. Independent jobs also validate:
+
+- Library feature isolation: no features and each public feature individually;
+  the baseline covers all features together.
+- Production-target MSRV on Rust 1.99.0 (without test/dev-only targets).
+- RustSec vulnerabilities and informational warnings (`cargo audit --deny warnings`),
+  plus licenses, sources and dependency bans
+  (`cargo deny --all-features --locked check licenses sources bans`), using
+  [the reviewed dependency policy](deny.toml).
+- Six parallel external adapter contracts: PostgreSQL 18 storage/queue,
+  MySQL 8.4 storage/queue, MongoDB 8.2 replica-set storage and Redis 7 queue.
+- Standalone server network composition: queue migrations/jobs and primary
+  storage doctor CLI tests against all four services.
+
+All checks run for every PR to `main` and push to `main`, including documentation
+changes. Contributors must run the baseline locally; start disposable external
+services and run the relevant real-adapter tests when changing an adapter, not
+before every unrelated change. See [storage testing](docs/persistence.md),
+[queue adapter tests](docs/jobs.md#real-adapter-tests) and
+[operations](docs/operations.md) for detailed commands and safety requirements.
+CI runs every official external adapter on every PR.
+
+To reproduce the dependency-policy checks, install the tool versions used by CI
+with `cargo install cargo-audit --version 0.22.0 --locked --no-default-features` and
+`cargo install cargo-deny --version 0.20.2 --locked`, then run the policy commands
+above. The SHA-pinned audit Action manages its own versioned binary cache, denies
+warnings and never creates issues. These tools are separate from the baseline
+compiler validation.
+
+The final `CI / required` gate succeeds only when every job succeeds. After the
+workflow is merged and has run, maintainers should configure that single check
+as required for `main` in repository branch protection/rulesets. Repository files
+do not configure those GitHub settings.
+
+Dependabot checks Cargo and SHA-pinned GitHub Actions weekly. Cargo minor/patch
+updates are grouped; major updates remain separate. There is no automatic merge,
+publication, release automation or deployment in this workflow.
 
 ## Testing
 
@@ -96,7 +147,7 @@ service:
 
 ```bash
 WINDWATCHER_TEST_MONGODB_URL='mongodb://127.0.0.1:27018/?replicaSet=rs0' \
-  cargo test -p windwatcher --no-default-features --features mongodb -- --ignored
+  cargo test -p windwatcher --no-default-features --features mongodb --locked -- --ignored --test-threads=1
 ```
 
 ## Documentation

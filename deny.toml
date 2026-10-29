@@ -1,0 +1,33 @@
+# Audit the complete all-feature graph, including target-specific dependencies.
+# RustSec advisories are checked independently by cargo-audit in CI.
+[graph]
+all-features = true
+
+[licenses]
+# No default allowance for unlicensed crates and no package skips/exceptions.
+# MIT/Apache cover most of the graph; AND expressions must satisfy every term.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "ISC",                         # ring, rustls-webpki, untrusted
+    "BSD-3-Clause",                # redis, sha1_smol, subtle, matchit
+    "BSL-1.0",                     # xxhash-rust
+    "CC0-1.0",                     # tiny-keccak
+    "CDLA-Permissive-2.0",          # webpki-roots certificate data
+    "Unicode-3.0",                 # ICU data/code, unicode-ident/normalization
+    "Zlib",                        # foldhash, zlib-rs
+    "Apache-2.0 WITH LLVM-exception", # ar_archive_writer
+    # option-ext (via directories): file-level copyleft; does not relicense this
+    # MIT project. Preserve upstream notices and MPL terms for covered files.
+    "MPL-2.0",
+]
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
