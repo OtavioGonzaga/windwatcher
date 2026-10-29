@@ -39,6 +39,7 @@ macro_rules! catalog {
 }
 
 catalog! {
+    ShuttingDown => (SERVICE_UNAVAILABLE, "realtime.shutting_down", "realtime:shutting-down", "Server shutting down", "The server is shutting down. Reconnect later."),
     InvalidTicket => (UNAUTHORIZED, "realtime.invalid_ticket", "realtime:invalid-ticket", "Invalid realtime ticket", "The realtime ticket is invalid or unavailable."),
     SessionInactive => (UNAUTHORIZED, "realtime.session_inactive", "realtime:session-inactive", "Session inactive", "An active session is required."),
     UpgradeRequired => (UPGRADE_REQUIRED, "realtime.upgrade_required", "realtime:upgrade-required", "WebSocket upgrade required", "A valid WebSocket upgrade request is required."),

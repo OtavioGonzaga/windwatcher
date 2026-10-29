@@ -17,6 +17,10 @@ pub(super) const POLICY: Close = Close {
     code: 1008,
     reason: "session inactive",
 };
+pub(super) const SERVER_SHUTDOWN: Close = Close {
+    code: 1001,
+    reason: "server shutdown",
+};
 pub(super) const INTERNAL: Close = Close {
     code: 1011,
     reason: "internal failure",
@@ -89,6 +93,13 @@ impl Hub {
             tracing::info!(connection_id = %id.0, session_id = %session, "session_revoked_close");
             false
         });
+    }
+    pub(super) fn close_all(&self, close: Close) {
+        let mut entries = self.entries();
+        for entry in entries.values() {
+            entry.close.send_replace(Some(close));
+        }
+        entries.clear();
     }
     pub(super) fn publish(&self, recipients: &[UserId], frame: Arc<str>) -> usize {
         let recipients: HashSet<_> = recipients.iter().copied().collect();

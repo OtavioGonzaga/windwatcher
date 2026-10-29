@@ -18,6 +18,7 @@ use axum::{
 
 fn problem(error: Error, context: RequestContext) -> ApiProblem {
     match error {
+        Error::ShuttingDown => ApiProblem::new(ProblemKind::ShuttingDown, context),
         Error::InvalidTicket => ApiProblem::new(ProblemKind::InvalidTicket, context),
         Error::SessionInactive => ApiProblem::new(ProblemKind::SessionInactive, context),
         other => ApiProblem::internal(context, &other),
@@ -26,7 +27,7 @@ fn problem(error: Error, context: RequestContext) -> ApiProblem {
 
 #[utoipa::path(post, path = "/realtime/tickets", operation_id = "createRealtimeTicket", tag = "Realtime", security(("bearerAuth" = [])), responses(
     (status = 201, body = TicketResponse, headers(("Cache-Control" = String, description = "Always no-store"))),
-    (status = 401, body = ProblemDetails), (status = 429, body = ProblemDetails), (status = 500, body = ProblemDetails)
+    (status = 401, body = ProblemDetails), (status = 429, body = ProblemDetails), (status = 500, body = ProblemDetails), (status = 503, body = ProblemDetails)
 ))]
 pub(super) async fn ticket(
     State(state): State<HttpState>,
@@ -49,7 +50,7 @@ pub(super) async fn ticket(
 #[utoipa::path(get, path = "/realtime", operation_id = "connectRealtime", tag = "Realtime", security(("realtimeTicket" = [])), params(("ticket" = String, Query, description = "Short-lived one-use secret, never an access JWT")), responses(
     (status = 101, description = "WebSocket established; JSON Text frames described in docs/realtime.md"),
     (status = 400, body = ProblemDetails), (status = 401, body = ProblemDetails), (status = 426, body = ProblemDetails),
-    (status = 429, body = ProblemDetails), (status = 500, body = ProblemDetails)
+    (status = 429, body = ProblemDetails), (status = 500, body = ProblemDetails), (status = 503, body = ProblemDetails)
 ))]
 pub(super) async fn connect(
     State(state): State<HttpState>,

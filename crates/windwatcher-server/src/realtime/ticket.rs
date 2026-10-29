@@ -41,6 +41,9 @@ pub(super) enum IssueError {
     Random,
 }
 impl Tickets {
+    pub(super) fn clear(&mut self) {
+        self.0.clear();
+    }
     fn hash(raw: &str) -> [u8; 32] {
         Sha256::digest(raw.as_bytes()).into()
     }
