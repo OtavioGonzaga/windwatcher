@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Update locked TLS dependencies to patched releases for six RustSec advisories.
+
 - Limit Group creation/rename titles to 256 UTF-8 bytes and initial creation to
   256 participant entries before canonicalization, including idempotent commands;
   preserve readability of historical longer titles.

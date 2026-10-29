@@ -10,7 +10,7 @@
 - [Domain events](domain-events.md): explicit committed application outcomes and reactions.
 - [HTTP API](http-api.md): v1 transport contracts, authentication, errors,
   messaging client journey, pagination/idempotency, OpenAPI/Swagger, CORS and
-   peer-IP quotas.
+   client-IP quotas.
 - [Conversations](conversations.md): membership, consumer inbox queries and activity.
 - [Messages](messages.md): message projections, replies, tombstones and own read state.
 - [Pagination](pagination.md): opaque resource-scoped keyset continuations.
@@ -20,6 +20,7 @@
   paths, secrets, and logging.
 - [CLI](cli.md): explicit migrations, worker and operator commands.
 - [Operations](operations.md): startup, health, doctor and bounded graceful shutdown.
+- [Security](security.md): v1 controls, authorization regression matrix and dependency review.
 - [Architectural Decision Records](adr/README.md): significant decisions made
   with their implementation.
 - [Contributing](../CONTRIBUTING.md): development workflow and repository rules.
