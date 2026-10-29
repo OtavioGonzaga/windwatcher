@@ -4,6 +4,221 @@ use assert_cmd::Command;
 use predicates::prelude::*;
 use tempfile::TempDir;
 
+#[cfg(unix)]
+mod process_isolation {
+    use super::*;
+    use std::{
+        io::{BufRead, BufReader, Read, Write},
+        net::{SocketAddr, TcpListener, TcpStream},
+        process::{Child, Command as ProcessCommand, Stdio},
+        sync::mpsc,
+        thread,
+        time::Duration,
+    };
+
+    struct Process {
+        child: Child,
+        events: mpsc::Receiver<serde_json::Value>,
+        reader: Option<thread::JoinHandle<String>>,
+    }
+
+    impl Process {
+        fn start(config: &Path, role: &str) -> Self {
+            let mut command = ProcessCommand::new(assert_cmd::cargo::cargo_bin!("windwatcher"));
+            for (key, _) in std::env::vars_os() {
+                if key.to_string_lossy().starts_with("WINDWATCHER__") {
+                    command.env_remove(key);
+                }
+            }
+            let mut child = command
+                .args([
+                    "--config",
+                    config.to_str().unwrap(),
+                    "--log-format",
+                    "json",
+                    role,
+                ])
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap();
+            let stderr = child.stderr.take().unwrap();
+            let (sender, events) = mpsc::channel();
+            let reader = thread::spawn(move || {
+                let mut logs = String::new();
+                for line in BufReader::new(stderr).lines() {
+                    let line = line.unwrap();
+                    if let Ok(event) = serde_json::from_str(&line) {
+                        let _ = sender.send(event);
+                    }
+                    logs.push_str(&line);
+                    logs.push('\n');
+                }
+                logs
+            });
+            Self {
+                child,
+                events,
+                reader: Some(reader),
+            }
+        }
+
+        fn wait_for(&self, name: &str) -> serde_json::Value {
+            let deadline = std::time::Instant::now() + Duration::from_secs(15);
+            loop {
+                let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+                let event = self
+                    .events
+                    .recv_timeout(remaining)
+                    .expect("process did not emit expected lifecycle event");
+                if event["fields"]["message"] == name {
+                    return event;
+                }
+            }
+        }
+
+        fn terminate(mut self) -> (String, String) {
+            assert!(
+                ProcessCommand::new("kill")
+                    .args(["-TERM", &self.child.id().to_string()])
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+            let deadline = std::time::Instant::now() + Duration::from_secs(10);
+            let status = loop {
+                if let Some(status) = self.child.try_wait().unwrap() {
+                    break status;
+                }
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "process did not shut down"
+                );
+                thread::park_timeout(Duration::from_millis(10));
+            };
+            assert!(status.success());
+            let mut stdout = String::new();
+            self.child
+                .stdout
+                .take()
+                .unwrap()
+                .read_to_string(&mut stdout)
+                .unwrap();
+            (stdout, self.reader.take().unwrap().join().unwrap())
+        }
+    }
+
+    impl Drop for Process {
+        fn drop(&mut self) {
+            if self.child.try_wait().ok().flatten().is_none() {
+                let _ = self.child.kill();
+                let _ = self.child.wait();
+            }
+        }
+    }
+
+    #[test]
+    fn serve_ignores_unreachable_queue_and_logs_safe_lifecycle() {
+        let directory = TempDir::new().unwrap();
+        let path = complete_config(&directory, "info");
+        command(&path)
+            .args(["migrate", "--storage"])
+            .assert()
+            .success();
+        // Select a local ephemeral address and verify no TCP service is listening.
+        let unavailable = TcpListener::bind("127.0.0.1:0").unwrap();
+        let queue_address = unavailable.local_addr().unwrap();
+        drop(unavailable);
+        assert!(TcpStream::connect_timeout(&queue_address, Duration::from_secs(1)).is_err());
+        let queue_url = format!("redis://:TOP_SECRET@{queue_address}/0");
+        let base = fs::read_to_string(&path).unwrap();
+        fs::write(&path, format!("{base}\n[server]\nbind = '127.0.0.1:0'\n[queue]\nprovider = 'redis'\n[queue.redis]\nurl = '{queue_url}'\n")).unwrap();
+        let process = Process::start(&path, "serve");
+        let listening = process.wait_for("server_listening");
+        let address: SocketAddr = listening["fields"]["bind"]
+            .as_str()
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert_ne!(address.port(), 0);
+        let mut stream = TcpStream::connect_timeout(&address, Duration::from_secs(3)).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        write!(
+            stream,
+            "GET /health/ready HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n"
+        )
+        .unwrap();
+        let mut response = String::new();
+        stream.read_to_string(&mut response).unwrap();
+        assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+        assert!(response.contains("\"ready\""));
+        let (stdout, logs) = process.terminate();
+        let events: Vec<serde_json::Value> = logs
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert!(events.iter().any(
+            |e| e["fields"]["message"] == "storage_ready" && e["fields"]["backend"] == "SQLite"
+        ));
+        assert!(
+            events
+                .iter()
+                .any(|e| e["fields"]["message"] == "server_listening"
+                    && e["fields"]["bind"] == address.to_string())
+        );
+        assert!(
+            events
+                .iter()
+                .any(|e| e["fields"]["message"] == "shutdown_requested"
+                    && e["fields"]["reason"] == "signal")
+        );
+        assert!(
+            events
+                .iter()
+                .any(|e| e["fields"]["message"] == "shutdown_complete")
+        );
+        for output in [&stdout, &logs] {
+            assert!(!output.contains("TOP_SECRET"));
+            assert!(!output.contains(&queue_url));
+            assert!(!output.contains("redis://"));
+        }
+    }
+
+    #[test]
+    fn worker_starts_with_valid_queue_and_invalid_primary_storage() {
+        let directory = TempDir::new().unwrap();
+        let path = complete_config(&directory, "info");
+        let base = fs::read_to_string(&path).unwrap();
+        let queue = directory.path().join("queue.db");
+        fs::write(
+            &path,
+            format!(
+                "{base}\n[queue]\n[queue.sqlite]\npath = {:?}\n",
+                queue.display().to_string()
+            ),
+        )
+        .unwrap();
+        command(&path)
+            .args(["migrate", "--queue"])
+            .assert()
+            .success();
+        let broken = fs::read_to_string(&path).unwrap();
+        fs::write(
+            &path,
+            format!("{broken}\n[storage]\nprovider = 'unusable'\n"),
+        )
+        .unwrap();
+        command(&path).args(["config", "check"]).assert().failure();
+        let process = Process::start(&path, "worker");
+        process.wait_for("worker_started");
+        let (_, logs) = process.terminate();
+        assert!(logs.contains("worker_stopping"));
+        assert!(!directory.path().join("windwatcher.db").exists());
+    }
+}
+
 fn config(directory: &TempDir) -> std::path::PathBuf {
     let path = directory.path().join("config.toml");
     fs::write(
