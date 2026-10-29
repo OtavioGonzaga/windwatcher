@@ -1,0 +1,189 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions: {}
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # With no toolchain input, setup reads rust-toolchain.toml. Its Rust cache
+      # includes Cargo.lock, compiler identity and the job key.
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
+      - run: cargo fmt --all -- --check
+      - run: cargo check --workspace --all-targets --locked
+      - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+      - run: cargo test --workspace --all-targets --all-features --locked
+      - run: cargo test --workspace --doc --all-features --locked
+      - run: cargo doc --workspace --all-features --no-deps --locked
+        env:
+          RUSTDOCFLAGS: -D warnings
+
+  features:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
+      - name: Check minimal library
+        run: cargo check -p windwatcher --no-default-features --all-targets --locked
+      - name: Check each public feature independently
+        run: |
+          for feature in jwt-hs256 sqlite postgres mysql mongodb queue-sqlite queue-postgres queue-mysql queue-redis; do
+            echo "Checking feature: $feature"
+            cargo check -p windwatcher --no-default-features --features "$feature" --all-targets --locked
+          done
+
+  msrv:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Explicit toolchains are installed with --profile minimal.
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
+        with:
+          toolchain: 1.99.0
+      - run: cargo +1.99.0 check --workspace --all-features --locked
+
+  dependency-policy:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
+      - name: Install pinned policy tools
+        run: |
+          if ! cargo audit --version 2>/dev/null | grep -qx 'cargo-audit 0.22.2'; then
+            cargo install cargo-audit --version 0.22.2 --locked --force
+          fi
+          if ! cargo deny --version 2>/dev/null | grep -qx 'cargo-deny 0.20.2'; then
+            cargo install cargo-deny --version 0.20.2 --locked --force
+          fi
+      - name: RustSec vulnerabilities and informational warnings
+        run: cargo audit --deny warnings
+      - name: License, source and dependency policy (all platforms)
+        run: cargo deny --all-features --locked check licenses sources bans
+
+  adapter-contracts:
+    name: adapter-contracts (${{ matrix.name }})
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: postgres-storage
+            backend: postgres
+            feature: postgres
+          - name: postgres-queue
+            backend: postgres
+            feature: queue-postgres
+          - name: mysql-storage
+            backend: mysql
+            feature: mysql
+          - name: mysql-queue
+            backend: mysql
+            feature: queue-mysql
+          - name: mongodb-storage
+            backend: mongodb
+            feature: mongodb
+          - name: redis-queue
+            backend: redis
+            feature: queue-redis
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
+        with:
+          cache-key: ${{ matrix.name }}
+      - name: Start disposable backend
+        env:
+          BACKEND: ${{ matrix.backend }}
+        run: bash scripts/ci/services.sh start "$BACKEND"
+      - name: Run all ignored contracts for the isolated feature
+        env:
+          FEATURE: ${{ matrix.feature }}
+        run: cargo test -p windwatcher --no-default-features --features "$FEATURE" --locked -- --ignored --test-threads=1
+      - name: Service diagnostics
+        if: failure()
+        run: bash scripts/ci/services.sh logs
+      - name: Remove disposable services
+        if: always()
+        run: bash scripts/ci/services.sh stop
+
+  server-network:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
+      - name: Start all disposable backends
+        run: bash scripts/ci/services.sh start postgres mysql mongodb redis
+      - name: Queue migrations and jobs CLI composition
+        run: cargo test -p windwatcher-server --test cli network_queue_migration_and_jobs_cli --locked -- --ignored --test-threads=1
+      - name: Primary storage doctor composition
+        run: cargo test -p windwatcher-server --test cli network_primary_doctor_composition --locked -- --ignored --test-threads=1
+      - name: Service diagnostics
+        if: failure()
+        run: bash scripts/ci/services.sh logs
+      - name: Remove disposable services
+        if: always()
+        run: bash scripts/ci/services.sh stop
+
+  required:
+    if: always()
+    needs: [quality, features, msrv, dependency-policy, adapter-contracts, server-network]
+    runs-on: ubuntu-26.04
+    timeout-minutes: 2
+    steps:
+      - name: Require success from every dependency
+        env:
+          QUALITY_RESULT: ${{ needs.quality.result }}
+          FEATURES_RESULT: ${{ needs.features.result }}
+          MSRV_RESULT: ${{ needs.msrv.result }}
+          POLICY_RESULT: ${{ needs.dependency-policy.result }}
+          ADAPTERS_RESULT: ${{ needs.adapter-contracts.result }}
+          SERVER_NETWORK_RESULT: ${{ needs.server-network.result }}
+        run: |
+          failed=0
+          for result in QUALITY_RESULT FEATURES_RESULT MSRV_RESULT POLICY_RESULT ADAPTERS_RESULT SERVER_NETWORK_RESULT; do
+            echo "$result=${!result}"
+            if [[ "${!result}" != success ]]; then
+              failed=1
+            fi
+          done
+          exit "$failed"
