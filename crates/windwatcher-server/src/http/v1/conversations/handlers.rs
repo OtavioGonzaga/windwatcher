@@ -110,6 +110,9 @@ pub(super) async fn create(
         }
         CreateConversationRequest::Group(request) => {
             let GroupKind::Group = request.kind;
+            if request.participant_ids.len() > MAX_INITIAL_GROUP_PARTICIPANTS {
+                return Err(ApiProblem::new(ProblemKind::TooManyParticipants, context));
+            }
             ConversationCreateRequest::Group {
                 title: request.title,
                 participant_ids: request

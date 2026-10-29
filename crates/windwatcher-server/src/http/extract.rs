@@ -92,7 +92,8 @@ pub(super) fn body_identifier<T: std::str::FromStr>(
 #[serde(deny_unknown_fields)]
 #[into_params(parameter_in = Query)]
 pub(super) struct PaginationQuery {
-    /// Opaque next-only continuation cursor.
+    /// Opaque next-only continuation cursor; at most 1024 encoded bytes.
+    #[param(max_length = 1024)]
     pub cursor: Option<String>,
     /// Page size; defaults to 50, inclusive maximum 100.
     #[param(default = 50, minimum = 1, maximum = 100)]
@@ -107,7 +108,12 @@ impl PaginationQuery {
             .ok_or_else(|| ApiProblem::new(ProblemKind::InvalidLimit, context))?;
         let request = windwatcher::PageRequest::new(limit);
         Ok(match self.cursor {
-            Some(token) => request.with_cursor(token),
+            Some(token) => {
+                if token.len() > windwatcher::MAX_CURSOR_BYTES {
+                    return Err(ApiProblem::new(ProblemKind::InvalidCursor, context));
+                }
+                request.with_cursor(token)
+            }
             None => request,
         })
     }

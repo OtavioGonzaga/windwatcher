@@ -14,7 +14,7 @@ pub struct TokioPasswordHasher {
 
 impl Default for TokioPasswordHasher {
     fn default() -> Self {
-        // Bound both CPU and Argon2 memory consumption, independently of peer quotas.
+        // Bound both CPU and Argon2 memory consumption, independently of client quotas.
         Self::new(
             NonZeroUsize::new(
                 std::thread::available_parallelism()

@@ -47,7 +47,7 @@ pub(super) async fn ticket(
         .into_response())
 }
 
-#[utoipa::path(get, path = "/realtime", operation_id = "connectRealtime", tag = "Realtime", security(("realtimeTicket" = [])), params(("ticket" = String, Query, description = "Short-lived one-use secret, never an access JWT")), responses(
+#[utoipa::path(get, path = "/realtime", operation_id = "connectRealtime", tag = "Realtime", security(("realtimeTicket" = [])), params(("ticket" = String, Query, min_length = 43, max_length = 43, pattern = "^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$", description = "Short-lived one-use secret: canonical unpadded base64url of exactly 32 bytes, never an access JWT")), responses(
     (status = 101, description = "WebSocket established; JSON Text frames described in docs/realtime.md"),
     (status = 400, body = ProblemDetails), (status = 401, body = ProblemDetails), (status = 426, body = ProblemDetails),
     (status = 429, body = ProblemDetails), (status = 500, body = ProblemDetails), (status = 503, body = ProblemDetails)

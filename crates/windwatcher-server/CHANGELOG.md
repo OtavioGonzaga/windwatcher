@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- Publish exact canonical WebSocket ticket length/pattern in query and response
+  OpenAPI schemas, matching runtime validation.
+
+- Bound pagination cursors to 1024 encoded bytes in HTTP validation and OpenAPI.
+
+- Update locked TLS dependencies to patched releases and expand authorization,
+  idempotency and secret-redaction regression coverage.
+
+- Add opt-in trusted proxy CIDRs for bounded, spoof-resistant X-Forwarded-For
+  rate-limit addressing, with unchanged immediate-peer defaults.
+- Enforce Group write limits in HTTP/OpenAPI and reject malformed/noncanonical
+  WebSocket tickets before accessing their registry.
+
 - Validate MongoDB URL syntax during `config check` and expose safe, actionable
   unsupported-topology and invalid-migration-history diagnostics.
 

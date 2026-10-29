@@ -106,6 +106,10 @@ watermarks are unread-calculation boundaries, **not read receipts**.
 
 ## Collection pagination and activity
 
+Continuation cursors are limited to 1024 encoded bytes before Base64/JSON decoding,
+also enforced by the reusable library. Oversized values return
+`400 pagination.invalid_cursor`; OpenAPI declares `maxLength: 1024` for the query.
+
 All collection responses are `{ "items": [], "next_cursor": null, "has_more": false }`.
 `has_more` equals cursor presence. Query parameters are `limit` (default 50,
 inclusive range 1..100) and opaque next-only `cursor`; no offset, page number or
@@ -277,19 +281,30 @@ and Idempotency-Key request headers and GET/POST/PUT/PATCH/DELETE methods are pe
 handled before authentication and quotas. Allowed-origin API errors retain CORS
 headers, and browsers can read `X-Request-Id`, `Retry-After` and `Idempotency-Replayed`.
 
+## Group write limits
+
+Creation and rename accept nonblank titles up to 256 UTF-8 bytes, not characters
+(`422 conversation.invalid_title`). Initial Group creation accepts at most 256
+`participant_ids` entries, counted before removing duplicates or the creator
+(`422 conversation.too_many_participants`). This does not limit total membership
+after subsequent additions. Historical longer titles remain readable.
+
 ## Rate limiting
 
-Governor token buckets are in-memory, per process and per immediate peer IP.
+Governor token buckets are in-memory, per process and per resolved client IP.
 The general quota covers API requests, with an additional shared stricter quota
 for POST registration/login/refresh. Current-user and logout use only the general
 quota, as do discovery and messaging. Documentation assets spend neither quota. Inactive keys are cleaned
 opportunistically every 1024 API quota checks; no background worker is started.
 
-Forwarded, X-Forwarded-For, X-Real-IP and vendor IP headers are ignored. Behind
-a reverse proxy, the limiter sees the proxy as peer: adjust/disable quotas until
-explicit trusted-proxy support is delivered. This is not a distributed limiter.
+By default all forwarded headers are ignored. Explicit trusted proxy CIDRs enable
+bounded `X-Forwarded-For` processing only for trusted TCP peers, walking right to
+left to the first untrusted IP. Ambiguous/invalid chains fall back to the peer.
+See [proxy configuration](server-configuration.md#http-behavior) and
+[ADR 0017](adr/0017-trusted-proxy-rate-limit-addresses.md). Other IP headers remain
+ignored. This is not a distributed limiter.
 
-The future serving runtime must use Axum's connect-info make-service, supplying
+The serving runtime uses Axum's connect-info make-service, supplying
 `ConnectInfo<SocketAddr>`. A missing peer with limiting enabled is an internal
 configuration error (500), never an unlimited request or a forwarded-IP fallback.
 
@@ -297,9 +312,8 @@ See [server configuration](server-configuration.md) for defaults and overrides.
 
 ## Current limitations
 
-No production listener, health/readiness, domain events/workers, read receipts, display
-names, attachments, reactions, threads, search, cookies, CSRF mode, OAuth/OIDC,
-trusted proxies, distributed quotas or instant JWT revocation is implemented.
+No read receipts, display names, attachments, reactions, threads, search, cookies,
+CSRF mode, OAuth/OIDC, distributed quotas or instant JWT revocation is implemented.
 
 ## Realtime HTTP surface
 

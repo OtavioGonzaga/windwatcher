@@ -61,6 +61,12 @@ impl Tickets {
         Ok(ticket)
     }
     pub(super) fn consume(&mut self, raw: &str, now: OffsetDateTime) -> Option<Grant> {
+        // Bound work before touching the registry. The decoder rejects padding and
+        // nonzero trailing bits, so only the canonical 256-bit representation passes.
+        let mut decoded = Zeroizing::new([0u8; 32]);
+        if raw.len() != 43 || URL_SAFE_NO_PAD.decode_slice(raw, decoded.as_mut()).ok() != Some(32) {
+            return None;
+        }
         self.0.retain(|_, grant| grant.expires_at > now);
         self.0.remove(&Self::hash(raw))
     }
@@ -72,6 +78,40 @@ impl Tickets {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn malformed_tickets_do_not_even_touch_the_registry() {
+        let now = OffsetDateTime::UNIX_EPOCH;
+        let mut tickets = Tickets::default();
+        let valid = tickets
+            .issue(
+                Grant {
+                    user: UserId::new(),
+                    session: SessionId::new(),
+                    expires_at: now + time::Duration::seconds(30),
+                },
+                now,
+            )
+            .unwrap();
+        for raw in [
+            String::new(),
+            "a".repeat(42),
+            "a".repeat(44),
+            "雪".repeat(43),
+            format!("{}=", "A".repeat(42)),
+            format!("{}+", "A".repeat(42)),
+            format!("{}B", "A".repeat(42)),
+            "x".repeat(100_000),
+        ] {
+            assert!(
+                tickets
+                    .consume(&raw, now + time::Duration::seconds(31))
+                    .is_none()
+            );
+            // Invalid input must not hash, look up, consume or prune any grant.
+            assert_eq!(tickets.0.len(), 1);
+        }
+        assert!(tickets.consume(valid.expose(), now).is_some());
+    }
     #[test]
     fn secrets_expiration_and_one_use() {
         let now = OffsetDateTime::UNIX_EPOCH;

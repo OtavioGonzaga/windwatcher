@@ -162,6 +162,9 @@ pub enum CreateCommandError {
     /// Group title is invalid.
     #[error("invalid group title")]
     InvalidTitle(#[source] GroupTitleError),
+    /// Initial participant input exceeds the fixed limit, before canonicalization.
+    #[error("initial group participants exceed 256 entries")]
+    TooManyParticipants,
     /// Exact message content is not portable.
     #[error("invalid message content")]
     InvalidContent(#[source] MessageContentError),
@@ -210,6 +213,9 @@ impl<'a, S: CreateCommandStore> CreateConversation<'a, S> {
         Self(store)
     }
     /// Canonicalizes Group participant sets before fingerprinting/persistence.
+    /// Group input is limited to [`crate::MAX_INITIAL_GROUP_PARTICIPANTS`] entries
+    /// before canonicalization and [`crate::MAX_GROUP_TITLE_BYTES`] UTF-8 title bytes,
+    /// with or without an idempotency key. Rejections never reserve keys.
     pub async fn execute(
         &self,
         actor: UserId,
@@ -226,7 +232,11 @@ impl<'a, S: CreateCommandStore> CreateConversation<'a, S> {
                 title,
                 participant_ids,
             } => {
-                let title = GroupTitle::new(title).map_err(CreateCommandError::InvalidTitle)?;
+                if participant_ids.len() > crate::MAX_INITIAL_GROUP_PARTICIPANTS {
+                    return Err(CreateCommandError::TooManyParticipants);
+                }
+                let title =
+                    GroupTitle::for_write(title).map_err(CreateCommandError::InvalidTitle)?;
                 (
                     Conversation::new_group(ConversationId::new(), title, now),
                     participant_ids

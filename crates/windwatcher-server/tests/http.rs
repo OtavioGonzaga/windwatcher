@@ -21,6 +21,19 @@ fn openapi_contract_has_exact_routes_security_schemas_and_statuses() {
     assert_eq!(doc["openapi"], "3.1.0");
     assert_eq!(doc["info"]["title"], "Windwatcher API");
     assert_eq!(doc["info"]["version"], env!("CARGO_PKG_VERSION"));
+    assert!(!String::from_utf8(encoded).unwrap().contains("Peer quota"));
+    for (path, method) in [
+        ("/v1/users", "post"),
+        ("/v1/users/me", "get"),
+        ("/v1/sessions", "post"),
+        ("/v1/sessions/refresh", "post"),
+        ("/v1/sessions/current", "delete"),
+    ] {
+        assert_eq!(
+            doc["paths"][path][method]["responses"]["429"]["description"],
+            "Client request quota exceeded"
+        );
+    }
     assert_eq!(doc["paths"].as_object().unwrap().len(), 16);
     let mut ids = std::collections::HashSet::new();
     for (path, method, id, tag, protected, statuses) in [
@@ -363,6 +376,10 @@ async fn tracing_correlates_requests_without_logging_secrets_or_query_strings() 
         "cookie",
         "private-cookie=hidden-cookie-value".parse().unwrap(),
     );
+    protected.headers_mut().insert(
+        "idempotency-key",
+        "hidden-idempotency-value".parse().unwrap(),
+    );
     assert_eq!(send(&fixture.router, protected).await.0, StatusCode::OK);
     let ticket = send(
         &fixture.router,
@@ -384,6 +401,28 @@ async fn tracing_correlates_requests_without_logging_secrets_or_query_strings() 
     )
     .await;
     assert_eq!(rejected.0, StatusCode::UPGRADE_REQUIRED);
+    let failed = send(
+        &fixture.router,
+        command(
+            "POST",
+            "/v1/sessions?failed-query=SENTINEL_QUERY",
+            json!({"username":"alice", "password":"SENTINEL_BAD_PASSWORD"}),
+        ),
+    )
+    .await;
+    problem(&failed, 401, "auth.invalid_credentials");
+    let failed_refresh = send(
+        &fixture.router,
+        command(
+            "POST",
+            "/v1/sessions/refresh",
+            json!({"refresh_token":"SENTINEL_REFRESH"}),
+        ),
+    )
+    .await;
+    problem(&failed_refresh, 401, "auth.invalid_refresh_token");
+    assert!(!failed.2.to_string().contains("SENTINEL"));
+    assert!(!failed_refresh.2.to_string().contains("SENTINEL"));
     let logs = String::from_utf8(output.lock().unwrap().clone()).unwrap();
     assert!(logs.contains(response.1["x-request-id"].to_str().unwrap()));
     assert!(logs.contains("/v1/sessions"));
@@ -395,6 +434,10 @@ async fn tracing_correlates_requests_without_logging_secrets_or_query_strings() 
         "do-not-log",
         "hidden-cookie-value",
         "hidden-query-value",
+        "hidden-idempotency-value",
+        "SENTINEL_BAD_PASSWORD",
+        "SENTINEL_QUERY",
+        "SENTINEL_REFRESH",
         response.2["access_token"].as_str().unwrap(),
         response.2["refresh_token"].as_str().unwrap(),
         raw,
@@ -1100,4 +1143,62 @@ async fn quotas_are_shared_by_peer_not_forwarded_headers_and_auth_is_additional(
         403,
         "registration.closed",
     );
+}
+
+#[tokio::test]
+async fn trusted_proxy_clients_have_independent_general_and_auth_buckets() {
+    let mut cfg = config();
+    cfg.rate_limit.enabled = true;
+    cfg.rate_limit.trusted_proxies = vec!["127.0.0.1/32".into()];
+    cfg.rate_limit.auth.burst = 1;
+    cfg.rate_limit.auth.period = "1h".into();
+    cfg.rate_limit.general.burst = 3;
+    cfg.rate_limit.general.period = "1h".into();
+    let fixture = Fixture::new(cfg, RegistrationPolicy::Closed, true).await;
+    for client in ["198.51.100.1", "198.51.100.2"] {
+        let forwarded = |mut request: Request<Body>| {
+            request
+                .headers_mut()
+                .insert("x-forwarded-for", client.parse().unwrap());
+            request
+        };
+        problem(
+            &send(
+                &fixture.router,
+                forwarded(command(
+                    "POST",
+                    "/v1/users",
+                    json!({"username":"alice", "password":"test password"}),
+                )),
+            )
+            .await,
+            403,
+            "registration.closed",
+        );
+        let limited = send(
+            &fixture.router,
+            forwarded(command("POST", "/v1/sessions/refresh", json!({}))),
+        )
+        .await;
+        problem(&limited, 429, "rate_limit.exceeded");
+        assert!(limited.1.contains_key("retry-after"));
+        problem(
+            &send(
+                &fixture.router,
+                forwarded(bearer("GET", "/v1/users/me", "bad")),
+            )
+            .await,
+            401,
+            "auth.invalid_access_token",
+        );
+        problem(
+            &send(
+                &fixture.router,
+                forwarded(bearer("GET", "/v1/users/me", "bad")),
+            )
+            .await,
+            429,
+            "rate_limit.exceeded",
+        );
+    }
 }

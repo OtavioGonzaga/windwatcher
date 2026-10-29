@@ -58,8 +58,10 @@ Port zero selects an ephemeral port and logs the actual bound address. Container
 or reverse proxies can explicitly select `0.0.0.0:8080` or `[::]:8080`; defaults
 never expose the service externally. TLS termination is external in v1. No
 hostname resolution, TLS listener, Unix sockets or service packaging is supplied.
-Peer-IP quotas use the immediate TCP peer, not forwarded headers; proxy clients
-share a bucket until a trusted-proxy policy exists.
+Client-IP quotas use the immediate TCP peer by default. Explicit trusted proxy
+CIDRs enable bounded `X-Forwarded-For` resolution; see
+[HTTP configuration](server-configuration.md#http-behavior). Without opt-in,
+proxy clients share the peer bucket.
 
 ## Health
 

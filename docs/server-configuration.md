@@ -141,13 +141,35 @@ be positive. Nanosecond refill intervals round upward, never allowing a faster
 rate than configured. Invalid quotas are rejected even when disabled.
 
 `config check` validates HTTP settings without binding a listener. Limits are
-per-process and per immediate peer IP, not per forwarded client address. Behind
-a reverse proxy, clients share its bucket; adjust or disable limits as needed.
-Trusted-proxy support is not implemented.
+per-process and use the immediate peer IP unless trusted proxies are explicitly
+configured:
+
+```toml
+[http.rate_limit]
+trusted_proxies = ["127.0.0.1/32", "::1/128"]
+```
+
+The default is `[]`. Entries must be explicit IPv4/IPv6 CIDRs, validated even
+when limiting is disabled. Trust only the smallest networks actually occupied by
+your proxies, not all private networks or the entire Internet. The proxy must
+overwrite `X-Forwarded-For` or append the IP it actually observed; trusting a
+proxy cannot repair an unsafe header-passthrough configuration.
+
+Only a trusted TCP peer may supply `X-Forwarded-For`. The server walks the chain
+right to left, skips trusted hops and uses the first untrusted IP for both quotas.
+IPv4-mapped IPv6 addresses are normalized to IPv4; configure their networks as
+IPv4 CIDRs. `Forwarded`, `X-Real-IP` and vendor headers are ignored. Header values
+accept bare IPs only, with optional surrounding spaces/tabs, not ports or hostnames.
+Missing, repeated, invalid or excessive headers, and chains containing only trusted
+IPs, fall back to the peer bucket. Parsing is capped at 4096 bytes and 32 hops;
+invalid chains are never partially salvaged. Without opt-in, clients behind a
+proxy share its bucket. These quotas are neither persistent nor distributed.
 
 Environment overrides use Figment array syntax, for example:
 `WINDWATCHER__HTTP__CORS__ALLOWED_ORIGINS='["https://example.com"]'`, and nested
 values such as `WINDWATCHER__HTTP__RATE_LIMIT__AUTH__BURST=20`.
+Trusted proxies use the same array syntax:
+`WINDWATCHER__HTTP__RATE_LIMIT__TRUSTED_PROXIES='["127.0.0.1/32","::1/128"]'`.
 
 ## Realtime behavior
 

@@ -9,6 +9,8 @@ use zeroize::Zeroizing;
 #[into_params(parameter_in = Query)]
 pub(in crate::http) struct UsersQuery {
     pub username: String,
+    /// Exact discovery never issues a continuation; supplied cursors are rejected.
+    #[param(max_length = 1024)]
     pub cursor: Option<String>,
     #[param(default = 50, minimum = 1, maximum = 100)]
     pub limit: Option<i64>,

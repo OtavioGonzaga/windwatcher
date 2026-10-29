@@ -52,6 +52,214 @@ fn page(value: &Value) {
     assert_eq!(value["has_more"], !value["next_cursor"].is_null());
 }
 
+#[tokio::test]
+async fn group_limits_apply_before_ids_and_do_not_reserve_idempotency_keys() {
+    let f = Fixture::open().await;
+    let (actor, token) = participant(&f, "limits").await;
+    for (body, code) in [
+        (
+            json!({"kind":"group", "title":"valid", "participant_ids":vec!["not-a-uuid";257]}),
+            "conversation.too_many_participants",
+        ),
+        (
+            json!({"kind":"group", "title":"é".repeat(129), "participant_ids":[]}),
+            "conversation.invalid_title",
+        ),
+    ] {
+        problem(
+            &send(
+                &f.router,
+                keyed(
+                    authorized("POST", "/v1/conversations", &token, body),
+                    "limit-key",
+                ),
+            )
+            .await,
+            422,
+            code,
+        );
+    }
+    let title = "é".repeat(128);
+    let created = send(&f.router, keyed(authorized("POST", "/v1/conversations", &token, json!({"kind":"group", "title":title, "participant_ids":vec![actor.id().to_string();256]})), "limit-key")).await;
+    assert_eq!(created.0, StatusCode::CREATED, "{}", created.2);
+    assert_eq!(created.2["title"], title);
+    let id = created.2["id"].as_str().unwrap();
+    problem(
+        &send(
+            &f.router,
+            authorized(
+                "PATCH",
+                &format!("/v1/conversations/{id}"),
+                &token,
+                json!({"title":"a".repeat(257)}),
+            ),
+        )
+        .await,
+        422,
+        "conversation.invalid_title",
+    );
+    let unchanged = send(
+        &f.router,
+        bearer("GET", &format!("/v1/conversations/{id}"), &token),
+    )
+    .await;
+    assert_eq!(unchanged.2["title"], title);
+    let doc = serde_json::to_value(windwatcher_server::http::openapi()).unwrap();
+    assert_eq!(
+        doc["components"]["schemas"]["CreateGroupRequest"]["properties"]["participant_ids"]["maxItems"],
+        256
+    );
+}
+
+#[tokio::test]
+async fn authorization_matrix_rechecks_membership_and_never_grants_moderator_editing() {
+    let f = Fixture::open().await;
+    let (owner, owner_token) = participant(&f, "matrix_owner").await;
+    let (member, member_token) = participant(&f, "matrix_member").await;
+    let (_, outsider_token) = participant(&f, "matrix_outsider").await;
+    let group = send(
+        &f.router,
+        authorized(
+            "POST",
+            "/v1/conversations",
+            &owner_token,
+            json!({"kind":"group", "title":"matrix", "participant_ids":[member.id().to_string()]}),
+        ),
+    )
+    .await;
+    assert_eq!(group.0, StatusCode::CREATED);
+    let base = format!("/v1/conversations/{}", group.2["id"].as_str().unwrap());
+    let content = json!({"content":"member message"});
+    let message = send(
+        &f.router,
+        keyed(
+            authorized(
+                "POST",
+                &format!("{base}/messages"),
+                &member_token,
+                content.clone(),
+            ),
+            "matrix-message",
+        ),
+    )
+    .await;
+    assert_eq!(message.0, StatusCode::CREATED);
+    let message_id = message.2["id"].as_str().unwrap();
+    let message_path = format!("/v1/messages/{message_id}");
+    // Owner moderation does not confer authorship.
+    problem(
+        &send(
+            &f.router,
+            authorized(
+                "PATCH",
+                &message_path,
+                &owner_token,
+                json!({"content":"owner edit"}),
+            ),
+        )
+        .await,
+        403,
+        "message.not_author",
+    );
+    let role = send(
+        &f.router,
+        authorized(
+            "PATCH",
+            &format!("{base}/members/{}", member.id()),
+            &owner_token,
+            json!({"role":"admin"}),
+        ),
+    )
+    .await;
+    assert_eq!(role.0, StatusCode::OK);
+    let owned = send(
+        &f.router,
+        authorized(
+            "POST",
+            &format!("{base}/messages"),
+            &owner_token,
+            json!({"content":"owner message"}),
+        ),
+    )
+    .await;
+    problem(
+        &send(
+            &f.router,
+            authorized(
+                "PATCH",
+                &format!("/v1/messages/{}", owned.2["id"].as_str().unwrap()),
+                &member_token,
+                json!({"content":"admin edit"}),
+            ),
+        )
+        .await,
+        403,
+        "message.not_author",
+    );
+    assert_eq!(
+        send(
+            &f.router,
+            bearer(
+                "DELETE",
+                &format!("{base}/members/{}", member.id()),
+                &owner_token
+            )
+        )
+        .await
+        .0,
+        StatusCode::NO_CONTENT
+    );
+    for token in [&outsider_token, &member_token] {
+        for (method, path, body) in [
+            ("GET", base.clone(), Value::Null),
+            ("GET", format!("{base}/members"), Value::Null),
+            ("GET", format!("{base}/messages"), Value::Null),
+            ("GET", message_path.clone(), Value::Null),
+            ("POST", format!("{base}/messages"), content.clone()),
+            (
+                "POST",
+                format!("{base}/messages"),
+                json!({"content":"reply", "reply_to_message_id":message_id}),
+            ),
+            (
+                "PUT",
+                format!("{base}/read-state"),
+                json!({"last_read_message_id":message_id}),
+            ),
+            ("PATCH", base.clone(), json!({"title":"denied"})),
+            ("PUT", format!("{base}/members/{}", owner.id()), Value::Null),
+            (
+                "PUT",
+                format!("{base}/owner"),
+                json!({"user_id":owner.id().to_string()}),
+            ),
+        ] {
+            let response = send(&f.router, authorized(method, &path, token, body)).await;
+            assert_eq!(
+                response.0,
+                StatusCode::NOT_FOUND,
+                "{method} {path}: {}",
+                response.2
+            );
+        }
+    }
+    // A previously successful key must not bypass current membership.
+    problem(
+        &send(
+            &f.router,
+            keyed(
+                authorized("POST", &format!("{base}/messages"), &member_token, content),
+                "matrix-message",
+            ),
+        )
+        .await,
+        404,
+        "conversation.not_found",
+    );
+    let unchanged = send(&f.router, bearer("GET", &message_path, &owner_token)).await;
+    assert_eq!(unchanged.2["content"], "member message");
+}
+
 #[test]
 fn openapi_messaging_surface_has_explicit_security_pages_discriminator_and_headers() {
     let doc = serde_json::to_value(windwatcher_server::http::openapi()).unwrap();
@@ -245,7 +453,12 @@ fn openapi_messaging_surface_has_explicit_security_pages_discriminator_and_heade
         assert_eq!(limit["schema"]["default"], 50);
         assert_eq!(limit["schema"]["minimum"], 1);
         assert_eq!(limit["schema"]["maximum"], 100);
-        assert!(params.iter().any(|p| p["name"] == "cursor"));
+        let cursor = params.iter().find(|p| p["name"] == "cursor").unwrap();
+        assert_eq!(
+            cursor["schema"]["maxLength"],
+            windwatcher::MAX_CURSOR_BYTES,
+            "{cursor}"
+        );
     }
     for (name, fields) in [
         (
@@ -1032,6 +1245,23 @@ async fn extraction_pagination_keys_and_auth_are_normalized() {
         "/v1/conversations/{}",
         self_direct.2["id"].as_str().unwrap()
     );
+    // Syntactically valid base64url, oversized before any cursor decoding.
+    let oversized = "A".repeat(windwatcher::MAX_CURSOR_BYTES + 4);
+    for path in [
+        "/v1/conversations".to_owned(),
+        format!("{base}/members"),
+        format!("{base}/messages"),
+    ] {
+        problem(
+            &send(
+                &f.router,
+                bearer("GET", &format!("{path}?cursor={oversized}"), &token),
+            )
+            .await,
+            400,
+            "pagination.invalid_cursor",
+        );
+    }
     for request in [
         authorized(
             "PUT",

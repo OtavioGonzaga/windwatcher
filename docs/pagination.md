@@ -1,5 +1,11 @@
 # Pagination
 
+Encoded continuation cursors have an inclusive maximum of 1024 bytes
+(`MAX_CURSOR_BYTES`). All three v1 cursor kinds (conversations, members and messages)
+are checked before Base64 allocation or JSON decoding in the library. Oversized
+tokens produce `CursorError::Malformed`; HTTP preflights the same bound and returns
+`400 pagination.invalid_cursor`. The limit does not change issued v1 cursor formats.
+
 ## Inbox and member continuations
 
 Conversation cursors bind the actor and exclusive descending
