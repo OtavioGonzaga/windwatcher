@@ -1,5 +1,10 @@
 # WebSocket realtime transport
 
+Incoming tickets must be the canonical 43-character unpadded base64url encoding
+of exactly 32 bytes. Malformed tickets are rejected before hashing or registry
+access, using the same unavailable-ticket failure as other invalid credentials.
+This does not introduce a connection-count policy.
+
 The database and HTTP API are authoritative. WebSocket delivers **best-effort
 state-change notifications**, not an ordered event log, queue, snapshot, or
 replacement for HTTP synchronization. A disconnected client can miss events.
