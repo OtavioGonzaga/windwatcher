@@ -78,16 +78,16 @@ jobs:
         with:
           persist-credentials: false
       - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
-      - name: Install pinned policy tools
+      - name: Install pinned cargo-deny
         run: |
-          if ! cargo audit --version 2>/dev/null | grep -qx 'cargo-audit 0.22.2'; then
-            cargo install cargo-audit --version 0.22.2 --locked --force
-          fi
           if ! cargo deny --version 2>/dev/null | grep -qx 'cargo-deny 0.20.2'; then
             cargo install cargo-deny --version 0.20.2 --locked --force
           fi
       - name: RustSec vulnerabilities and informational warnings
-        run: cargo audit --deny warnings
+        uses: actions-rust-lang/audit@72c09e02f132669d52284a3323acdb503cfc1a24 # v1.2.7
+        with:
+          denyWarnings: true
+          createIssues: false
       - name: License, source and dependency policy (all platforms)
         run: cargo deny --all-features --locked check licenses sources bans
 
