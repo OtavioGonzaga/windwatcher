@@ -398,6 +398,10 @@ fn mongodb_config_check_parses_urls_without_connecting_or_disclosing_them() {
     let secret = "primary_mongo_fake_password";
     for (url, valid) in [
         (
+            format!("mongodb+srv://user:{secret}@does-not-exist.example.invalid/"),
+            true,
+        ),
+        (
             format!("mongodb://user:{secret}@127.0.0.1:1/?replicaSet=rs0"),
             true,
         ),

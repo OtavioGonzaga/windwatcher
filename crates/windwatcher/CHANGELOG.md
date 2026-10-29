@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Keep MongoDB options syntax validation free of DNS lookups for `mongodb+srv`
+  URLs; DNS resolution remains part of opening an actual storage connection.
+
 - Reject idempotency expiry outside the portable datetime domain in MongoDB,
   and align SQLite replay validation with the same keyed-command boundary.
 - Fail closed on incompatible MongoDB conversation/member roles and malformed

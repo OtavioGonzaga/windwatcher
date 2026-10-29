@@ -3,7 +3,7 @@ use std::{error::Error, fmt};
 use mongodb::{
     Client,
     bson::{Document, doc},
-    options::{ClientOptions, ReadPreference, SelectionCriteria, WriteConcern},
+    options::{ClientOptions, ConnectionString, ReadPreference, SelectionCriteria, WriteConcern},
 };
 
 use super::MigrationStatus;
@@ -50,12 +50,8 @@ impl MongoDbStorageOptions {
         &self.database
     }
 
-    /// Validates configuration syntax without connecting to MongoDB.
+    /// Validates configuration syntax without connecting to MongoDB or resolving DNS.
     pub async fn validate(&self) -> Result<(), MongoDbStorageError> {
-        self.client_options().await.map(|_| ())
-    }
-
-    async fn client_options(&self) -> Result<ClientOptions, MongoDbStorageError> {
         if self.url.trim().is_empty() {
             return Err(MongoDbStorageError::Configuration(
                 "MongoDB URL is required",
@@ -66,6 +62,15 @@ impl MongoDbStorageOptions {
                 "MongoDB database name is required",
             ));
         }
+        // ClientOptions::parse performs SRV/TXT DNS resolution. Static operator
+        // validation must use the driver's syntax parser, including for +srv.
+        ConnectionString::parse(&self.url)
+            .map(|_| ())
+            .map_err(|_| MongoDbStorageError::Configuration("invalid MongoDB URL"))
+    }
+
+    async fn client_options(&self) -> Result<ClientOptions, MongoDbStorageError> {
+        self.validate().await?;
         let mut options = ClientOptions::parse(&self.url)
             .await
             .map_err(|_| MongoDbStorageError::Configuration("invalid MongoDB URL"))?;
@@ -205,6 +210,15 @@ fn date(value: i64) -> Result<time::OffsetDateTime, &'static str> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn syntax_validation_of_srv_urls_completes_without_io() {
+        use futures_util::FutureExt;
+        let options = super::MongoDbStorageOptions::new(
+            "mongodb+srv://user:TOP_SECRET@does-not-exist.example.invalid/",
+            "windwatcher",
+        );
+        assert!(options.validate().now_or_never().unwrap().is_ok());
+    }
     use mongodb::bson::{Bson, doc, spec::BinarySubtype};
 
     use super::{
