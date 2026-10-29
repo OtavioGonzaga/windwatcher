@@ -52,7 +52,7 @@ No `connection.ready` application event is required.
 | Unknown, expired or consumed ticket | `401 realtime.invalid_ticket` |
 | Missing, revoked, expired or wrong-owner session | `401 realtime.session_inactive` |
 | Not a valid WebSocket upgrade | `426 realtime.upgrade_required` |
-| Peer quota exceeded | `429 rate_limit.exceeded` |
+| Client request quota exceeded | `429 rate_limit.exceeded` |
 | Internal failure | `500 internal.error` |
 | Server draining | `503 realtime.shutting_down` |
 

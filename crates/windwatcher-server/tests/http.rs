@@ -21,6 +21,19 @@ fn openapi_contract_has_exact_routes_security_schemas_and_statuses() {
     assert_eq!(doc["openapi"], "3.1.0");
     assert_eq!(doc["info"]["title"], "Windwatcher API");
     assert_eq!(doc["info"]["version"], env!("CARGO_PKG_VERSION"));
+    assert!(!String::from_utf8(encoded).unwrap().contains("Peer quota"));
+    for (path, method) in [
+        ("/v1/users", "post"),
+        ("/v1/users/me", "get"),
+        ("/v1/sessions", "post"),
+        ("/v1/sessions/refresh", "post"),
+        ("/v1/sessions/current", "delete"),
+    ] {
+        assert_eq!(
+            doc["paths"][path][method]["responses"]["429"]["description"],
+            "Client request quota exceeded"
+        );
+    }
     assert_eq!(doc["paths"].as_object().unwrap().len(), 16);
     let mut ids = std::collections::HashSet::new();
     for (path, method, id, tag, protected, statuses) in [

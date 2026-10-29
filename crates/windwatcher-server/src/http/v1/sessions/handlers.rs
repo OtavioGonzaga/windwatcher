@@ -38,7 +38,7 @@ fn grant_response(status: StatusCode, grant: windwatcher::SessionGrant) -> Respo
         (status = 403, description = "User disabled", body = ProblemDetails, content_type = "application/problem+json"),
         (status = 413, description = "Body exceeds 2 MiB", body = ProblemDetails, content_type = "application/problem+json"),
         (status = 415, description = "JSON Content-Type required", body = ProblemDetails, content_type = "application/problem+json"),
-        (status = 429, description = "Peer quota exceeded", body = ProblemDetails, content_type = "application/problem+json"),
+        (status = 429, description = "Client request quota exceeded", body = ProblemDetails, content_type = "application/problem+json"),
         (status = 500, description = "Internal failure", body = ProblemDetails, content_type = "application/problem+json")
     ))]
 pub(super) async fn create_session(
@@ -88,7 +88,7 @@ pub(super) async fn create_session(
         (status = 401, description = "Invalid refresh token", body = ProblemDetails, content_type = "application/problem+json"),
         (status = 413, description = "Body exceeds 2 MiB", body = ProblemDetails, content_type = "application/problem+json"),
         (status = 415, description = "JSON Content-Type required", body = ProblemDetails, content_type = "application/problem+json"),
-        (status = 429, description = "Peer quota exceeded", body = ProblemDetails, content_type = "application/problem+json"),
+        (status = 429, description = "Client request quota exceeded", body = ProblemDetails, content_type = "application/problem+json"),
         (status = 500, description = "Internal failure", body = ProblemDetails, content_type = "application/problem+json")
     ))]
 pub(super) async fn refresh_session(
@@ -124,7 +124,7 @@ pub(super) async fn refresh_session(
     responses(
         (status = 204, description = "Refresh revoked; existing access tokens remain valid until expiration"),
         (status = 401, description = "Invalid access token", body = ProblemDetails, content_type = "application/problem+json"),
-        (status = 429, description = "Peer quota exceeded", body = ProblemDetails, content_type = "application/problem+json"),
+        (status = 429, description = "Client request quota exceeded", body = ProblemDetails, content_type = "application/problem+json"),
         (status = 500, description = "Internal failure", body = ProblemDetails, content_type = "application/problem+json")
     ))]
 pub(super) async fn revoke_current_session(

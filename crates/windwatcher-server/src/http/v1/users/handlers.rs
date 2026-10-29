@@ -46,7 +46,7 @@ pub(super) async fn find_users(
         (status = 413, description = "Body exceeds 2 MiB", body = ProblemDetails, content_type = "application/problem+json"),
         (status = 415, description = "JSON Content-Type required", body = ProblemDetails, content_type = "application/problem+json"),
         (status = 422, description = "Invalid username or new password", body = ProblemDetails, content_type = "application/problem+json"),
-        (status = 429, description = "Peer quota exceeded", body = ProblemDetails, content_type = "application/problem+json"),
+        (status = 429, description = "Client request quota exceeded", body = ProblemDetails, content_type = "application/problem+json"),
         (status = 500, description = "Internal failure", body = ProblemDetails, content_type = "application/problem+json")
     ))]
 pub(super) async fn register_user(
@@ -81,7 +81,7 @@ pub(super) async fn register_user(
     responses(
         (status = 200, description = "Current identity; an already-issued access token remains valid after disabling", body = UserResponse),
         (status = 401, description = "Invalid access token or missing identity", body = ProblemDetails, content_type = "application/problem+json"),
-        (status = 429, description = "Peer quota exceeded", body = ProblemDetails, content_type = "application/problem+json"),
+        (status = 429, description = "Client request quota exceeded", body = ProblemDetails, content_type = "application/problem+json"),
         (status = 500, description = "Internal failure", body = ProblemDetails, content_type = "application/problem+json")
     ))]
 pub(super) async fn get_current_user(
