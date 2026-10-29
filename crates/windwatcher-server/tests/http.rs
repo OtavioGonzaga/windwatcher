@@ -363,6 +363,10 @@ async fn tracing_correlates_requests_without_logging_secrets_or_query_strings() 
         "cookie",
         "private-cookie=hidden-cookie-value".parse().unwrap(),
     );
+    protected.headers_mut().insert(
+        "idempotency-key",
+        "hidden-idempotency-value".parse().unwrap(),
+    );
     assert_eq!(send(&fixture.router, protected).await.0, StatusCode::OK);
     let ticket = send(
         &fixture.router,
@@ -384,6 +388,28 @@ async fn tracing_correlates_requests_without_logging_secrets_or_query_strings() 
     )
     .await;
     assert_eq!(rejected.0, StatusCode::UPGRADE_REQUIRED);
+    let failed = send(
+        &fixture.router,
+        command(
+            "POST",
+            "/v1/sessions?failed-query=SENTINEL_QUERY",
+            json!({"username":"alice", "password":"SENTINEL_BAD_PASSWORD"}),
+        ),
+    )
+    .await;
+    problem(&failed, 401, "auth.invalid_credentials");
+    let failed_refresh = send(
+        &fixture.router,
+        command(
+            "POST",
+            "/v1/sessions/refresh",
+            json!({"refresh_token":"SENTINEL_REFRESH"}),
+        ),
+    )
+    .await;
+    problem(&failed_refresh, 401, "auth.invalid_refresh_token");
+    assert!(!failed.2.to_string().contains("SENTINEL"));
+    assert!(!failed_refresh.2.to_string().contains("SENTINEL"));
     let logs = String::from_utf8(output.lock().unwrap().clone()).unwrap();
     assert!(logs.contains(response.1["x-request-id"].to_str().unwrap()));
     assert!(logs.contains("/v1/sessions"));
@@ -395,6 +421,10 @@ async fn tracing_correlates_requests_without_logging_secrets_or_query_strings() 
         "do-not-log",
         "hidden-cookie-value",
         "hidden-query-value",
+        "hidden-idempotency-value",
+        "SENTINEL_BAD_PASSWORD",
+        "SENTINEL_QUERY",
+        "SENTINEL_REFRESH",
         response.2["access_token"].as_str().unwrap(),
         response.2["refresh_token"].as_str().unwrap(),
         raw,
