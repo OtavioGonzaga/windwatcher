@@ -18,9 +18,18 @@ file and requires it to exist; it does not change the selected mode's data path.
 does not load `.env` automatically. Relative explicit filesystem paths are relative
 to the process working directory.
 
+`windwatcher init` creates a minimal configuration and a 32-byte random JWT key
+in the selected configuration directory, without overwriting either file. The
+generated configuration references the absolute key path. `--config PATH init`
+selects an explicit new config file; `--system init` selects system paths.
+It never creates a database or applies migrations. Run `windwatcher migrate`
+separately. `config show` displays effective loaded values with sensitive URLs and
+direct secrets redacted without reading secret files or connecting dependencies;
+it does not perform semantic validation.
+
 Malformed values, including invalid duration syntax, invalidate every command.
 Semantic authentication failures such as a missing JWT secret or invalid session
-policy are resolved only by `config check` and future runtime commands, so they do
+policy are resolved by `config check`, `serve` and `doctor`, so they do
 not block migration or trusted user provisioning.
 
 ## Storage, auth, and secrets
@@ -37,24 +46,30 @@ provider. Queue provider configuration remains separate; see [jobs](jobs.md).
 Select `mongodb` with `[storage.mongodb]`, which requires `url` and `database`.
 MongoDB primary storage requires a transaction-capable replica set; standalone
 servers and `mongos` are unsupported.
-`config check` parses MongoDB URL syntax without connecting to the database;
+`config check` parses MongoDB URL syntax without connecting or resolving SRV/TXT DNS;
 topology is validated when opening storage. Safe topology and migration-ledger
 errors are included in operator diagnostics; driver connection details remain
 hidden so credentials cannot leak.
 
-The durable queue is optional. When `[queue]` is configured, SQLite is currently
-the supported provider and the default file is `queue.db`, separate from
+The durable queue is optional. Supported providers are SQLite, PostgreSQL, MySQL
+and Redis; SQLite defaults to the file `queue.db`, separate from
 `windwatcher.db`. Queue worker and operator commands require this section;
 `config check` validates its concurrency, lease, retry and retention settings.
 The queue database path must not resolve to the primary storage file. Queue
 connection/migration initialization is command-specific; ordinary commands do
-not open it. See [jobs](jobs.md) for queue semantics and worker operations.
+not open it. Serve neither resolves queue semantics nor connects it, even when
+configured. Worker resolves queue only, not primary storage/auth. Syntactic
+deserialization errors still invalidate the entire file. Doctor and `config
+check` validate all configured components. See [jobs](jobs.md) for queue semantics.
 
 `windwatcher migrate` applies storage migrations and queue migrations when a
 queue is configured. `--storage` and `--queue` target them independently, and
 the same flags apply to `migrate status`. Explicit `--queue` without queue
 configuration is an actionable error. Runtime and operator commands check the
 schema and never migrate implicitly.
+SQLite `create_if_missing` is honored only when applying migrations; normal
+runtime, diagnostic and status commands force existing-only connections and
+never create data directories.
 
 JWT uses a direct `auth.jwt.secret` or exact bytes from `auth.jwt.secret_file`,
 never both. Secret files are not trimmed: a final newline is part of the secret.
@@ -65,7 +80,7 @@ do not resolve JWT or session policy.
 When environment variables configure either JWT secret source, that source replaces
 the complete TOML secret source. Setting both `WINDWATCHER__AUTH__JWT__SECRET` and
 `WINDWATCHER__AUTH__JWT__SECRET_FILE` is a semantic JWT error reported by `config
-check` and future runtime commands, but does not block migration or provisioning.
+check`, `serve` and `doctor`, but does not block migration or provisioning.
 Direct environment-secret values are read as exact UTF-8 text rather than Figment's
 structured-value syntax.
 
@@ -84,6 +99,33 @@ the current size limit. Override it with
 message fields are rejected. `config check` resolves the policy without opening
 a database or creating files. No message runtime, message CLI commands or
 dedicated message-limit CLI flag are introduced.
+
+## Listener and process lifecycle
+
+```toml
+[server]
+bind = "127.0.0.1:8080"
+shutdown_grace_period = "30s"
+readiness_timeout = "2s"
+```
+
+The default listener is loopback-only, not externally reachable. Bind must be a
+numeric `SocketAddr`, such as `127.0.0.1:8080`, `[::1]:8080` or `[::]:8080`;
+hostnames/DNS are not supported. Port zero is valid and the actual bound address
+is logged. Containers or reverse proxies may explicitly select `0.0.0.0:8080`.
+TLS termination remains external in v1.
+
+Both durations must be positive and representable by the runtime clock.
+`shutdown_grace_period` is one total budget for HTTP, WebSockets and dispatch,
+including lifecycle coordination, not a separate timeout per component.
+`readiness_timeout` bounds one primary-schema dependency inspection, not backend
+connection/pool configuration. Worker keeps its independent `[queue]` grace.
+
+Environment overrides include `WINDWATCHER__SERVER__BIND`,
+`WINDWATCHER__SERVER__SHUTDOWN_GRACE_PERIOD` and
+`WINDWATCHER__SERVER__READINESS_TIMEOUT`. There are no matching listener CLI flags.
+Listener/lifecycle configuration belongs here, not under `[http]` or `[realtime]`.
+See [operations](operations.md).
 
 ## HTTP behavior
 

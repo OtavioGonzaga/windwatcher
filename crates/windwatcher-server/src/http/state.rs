@@ -27,13 +27,30 @@ impl HttpState {
         session: SessionPolicy,
         messages: windwatcher::MessagePolicy,
     ) -> Self {
+        Self::new_with_realtime(
+            storage,
+            passwords,
+            codec,
+            registration,
+            session,
+            messages,
+            crate::RawRealtime::default()
+                .resolve()
+                .expect("valid built-in realtime policy"),
+        )
+    }
+
+    pub(crate) fn new_with_realtime(
+        storage: Storage,
+        passwords: TokioPasswordHasher,
+        codec: Hs256JwtAccessTokenCodec,
+        registration: RegistrationPolicy,
+        session: SessionPolicy,
+        messages: windwatcher::MessagePolicy,
+        realtime: crate::ResolvedRealtimeConfig,
+    ) -> Self {
         Self {
-            realtime: crate::realtime::RealtimeService::new(
-                storage.clone(),
-                crate::RawRealtime::default()
-                    .resolve()
-                    .expect("valid built-in realtime policy"),
-            ),
+            realtime: crate::realtime::RealtimeService::new(storage.clone(), realtime),
             storage,
             passwords,
             codec: Arc::new(codec),
@@ -42,6 +59,10 @@ impl HttpState {
             messages,
             refresh_tokens: Arc::new(OsRefreshTokenProvider),
         }
+    }
+
+    pub(crate) fn realtime(&self) -> crate::realtime::RealtimeService {
+        self.realtime.clone()
     }
 
     /// Selects validated realtime policy before composing routers. Clones share its runtime.

@@ -3,13 +3,16 @@
 mod cli;
 mod commands;
 mod config;
+mod connection;
 mod error;
 pub mod http;
+mod init;
 mod logging;
 mod password;
 mod paths;
 mod queue;
 mod realtime;
+mod runtime;
 mod storage;
 mod worker;
 
@@ -19,6 +22,7 @@ pub use password::TokioPasswordHasher;
 
 use clap::Parser;
 use cli::{Cli, Command, JobStatusArg, JobsCommand, MigrateCommand};
+use connection::{ConnectionPurpose, connect_queue, connect_storage};
 use error::AppError;
 use paths::{ResolvedPaths, RuntimeMode};
 pub use storage::Storage;
@@ -36,7 +40,12 @@ pub async fn run_cli() {
 
 async fn run() -> Result<(), AppError> {
     let mut cli = Cli::parse();
-    let argument_password = match &mut cli.command {
+    let mut command = cli.command.take().unwrap_or(Command::Serve);
+    if matches!(command, Command::Version) {
+        println!("windwatcher {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
+    let argument_password = match &mut command {
         Command::User {
             command: cli::UserCommand::Create(args),
         } => args.password.take().map(cli::SensitiveString::new),
@@ -53,21 +62,50 @@ async fn run() -> Result<(), AppError> {
         RuntimeMode::User
     };
     let paths = ResolvedPaths::resolve(mode)?;
-    let raw = config::load(&paths, cli.config)?;
-    logging::initialize(&raw.logging, cli.log_filter.as_deref(), cli.log_format)?;
+    if matches!(command, Command::Init) {
+        return init::run(cli.config.unwrap_or(paths.config_file));
+    }
+    let raw = config::load(&paths, cli.config).map_err(|error| {
+        if matches!(command, Command::Doctor) {
+            runtime::doctor::configuration_failure()
+        } else {
+            error
+        }
+    })?;
+    if matches!(
+        command,
+        Command::Config {
+            command: cli::ConfigCommand::Show
+        }
+    ) {
+        print!(
+            "{}",
+            config::show(&raw, cli.log_filter.as_deref(), cli.log_format)?
+        );
+        return Ok(());
+    }
+    logging::initialize(&raw.logging, cli.log_filter.as_deref(), cli.log_format).map_err(
+        |error| {
+            if matches!(command, Command::Doctor) {
+                runtime::doctor::configuration_failure()
+            } else {
+                error
+            }
+        },
+    )?;
     tracing::info!(mode = ?mode, "configuration loaded");
-    match cli.command {
+    match command {
+        Command::Init | Command::Version => unreachable!("handled before configuration"),
+        Command::Serve => runtime::serve::run(&raw, &paths).await,
+        Command::Doctor => runtime::doctor::run(&raw, &paths).await,
+        Command::Config {
+            command: cli::ConfigCommand::Show,
+        } => unreachable!("handled before logging"),
         Command::Config {
             command: cli::ConfigCommand::Check,
         } => {
-            config::resolve_full(&raw, &paths)?;
+            config::validate_full(&raw, &paths).await?;
             let storage = config::resolve_storage(&raw, &paths)?;
-            if let config::ResolvedStorageProvider::MongoDb(options) = &storage {
-                options
-                    .validate()
-                    .await
-                    .map_err(|error| AppError::Config(error.to_string()))?;
-            }
             println!(
                 "Configuration valid.\nMode: {}\nStorage: {}\nQueue: {}",
                 if cli.system { "system" } else { "user" },
@@ -90,14 +128,24 @@ async fn run() -> Result<(), AppError> {
             let do_storage = args.storage || !explicit;
             let do_queue = args.queue || (!explicit && raw.queue.is_some());
             if do_storage {
-                let storage = connect_storage(&raw, &paths).await?;
+                let purpose = if args.command.is_some() {
+                    ConnectionPurpose::ExistingOnly
+                } else {
+                    ConnectionPurpose::Migration
+                };
+                let storage = connect_storage(&raw, &paths, purpose).await?;
                 match args.command {
                     Some(MigrateCommand::Status) => commands::migration_status(&storage).await?,
                     None => commands::migrate(&storage).await?,
                 }
             }
             if do_queue {
-                let queue = connect_queue(&raw, &paths).await?;
+                let purpose = if args.command.is_some() {
+                    ConnectionPurpose::ExistingOnly
+                } else {
+                    ConnectionPurpose::Migration
+                };
+                let queue = connect_queue(&raw, &paths, purpose).await?;
                 let status = queue
                     .migration_status()
                     .await
@@ -152,11 +200,11 @@ async fn run() -> Result<(), AppError> {
         }
         Command::Worker => {
             let resolved = config::resolve_queue(&raw, &paths)?;
-            let queue = connect_queue(&raw, &paths).await?;
+            let queue = connect_queue(&raw, &paths, ConnectionPurpose::ExistingOnly).await?;
             worker::run(queue, resolved).await
         }
         Command::Jobs { command } => {
-            let queue = connect_queue(&raw, &paths).await?;
+            let queue = connect_queue(&raw, &paths, ConnectionPurpose::ExistingOnly).await?;
             let status = queue
                 .migration_status()
                 .await
@@ -180,72 +228,20 @@ async fn run() -> Result<(), AppError> {
         Command::User {
             command: cli::UserCommand::Create(args),
         } => {
-            let storage = connect_storage(&raw, &paths).await?;
+            let storage = connect_storage(&raw, &paths, ConnectionPurpose::ExistingOnly).await?;
             commands::create_user(&storage, args, argument_password).await
         }
-    }
-}
-
-async fn connect_queue(
-    raw: &config::RawConfig,
-    paths: &ResolvedPaths,
-) -> Result<queue::ConfiguredQueue, AppError> {
-    let resolved = config::resolve_queue(raw, paths)?;
-    if resolved.provider.needs_data_directory() {
-        std::fs::create_dir_all(&paths.data_dir).map_err(|source| AppError::DataDirectory {
-            path: paths.data_dir.clone(),
-            source,
-        })?;
-    }
-    let backend = resolved.provider.backend_name();
-    let queue = queue::ConfiguredQueue::connect(resolved.provider)
-        .await
-        .map_err(|error| AppError::QueueConnection {
-            backend,
-            source: Box::new(error),
-        })?;
-    tracing::info!(queue_backend = backend, "queue backend selected");
-    Ok(queue)
-}
-
-async fn connect_storage(
-    raw: &config::RawConfig,
-    paths: &ResolvedPaths,
-) -> Result<Storage, AppError> {
-    let storage = match config::resolve_storage(raw, paths)? {
-        config::ResolvedStorageProvider::Sqlite {
-            options,
-            derived_path,
-            create_if_missing,
+        Command::User {
+            command: cli::UserCommand::Disable { user_id },
         } => {
-            if derived_path && create_if_missing {
-                std::fs::create_dir_all(&paths.data_dir).map_err(|source| {
-                    AppError::DataDirectory {
-                        path: paths.data_dir.clone(),
-                        source,
-                    }
-                })?;
-            }
-            Storage::connect(options)
-                .await
-                .map_err(|error| AppError::Storage {
-                    backend: "SQLite",
-                    source: Box::new(error),
-                })?
+            let storage = connect_storage(&raw, &paths, ConnectionPurpose::ExistingOnly).await?;
+            commands::manage_user(&storage, user_id, false).await
         }
-        provider @ config::ResolvedStorageProvider::Postgres(_)
-        | provider @ config::ResolvedStorageProvider::MySql(_)
-        | provider @ config::ResolvedStorageProvider::MongoDb(_) => {
-            let backend = match &provider {
-                config::ResolvedStorageProvider::Postgres(_) => "PostgreSQL",
-                config::ResolvedStorageProvider::MongoDb(_) => "MongoDB",
-                _ => "MySQL",
-            };
-            Storage::connect_provider(provider)
-                .await
-                .map_err(|source| AppError::Storage { backend, source })?
+        Command::User {
+            command: cli::UserCommand::Enable { user_id },
+        } => {
+            let storage = connect_storage(&raw, &paths, ConnectionPurpose::ExistingOnly).await?;
+            commands::manage_user(&storage, user_id, true).await
         }
-    };
-    tracing::info!(backend = storage.backend_name(), "storage backend selected");
-    Ok(storage)
+    }
 }

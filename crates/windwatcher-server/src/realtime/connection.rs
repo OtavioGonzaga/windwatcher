@@ -27,6 +27,7 @@ pub(super) async fn run(service: RealtimeService, socket: WebSocket, prepared: P
     let Prepared {
         mut registration,
         session,
+        tracking: _tracking,
     } = prepared;
     let config = &service.0.config;
     let (mut sink, mut source) = socket.split();

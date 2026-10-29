@@ -2,6 +2,28 @@ use std::{error::Error, path::PathBuf};
 
 #[derive(Debug, thiserror::Error)]
 pub enum AppError {
+    #[error("user {0} was not found")]
+    UserNotFound(windwatcher::UserId),
+    #[error("user management failed")]
+    UserManagement(#[source] windwatcher::ManageUserError),
+    #[error("initialization failed for {path}: {source}")]
+    Init {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("installation is unhealthy")]
+    DoctorUnhealthy,
+    #[error("failed to bind server listener at {bind}")]
+    ListenerBind {
+        bind: std::net::SocketAddr,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("server runtime failed")]
+    ServerRuntime(#[source] std::io::Error),
+    #[error("server terminated unexpectedly")]
+    ServerTerminated,
     #[error("configuration error: {0}")]
     Config(String),
     #[error("path resolution failed: {0}")]
@@ -36,8 +58,8 @@ pub enum AppError {
     QueueOperation(#[source] Box<dyn Error + Send + Sync>),
     #[error("worker task terminated unexpectedly; restart the worker process")]
     WorkerTaskTerminated,
-    #[error("failed to listen for worker shutdown signal")]
-    WorkerSignal(#[source] std::io::Error),
+    #[error("failed to listen for shutdown signal")]
+    ShutdownSignal(#[source] std::io::Error),
     #[error("username {username:?} is already taken")]
     UsernameTaken { username: String },
     #[error("password input error: {0}")]
@@ -82,6 +104,17 @@ impl AppError {
                         Some(format!("invalid database migration history: {message}"))
                     }
                     _ => None,
+                })
+                .or_else(|| {
+                    source.downcast_ref::<crate::queue::QueueLifecycleError>().and_then(|error| {
+                        use crate::queue::QueueLifecycleError as E;
+                        match error {
+                            E::Sqlite(windwatcher::SqliteQueueError::InvalidMigrationHistory(_))
+                            | E::Postgres(windwatcher::PostgresQueueError::InvalidMigrationHistory)
+                            | E::MySql(windwatcher::MySqlQueueError::InvalidMigrationHistory) => Some("invalid queue migration history; inspect the migration ledger before retrying".into()),
+                            _ => None,
+                        }
+                    })
                 })
                 .or_else(|| {
                     source

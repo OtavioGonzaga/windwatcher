@@ -19,11 +19,19 @@ pub struct Cli {
     #[arg(long)]
     pub log_format: Option<LogFormat>,
     #[command(subcommand)]
-    pub command: Command,
+    pub command: Option<Command>,
 }
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// Initialize a minimal configuration and signing key.
+    Init,
+    /// Display the standalone server version.
+    Version,
+    /// Run the standalone HTTP and realtime service (the default command).
+    Serve,
+    /// Diagnose configuration, storage and configured queue without changing them.
+    Doctor,
     /// Apply pending database migrations.
     Migrate(MigrateArgs),
     /// Run the standalone background worker.
@@ -90,6 +98,10 @@ pub enum MigrateCommand {
 pub enum UserCommand {
     /// Provision a local user as a trusted operator.
     Create(CreateUserArgs),
+    /// Disable a user and revoke all sessions.
+    Disable { user_id: windwatcher::UserId },
+    /// Enable a user without restoring revoked sessions.
+    Enable { user_id: windwatcher::UserId },
 }
 
 #[derive(Args)]
@@ -167,4 +179,39 @@ impl std::fmt::Display for LogFormat {
 pub enum ConfigCommand {
     /// Fully validate server configuration without changing state.
     Check,
+    /// Display effective configuration with sensitive values redacted.
+    Show,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn absent_and_explicit_serve_normalize_identically_with_existing_flags() {
+        for args in [vec!["windwatcher"], vec!["windwatcher", "serve"]] {
+            assert!(matches!(
+                Cli::try_parse_from(args)
+                    .unwrap()
+                    .command
+                    .unwrap_or(Command::Serve),
+                Command::Serve
+            ));
+        }
+        let cli = Cli::try_parse_from([
+            "windwatcher",
+            "--system",
+            "--config",
+            "config.toml",
+            "--log-filter",
+            "warn",
+            "--log-format",
+            "json",
+        ])
+        .unwrap();
+        assert!(cli.system);
+        assert_eq!(cli.config.unwrap(), PathBuf::from("config.toml"));
+        assert_eq!(cli.log_filter.as_deref(), Some("warn"));
+        assert!(matches!(cli.log_format, Some(LogFormat::Json)));
+    }
 }

@@ -8,9 +8,11 @@ mod ticket;
 
 use crate::{ResolvedRealtimeConfig, Storage};
 use hub::{Hub, Registration};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use ticket::{Grant, Ticket, Tickets};
 use time::OffsetDateTime;
+use tokio_util::task::{TaskTracker, task_tracker::TaskTrackerToken};
 use windwatcher::{Session, SessionId, UserId, ValidateSession, ValidateSessionError};
 
 #[derive(Clone)]
@@ -22,10 +24,14 @@ struct Inner {
     hub: Hub,
     lifecycle: tokio::sync::RwLock<()>,
     dispatch: dispatch::Dispatch,
+    accepting: AtomicBool,
+    connections: TaskTracker,
 }
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum Error {
+    #[error("server is shutting down")]
+    ShuttingDown,
     #[error("invalid ticket")]
     InvalidTicket,
     #[error("session inactive")]
@@ -39,6 +45,7 @@ pub(crate) enum Error {
 pub(crate) struct Prepared {
     registration: Registration,
     session: Session,
+    tracking: TaskTrackerToken,
 }
 
 impl RealtimeService {
@@ -50,6 +57,8 @@ impl RealtimeService {
             tickets: Mutex::new(Tickets::default()),
             hub: Hub::default(),
             lifecycle: tokio::sync::RwLock::new(()),
+            accepting: AtomicBool::new(true),
+            connections: TaskTracker::new(),
         }))
     }
     async fn validate(&self, user: UserId, session: SessionId) -> Result<Session, Error> {
@@ -66,7 +75,9 @@ impl RealtimeService {
         user: UserId,
         session: SessionId,
     ) -> Result<(String, OffsetDateTime), Error> {
+        self.check_accepting()?;
         let _lifecycle = self.0.lifecycle.read().await;
+        self.check_accepting()?;
         let active = self.validate(user, session).await?;
         let now = OffsetDateTime::now_utc();
         self.issue_validated(&active, now)
@@ -76,6 +87,7 @@ impl RealtimeService {
         active: &Session,
         now: OffsetDateTime,
     ) -> Result<(String, OffsetDateTime), Error> {
+        self.check_accepting()?;
         if !active.is_active(now) {
             return Err(Error::SessionInactive);
         }
@@ -109,7 +121,9 @@ impl RealtimeService {
         Ok((ticket.expose().to_owned(), expires_at))
     }
     pub(crate) async fn prepare(&self, raw: &str) -> Result<Prepared, Error> {
+        self.check_accepting()?;
         let _lifecycle = self.0.lifecycle.read().await;
+        self.check_accepting()?;
         let grant = self
             .0
             .tickets
@@ -135,6 +149,7 @@ impl RealtimeService {
         grant: Grant,
     ) -> Result<Prepared, Error> {
         let session = self.validate(grant.user, grant.session).await?;
+        self.check_accepting()?;
         if session.is_expired(OffsetDateTime::now_utc())
             || !self.0.hub.activate(registration.guard.id)
         {
@@ -143,6 +158,9 @@ impl RealtimeService {
         Ok(Prepared {
             registration,
             session,
+            // Reserve before releasing the lifecycle read lock, not when the
+            // detached Axum upgrade callback eventually starts polling.
+            tracking: self.0.connections.token(),
         })
     }
     pub(crate) fn invalidate(&self, session: SessionId) {
@@ -157,7 +175,36 @@ impl RealtimeService {
         self.0.lifecycle.write().await
     }
     pub(crate) async fn connect(&self, socket: axum::extract::ws::WebSocket, prepared: Prepared) {
-        connection::run(self.clone(), socket, prepared).await;
+        self.0
+            .connections
+            .track_future(connection::run(self.clone(), socket, prepared))
+            .await;
+    }
+
+    fn check_accepting(&self) -> Result<(), Error> {
+        if self.0.accepting.load(Ordering::Acquire) {
+            Ok(())
+        } else {
+            Err(Error::ShuttingDown)
+        }
+    }
+
+    pub(crate) async fn begin_shutdown(&self) {
+        self.0.accepting.store(false, Ordering::Release);
+        self.0.dispatch.close();
+        let _lifecycle = self.0.lifecycle.write().await;
+        self.0
+            .tickets
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
+        self.0.hub.close_all(hub::SERVER_SHUTDOWN);
+        self.0.connections.close();
+        tracing::info!("realtime_draining");
+    }
+
+    pub(crate) async fn drained(&self) {
+        tokio::join!(self.0.connections.wait(), self.0.dispatch.drained());
     }
 }
 
@@ -166,7 +213,7 @@ pub(super) mod tests {
     use super::*;
     use windwatcher::{IdentityStore, RefreshTokenProvider, SessionStore};
 
-    pub(super) async fn fixture() -> (tempfile::TempDir, RealtimeService, Session) {
+    pub(crate) async fn fixture() -> (tempfile::TempDir, RealtimeService, Session) {
         let directory = tempfile::TempDir::new().unwrap();
         let storage = Storage::connect(windwatcher::SqliteStorageOptions::new(
             directory.path().join("race.db").display().to_string(),
@@ -196,6 +243,101 @@ pub(super) mod tests {
         let service =
             RealtimeService::new(storage, crate::RawRealtime::default().resolve().unwrap());
         (directory, service, session)
+    }
+
+    #[tokio::test]
+    async fn shutdown_rejects_admission_clears_tickets_and_tracks_pending_upgrades() {
+        let (_directory, service, session) = fixture().await;
+        let (ticket, _) = service
+            .issue(session.user_id(), session.id())
+            .await
+            .unwrap();
+        let prepared = service.prepare(&ticket).await.unwrap();
+        let (unused, _) = service
+            .issue(session.user_id(), session.id())
+            .await
+            .unwrap();
+        service.begin_shutdown().await;
+        assert!(matches!(
+            service.issue(session.user_id(), session.id()).await,
+            Err(Error::ShuttingDown)
+        ));
+        assert!(matches!(
+            service.prepare(&unused).await,
+            Err(Error::ShuttingDown)
+        ));
+        assert!(
+            service
+                .0
+                .tickets
+                .lock()
+                .unwrap()
+                .consume(&unused, OffsetDateTime::now_utc())
+                .is_none()
+        );
+        assert_eq!(prepared.registration.control.borrow().unwrap().code, 1001);
+        assert_eq!(
+            prepared.registration.control.borrow().unwrap().reason,
+            "server shutdown"
+        );
+        assert!(!service.0.connections.is_empty());
+        assert!(
+            tokio::time::timeout(std::time::Duration::ZERO, service.drained())
+                .await
+                .is_err()
+        );
+        drop(prepared);
+        service.drained().await;
+    }
+
+    #[tokio::test]
+    async fn shutdown_at_pending_activation_boundary_fails_closed() {
+        let (_directory, service, session) = fixture().await;
+        let grant = Grant {
+            user: session.user_id(),
+            session: session.id(),
+            expires_at: session.expires_at(),
+        };
+        let pending = service.0.hub.register(grant.user, grant.session, 2);
+        service.begin_shutdown().await;
+        assert!(matches!(
+            service.complete_registration(pending, grant).await,
+            Err(Error::ShuttingDown)
+        ));
+    }
+
+    #[tokio::test]
+    async fn serve_drain_waits_for_dispatch_work() {
+        let (_directory, service, _) = fixture().await;
+        let (release, released) = tokio::sync::oneshot::channel();
+        assert!(service.0.dispatch.submit(
+            "existing",
+            async {
+                released.await.unwrap();
+            },
+            || {}
+        ));
+        let stop = tokio_util::sync::CancellationToken::new();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let task = tokio::spawn(crate::runtime::serve::serve_until(
+            listener,
+            axum::Router::new(),
+            service.clone(),
+            stop.clone(),
+            std::time::Duration::from_secs(2),
+            async { Ok(()) },
+        ));
+        stop.cancelled().await;
+        service.begin_shutdown().await;
+        assert!(
+            !service
+                .0
+                .dispatch
+                .submit("rejected", async { panic!("not admitted") }, || {})
+        );
+        assert!(!task.is_finished());
+        release.send(()).unwrap();
+        task.await.unwrap().unwrap();
     }
 
     #[tokio::test]

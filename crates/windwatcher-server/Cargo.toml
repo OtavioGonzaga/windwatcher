@@ -28,7 +28,9 @@ humantime = "2"
 rpassword = "7"
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"
+toml = "0.8"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time", "net", "signal"] }
+tokio-util = { version = "0.7", features = ["rt"] }
 time = { version = "0.3", features = ["serde", "serde-well-known", "formatting", "parsing"] }
 tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.7", features = ["cors", "trace", "sensitive-headers"] }
@@ -44,7 +46,7 @@ zeroize = { version = "1", features = ["serde"] }
 
 [dev-dependencies]
 uuid = { version = "1", features = ["v7"] }
-tokio = { version = "1", features = ["test-util"] }
+tokio = { version = "1", features = ["test-util", "io-util"] }
 log = "0.4"
 tracing-log = "0.2"
 assert_cmd = "2"

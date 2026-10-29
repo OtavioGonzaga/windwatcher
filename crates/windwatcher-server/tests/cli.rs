@@ -4,6 +4,221 @@ use assert_cmd::Command;
 use predicates::prelude::*;
 use tempfile::TempDir;
 
+#[cfg(unix)]
+mod process_isolation {
+    use super::*;
+    use std::{
+        io::{BufRead, BufReader, Read, Write},
+        net::{SocketAddr, TcpListener, TcpStream},
+        process::{Child, Command as ProcessCommand, Stdio},
+        sync::mpsc,
+        thread,
+        time::Duration,
+    };
+
+    struct Process {
+        child: Child,
+        events: mpsc::Receiver<serde_json::Value>,
+        reader: Option<thread::JoinHandle<String>>,
+    }
+
+    impl Process {
+        fn start(config: &Path, role: &str) -> Self {
+            let mut command = ProcessCommand::new(assert_cmd::cargo::cargo_bin!("windwatcher"));
+            for (key, _) in std::env::vars_os() {
+                if key.to_string_lossy().starts_with("WINDWATCHER__") {
+                    command.env_remove(key);
+                }
+            }
+            let mut child = command
+                .args([
+                    "--config",
+                    config.to_str().unwrap(),
+                    "--log-format",
+                    "json",
+                    role,
+                ])
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap();
+            let stderr = child.stderr.take().unwrap();
+            let (sender, events) = mpsc::channel();
+            let reader = thread::spawn(move || {
+                let mut logs = String::new();
+                for line in BufReader::new(stderr).lines() {
+                    let line = line.unwrap();
+                    if let Ok(event) = serde_json::from_str(&line) {
+                        let _ = sender.send(event);
+                    }
+                    logs.push_str(&line);
+                    logs.push('\n');
+                }
+                logs
+            });
+            Self {
+                child,
+                events,
+                reader: Some(reader),
+            }
+        }
+
+        fn wait_for(&self, name: &str) -> serde_json::Value {
+            let deadline = std::time::Instant::now() + Duration::from_secs(15);
+            loop {
+                let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+                let event = self
+                    .events
+                    .recv_timeout(remaining)
+                    .expect("process did not emit expected lifecycle event");
+                if event["fields"]["message"] == name {
+                    return event;
+                }
+            }
+        }
+
+        fn terminate(mut self) -> (String, String) {
+            assert!(
+                ProcessCommand::new("kill")
+                    .args(["-TERM", &self.child.id().to_string()])
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+            let deadline = std::time::Instant::now() + Duration::from_secs(10);
+            let status = loop {
+                if let Some(status) = self.child.try_wait().unwrap() {
+                    break status;
+                }
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "process did not shut down"
+                );
+                thread::park_timeout(Duration::from_millis(10));
+            };
+            assert!(status.success());
+            let mut stdout = String::new();
+            self.child
+                .stdout
+                .take()
+                .unwrap()
+                .read_to_string(&mut stdout)
+                .unwrap();
+            (stdout, self.reader.take().unwrap().join().unwrap())
+        }
+    }
+
+    impl Drop for Process {
+        fn drop(&mut self) {
+            if self.child.try_wait().ok().flatten().is_none() {
+                let _ = self.child.kill();
+                let _ = self.child.wait();
+            }
+        }
+    }
+
+    #[test]
+    fn serve_ignores_unreachable_queue_and_logs_safe_lifecycle() {
+        let directory = TempDir::new().unwrap();
+        let path = complete_config(&directory, "info");
+        command(&path)
+            .args(["migrate", "--storage"])
+            .assert()
+            .success();
+        // Select a local ephemeral address and verify no TCP service is listening.
+        let unavailable = TcpListener::bind("127.0.0.1:0").unwrap();
+        let queue_address = unavailable.local_addr().unwrap();
+        drop(unavailable);
+        assert!(TcpStream::connect_timeout(&queue_address, Duration::from_secs(1)).is_err());
+        let queue_url = format!("redis://:TOP_SECRET@{queue_address}/0");
+        let base = fs::read_to_string(&path).unwrap();
+        fs::write(&path, format!("{base}\n[server]\nbind = '127.0.0.1:0'\n[queue]\nprovider = 'redis'\n[queue.redis]\nurl = '{queue_url}'\n")).unwrap();
+        let process = Process::start(&path, "serve");
+        let listening = process.wait_for("server_listening");
+        let address: SocketAddr = listening["fields"]["bind"]
+            .as_str()
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert_ne!(address.port(), 0);
+        let mut stream = TcpStream::connect_timeout(&address, Duration::from_secs(3)).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        write!(
+            stream,
+            "GET /health/ready HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n"
+        )
+        .unwrap();
+        let mut response = String::new();
+        stream.read_to_string(&mut response).unwrap();
+        assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+        assert!(response.contains("\"ready\""));
+        let (stdout, logs) = process.terminate();
+        let events: Vec<serde_json::Value> = logs
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert!(events.iter().any(
+            |e| e["fields"]["message"] == "storage_ready" && e["fields"]["backend"] == "SQLite"
+        ));
+        assert!(
+            events
+                .iter()
+                .any(|e| e["fields"]["message"] == "server_listening"
+                    && e["fields"]["bind"] == address.to_string())
+        );
+        assert!(
+            events
+                .iter()
+                .any(|e| e["fields"]["message"] == "shutdown_requested"
+                    && e["fields"]["reason"] == "signal")
+        );
+        assert!(
+            events
+                .iter()
+                .any(|e| e["fields"]["message"] == "shutdown_complete")
+        );
+        for output in [&stdout, &logs] {
+            assert!(!output.contains("TOP_SECRET"));
+            assert!(!output.contains(&queue_url));
+            assert!(!output.contains("redis://"));
+        }
+    }
+
+    #[test]
+    fn worker_starts_with_valid_queue_and_invalid_primary_storage() {
+        let directory = TempDir::new().unwrap();
+        let path = complete_config(&directory, "info");
+        let base = fs::read_to_string(&path).unwrap();
+        let queue = directory.path().join("queue.db");
+        fs::write(
+            &path,
+            format!(
+                "{base}\n[queue]\n[queue.sqlite]\npath = {:?}\n",
+                queue.display().to_string()
+            ),
+        )
+        .unwrap();
+        command(&path)
+            .args(["migrate", "--queue"])
+            .assert()
+            .success();
+        let broken = fs::read_to_string(&path).unwrap();
+        fs::write(
+            &path,
+            format!("{broken}\n[storage]\nprovider = 'unusable'\n"),
+        )
+        .unwrap();
+        command(&path).args(["config", "check"]).assert().failure();
+        let process = Process::start(&path, "worker");
+        process.wait_for("worker_started");
+        let (_, logs) = process.terminate();
+        assert!(logs.contains("worker_stopping"));
+        assert!(!directory.path().join("windwatcher.db").exists());
+    }
+}
+
 fn config(directory: &TempDir) -> std::path::PathBuf {
     let path = directory.path().join("config.toml");
     fs::write(
@@ -38,6 +253,529 @@ fn command(config: &Path) -> Command {
     let mut command = Command::cargo_bin("windwatcher").unwrap();
     command.arg("--config").arg(config);
     command
+}
+
+#[test]
+fn version_is_independent_of_configuration() {
+    let directory = TempDir::new().unwrap();
+    command(&directory.path().join("missing.toml"))
+        .arg("version")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(format!(
+            "windwatcher {}",
+            env!("CARGO_PKG_VERSION")
+        )))
+        .stderr(predicate::str::is_empty());
+    assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 0);
+}
+
+#[test]
+fn init_creates_private_configuration_without_persistence_or_overwrite() {
+    let directory = TempDir::new().unwrap();
+    let target = directory.path().join("new/config.toml");
+    let data = directory.path().join("data");
+    command(&target)
+        .env("XDG_DATA_HOME", &data)
+        .arg("init")
+        .assert()
+        .success();
+    let key = target.parent().unwrap().join("jwt.key");
+    let secret = fs::read(&key).unwrap();
+    assert_eq!(secret.len(), 32);
+    assert!(secret.iter().any(|b| *b != 0));
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(fs::metadata(&key).unwrap().permissions().mode() & 0o077, 0);
+    }
+    command(&target)
+        .args(["config", "check"])
+        .assert()
+        .success();
+    assert!(!data.exists());
+    let config_before = fs::read(&target).unwrap();
+    command(&target)
+        .arg("init")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("already exists"));
+    assert_eq!(fs::read(&target).unwrap(), config_before);
+    assert_eq!(fs::read(&key).unwrap(), secret);
+    fs::remove_file(&target).unwrap();
+    command(&target)
+        .arg("init")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("already exists"));
+    assert!(!target.exists());
+    assert_eq!(fs::read(&key).unwrap(), secret);
+}
+
+#[test]
+fn config_show_displays_effective_redacted_values_without_connecting_or_reading_secret() {
+    let directory = TempDir::new().unwrap();
+    let path = directory.path().join("show.toml");
+    fs::write(&path, "[auth.jwt]\nsecret = 'JWT_TOP_SECRET'\n[storage]\nprovider = 'postgres'\n[storage.sqlite]\nurl = 'sqlite://SQLITE_TOP_SECRET'\n[storage.postgres]\nurl = 'postgres://u:PG_TOP_SECRET@127.0.0.1:1/db'\n[storage.mysql]\nurl = 'mysql://u:MYSQL_TOP_SECRET@127.0.0.1:1/db'\n[storage.mongodb]\nurl = 'mongodb://u:MONGO_TOP_SECRET@127.0.0.1:1/'\n[queue]\nprovider = 'redis'\n[queue.postgres]\nurl = 'postgres://u:QUEUE_PG_TOP_SECRET@127.0.0.1:1/db'\n[queue.mysql]\nurl = 'mysql://u:QUEUE_MYSQL_TOP_SECRET@127.0.0.1:1/db'\n[queue.redis]\nurl = 'redis://:REDIS_TOP_SECRET@127.0.0.1:1/'\n").unwrap();
+    let output = command(&path)
+        .env("WINDWATCHER__SERVER__BIND", "[::1]:1234")
+        .args([
+            "--log-filter",
+            "debug",
+            "--log-format",
+            "json",
+            "config",
+            "show",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    for secret in [
+        "JWT_TOP_SECRET",
+        "SQLITE_TOP_SECRET",
+        "PG_TOP_SECRET",
+        "MYSQL_TOP_SECRET",
+        "MONGO_TOP_SECRET",
+        "QUEUE_PG_TOP_SECRET",
+        "QUEUE_MYSQL_TOP_SECRET",
+        "REDIS_TOP_SECRET",
+    ] {
+        assert!(!text.contains(secret));
+        assert!(!stderr.contains(secret));
+    }
+    let parsed: toml::Value = toml::from_str(&text).unwrap();
+    assert_eq!(parsed["server"]["bind"].as_str(), Some("[::1]:1234"));
+    assert_eq!(parsed["server"]["readiness_timeout"].as_str(), Some("2s"));
+    assert_eq!(parsed["logging"]["filter"].as_str(), Some("debug"));
+    assert_eq!(parsed["logging"]["format"].as_str(), Some("json"));
+    assert_eq!(parsed["auth"]["jwt"]["secret"].as_str(), Some("<redacted>"));
+    for (section, provider) in [
+        ("storage", "sqlite"),
+        ("storage", "postgres"),
+        ("storage", "mysql"),
+        ("storage", "mongodb"),
+        ("queue", "postgres"),
+        ("queue", "mysql"),
+        ("queue", "redis"),
+    ] {
+        assert_eq!(
+            parsed[section][provider]["url"].as_str(),
+            Some("<redacted>")
+        );
+    }
+    command(&path)
+        .env(
+            "WINDWATCHER__AUTH__JWT__SECRET_FILE",
+            directory.path().join("missing-secret"),
+        )
+        .args(["config", "show"])
+        .assert()
+        .success();
+    assert!(!directory.path().join("windwatcher.db").exists());
+}
+
+#[tokio::test]
+async fn user_management_is_idempotent_and_disable_revokes_sessions() {
+    use windwatcher::{IdentityStore, RefreshTokenProvider, SessionStore};
+    let directory = TempDir::new().unwrap();
+    let path = config(&directory);
+    let id = windwatcher::UserId::new();
+    command(&path)
+        .args(["user", "disable", &id.to_string()])
+        .assert()
+        .failure();
+    assert!(!directory.path().join("windwatcher.db").exists());
+    fs::File::create(directory.path().join("windwatcher.db")).unwrap();
+    command(&path)
+        .args(["user", "disable", &id.to_string()])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("windwatcher migrate --storage"));
+    command(&path).arg("migrate").assert().success();
+    command(&path)
+        .args(["user", "disable", "not-a-uuid"])
+        .assert()
+        .failure();
+    command(&path)
+        .args(["user", "enable", &id.to_string()])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(format!("user {id} was not found")));
+    let output = command(&path)
+        .args(["user", "create", "--username", "alice", "--password-stdin"])
+        .write_stdin("test password")
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let output = String::from_utf8(output.stdout).unwrap();
+    let user_id: windwatcher::UserId = output
+        .split('(')
+        .nth(1)
+        .unwrap()
+        .trim()
+        .trim_end_matches(')')
+        .parse()
+        .unwrap();
+    let storage = windwatcher_server::Storage::connect(windwatcher::SqliteStorageOptions::new(
+        directory
+            .path()
+            .join("windwatcher.db")
+            .display()
+            .to_string(),
+    ))
+    .await
+    .unwrap();
+    let now = time::OffsetDateTime::now_utc();
+    let session = windwatcher::Session::new(
+        windwatcher::SessionId::new(),
+        user_id,
+        now,
+        now + time::Duration::hours(1),
+    )
+    .unwrap();
+    let provider = windwatcher::OsRefreshTokenProvider;
+    storage
+        .create_session(&session, &provider.hash(&provider.generate().unwrap()))
+        .await
+        .unwrap();
+    for _ in 0..2 {
+        command(&path)
+            .args(["user", "disable", &user_id.to_string()])
+            .assert()
+            .success();
+    }
+    assert!(
+        storage
+            .find_user(user_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .is_disabled()
+    );
+    assert!(
+        !storage
+            .find_session(session.id())
+            .await
+            .unwrap()
+            .unwrap()
+            .is_active(time::OffsetDateTime::now_utc())
+    );
+    for _ in 0..2 {
+        command(&path)
+            .args(["user", "enable", &user_id.to_string()])
+            .assert()
+            .success();
+    }
+    assert!(
+        !storage
+            .find_user(user_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .is_disabled()
+    );
+    assert!(
+        !storage
+            .find_session(session.id())
+            .await
+            .unwrap()
+            .unwrap()
+            .is_active(time::OffsetDateTime::now_utc())
+    );
+}
+
+#[test]
+fn server_configuration_overrides_and_validation_are_static() {
+    let directory = TempDir::new().unwrap();
+    let path = complete_config(&directory, "warn");
+    for bind in ["127.0.0.1:0", "[::1]:0"] {
+        command(&path)
+            .env("WINDWATCHER__SERVER__BIND", bind)
+            .args(["config", "check"])
+            .assert()
+            .success();
+    }
+    for (key, value) in [
+        ("BIND", "localhost:8080"),
+        ("SHUTDOWN_GRACE_PERIOD", "0s"),
+        ("READINESS_TIMEOUT", "0s"),
+        ("UNKNOWN", "true"),
+    ] {
+        command(&path)
+            .env(format!("WINDWATCHER__SERVER__{key}"), value)
+            .args(["config", "check"])
+            .assert()
+            .failure();
+    }
+    assert!(!directory.path().join("windwatcher.db").exists());
+}
+
+#[test]
+fn serve_preflight_requires_existing_current_storage_before_binding() {
+    let directory = TempDir::new().unwrap();
+    let path = complete_config(&directory, "info");
+    let base = fs::read_to_string(&path).unwrap();
+    // An occupied address must not mask the earlier schema error.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    fs::write(
+        &path,
+        format!(
+            "{base}\n[server]\nbind = '{}'\n",
+            listener.local_addr().unwrap()
+        ),
+    )
+    .unwrap();
+    for args in [vec![], vec!["serve"]] {
+        command(&path)
+            .args(args)
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("failed to open SQLite database"));
+        assert!(!directory.path().join("windwatcher.db").exists());
+    }
+    fs::File::create(directory.path().join("windwatcher.db")).unwrap();
+    command(&path)
+        .arg("serve")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("windwatcher migrate --storage"))
+        .stderr(predicate::str::contains("server_listening").not());
+    command(&path).arg("migrate").assert().success();
+    command(&path)
+        .arg("serve")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("failed to bind server listener"));
+}
+
+#[test]
+fn doctor_is_read_only_and_reports_storage_and_optional_queue_independently() {
+    let directory = TempDir::new().unwrap();
+    let path = complete_config(&directory, "warn");
+    command(&path)
+        .arg("doctor")
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("[fail] storage:"))
+        .stdout(predicate::str::contains("[ok] queue: disabled"))
+        .stdout(predicate::str::contains("Doctor: unhealthy"));
+    assert!(!directory.path().join("windwatcher.db").exists());
+    fs::File::create(directory.path().join("windwatcher.db")).unwrap();
+    command(&path)
+        .arg("doctor")
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("storage migrations: pending"))
+        .stdout(predicate::str::contains("windwatcher migrate --storage"));
+    command(&path)
+        .args(["migrate", "status"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Status: pending"));
+    command(&path).arg("migrate").assert().success();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    command(&path)
+        .env(
+            "WINDWATCHER__SERVER__BIND",
+            listener.local_addr().unwrap().to_string(),
+        )
+        .arg("doctor")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("storage migrations: current"))
+        .stdout(predicate::str::contains("Doctor: healthy"));
+    let base = fs::read_to_string(&path).unwrap();
+    fs::write(
+        &path,
+        format!(
+            "{base}\n[queue]\n[queue.sqlite]\npath = {:?}\n",
+            directory.path().join("queue.db").display().to_string()
+        ),
+    )
+    .unwrap();
+    command(&path).arg("doctor").assert().failure();
+    assert!(!directory.path().join("queue.db").exists());
+    fs::File::create(directory.path().join("queue.db")).unwrap();
+    command(&path)
+        .arg("doctor")
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("queue migrations: pending"))
+        .stdout(predicate::str::contains("windwatcher migrate --queue"));
+    command(&path)
+        .args(["migrate", "--queue"])
+        .assert()
+        .success();
+    command(&path).arg("doctor").assert().success();
+    command(&path)
+        .env("WINDWATCHER__STORAGE__PROVIDER", "postgres")
+        .env(
+            "WINDWATCHER__STORAGE__POSTGRES__URL",
+            "postgresql://user:TOP_SECRET@127.0.0.1:1/db",
+        )
+        .arg("doctor")
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("[fail] storage:"))
+        .stdout(predicate::str::contains("[ok] queue: SQLite"))
+        .stdout(predicate::str::contains("TOP_SECRET").not())
+        .stderr(predicate::str::contains("TOP_SECRET").not());
+}
+
+#[test]
+fn doctor_reports_invalid_configuration_without_quoting_input() {
+    let directory = TempDir::new().unwrap();
+    let path = complete_config(&directory, "warn");
+    for (key, value) in [
+        ("WINDWATCHER__SERVER__BIND", "TOP_SECRET"),
+        ("WINDWATCHER__QUEUE__CONCURRENCY", "TOP_SECRET"),
+    ] {
+        command(&path)
+            .env(key, value)
+            .arg("doctor")
+            .assert()
+            .failure()
+            .stdout(predicate::str::contains("[fail] configuration"))
+            .stdout(predicate::str::contains("Doctor: unhealthy"))
+            .stdout(predicate::str::contains("TOP_SECRET").not())
+            .stderr(predicate::str::contains("TOP_SECRET").not());
+    }
+}
+
+#[test]
+fn doctor_redacts_unavailable_network_dependencies() {
+    let directory = TempDir::new().unwrap();
+    let path = complete_config(&directory, "warn");
+    let base = fs::read_to_string(&path).unwrap();
+    for (provider, url) in [
+        ("postgres", "postgresql://user:TOP_SECRET@127.0.0.1:1/db"),
+        ("mysql", "mysql://user:TOP_SECRET@127.0.0.1:1/db"),
+        (
+            "mongodb",
+            "mongodb://user:TOP_SECRET@127.0.0.1:1/?serverSelectionTimeoutMS=10",
+        ),
+    ] {
+        fs::write(&path, format!("{base}\n[storage]\nprovider = '{provider}'\n[storage.{provider}]\nurl = '{url}'\n{}", if provider == "mongodb" { "database = 'doctor'" } else { "acquire_timeout = '10ms'" })).unwrap();
+        command(&path)
+            .arg("doctor")
+            .assert()
+            .failure()
+            .stdout(predicate::str::contains("[fail] storage:"))
+            .stdout(predicate::str::contains("TOP_SECRET").not())
+            .stderr(predicate::str::contains("TOP_SECRET").not());
+    }
+    for (provider, url) in [
+        ("postgres", "postgresql://user:TOP_SECRET@127.0.0.1:1/db"),
+        ("mysql", "mysql://user:TOP_SECRET@127.0.0.1:1/db"),
+        ("redis", "redis://:TOP_SECRET@127.0.0.1:1/0"),
+    ] {
+        fs::write(
+            &path,
+            format!(
+                "{base}\n[queue]\nprovider = '{provider}'\n[queue.{provider}]\nurl = '{url}'\n{}",
+                if provider == "redis" {
+                    ""
+                } else {
+                    "acquire_timeout = '10ms'"
+                }
+            ),
+        )
+        .unwrap();
+        command(&path)
+            .arg("doctor")
+            .assert()
+            .failure()
+            .stdout(predicate::str::contains("[fail] queue:"))
+            .stdout(predicate::str::contains("TOP_SECRET").not())
+            .stderr(predicate::str::contains("TOP_SECRET").not());
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL, MySQL and MongoDB replica set; set WINDWATCHER_TEST_*_URL"]
+async fn network_primary_doctor_composition() {
+    use sqlx::{ConnectOptions, Connection};
+    for (provider, variable) in [
+        ("postgres", "WINDWATCHER_TEST_POSTGRES_URL"),
+        ("mysql", "WINDWATCHER_TEST_MYSQL_URL"),
+        ("mongodb", "WINDWATCHER_TEST_MONGODB_URL"),
+    ] {
+        let base_url = std::env::var(variable).expect("set the disposable database URL");
+        let name = format!("windwatcher_test_{}", uuid::Uuid::now_v7().simple());
+        let mut postgres = None;
+        let mut mysql = None;
+        let url = match provider {
+            "postgres" => {
+                let mut connection = sqlx::PgConnection::connect(&base_url).await.unwrap();
+                sqlx::raw_sql(sqlx::AssertSqlSafe(format!("CREATE DATABASE {name}")))
+                    .execute(&mut connection)
+                    .await
+                    .unwrap();
+                postgres = Some(connection);
+                base_url
+                    .parse::<sqlx::postgres::PgConnectOptions>()
+                    .unwrap()
+                    .database(&name)
+                    .to_url_lossy()
+                    .to_string()
+            }
+            "mysql" => {
+                let mut connection = sqlx::MySqlConnection::connect(&base_url).await.unwrap();
+                sqlx::raw_sql(sqlx::AssertSqlSafe(format!("CREATE DATABASE {name}")))
+                    .execute(&mut connection)
+                    .await
+                    .unwrap();
+                mysql = Some(connection);
+                base_url
+                    .parse::<sqlx::mysql::MySqlConnectOptions>()
+                    .unwrap()
+                    .database(&name)
+                    .to_url_lossy()
+                    .to_string()
+            }
+            _ => base_url,
+        };
+        let directory = TempDir::new().unwrap();
+        let path = complete_config(&directory, "warn");
+        let base = fs::read_to_string(&path).unwrap();
+        fs::write(&path, format!("{base}\n[storage]\nprovider = '{provider}'\n[storage.{provider}]\nurl = {url:?}\n{}", if provider == "mongodb" { format!("database = '{name}'") } else { String::new() })).unwrap();
+        command(&path)
+            .arg("doctor")
+            .assert()
+            .failure()
+            .stdout(predicate::str::contains("storage migrations: pending"));
+        command(&path)
+            .args(["migrate", "--storage"])
+            .assert()
+            .success();
+        command(&path)
+            .arg("doctor")
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("storage migrations: current"));
+        if let Some(mut connection) = postgres {
+            sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+                "DROP DATABASE {name} WITH (FORCE)"
+            )))
+            .execute(&mut connection)
+            .await
+            .unwrap();
+        }
+        if let Some(mut connection) = mysql {
+            sqlx::raw_sql(sqlx::AssertSqlSafe(format!("DROP DATABASE {name}")))
+                .execute(&mut connection)
+                .await
+                .unwrap();
+        }
+        // MongoDB's UUID-named database lives only in the disposable replica set;
+        // discard that service after the run, as for the adapter contract suite.
+    }
 }
 
 #[test]
@@ -109,6 +847,10 @@ fn mongodb_config_check_parses_urls_without_connecting_or_disclosing_them() {
     let base = fs::read_to_string(&path).unwrap();
     let secret = "primary_mongo_fake_password";
     for (url, valid) in [
+        (
+            format!("mongodb+srv://user:{secret}@does-not-exist.example.invalid/"),
+            true,
+        ),
         (
             format!("mongodb://user:{secret}@127.0.0.1:1/?replicaSet=rs0"),
             true,
@@ -182,7 +924,7 @@ async fn network_queue_migration_and_jobs_cli() {
             _ => base_url,
         };
         let directory = TempDir::new().unwrap();
-        let path = config(&directory);
+        let path = complete_config(&directory, "warn");
         let base = fs::read_to_string(&path).unwrap();
         fs::write(
             &path,
@@ -196,6 +938,20 @@ async fn network_queue_migration_and_jobs_cli() {
             ),
         )
         .unwrap();
+        command(&path)
+            .args(["migrate", "--storage"])
+            .assert()
+            .success();
+        let diagnosis = command(&path).arg("doctor").assert();
+        if provider == "redis" {
+            diagnosis
+                .success()
+                .stdout(predicate::str::contains("queue migrations: not applicable"));
+        } else {
+            diagnosis
+                .failure()
+                .stdout(predicate::str::contains("queue migrations: pending"));
+        }
         let initial = command(&path)
             .args(["migrate", "status", "--queue"])
             .assert()
@@ -231,6 +987,11 @@ async fn network_queue_migration_and_jobs_cli() {
             current.stdout(predicate::str::contains("Status: current"));
         }
         command(&path).args(["jobs", "list"]).assert().success();
+        command(&path)
+            .arg("doctor")
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("Doctor: healthy"));
         command(&path)
             .args(["jobs", "list", "--status", "failed"])
             .assert()
@@ -419,6 +1180,7 @@ fn message_config_defaults_toml_environment_and_unknown_fields() {
 fn migrations_are_explicit_and_user_provisioning_uses_current_schema() {
     let directory = TempDir::new().unwrap();
     let config = config(&directory);
+    fs::File::create(directory.path().join("windwatcher.db")).unwrap();
 
     command(&config)
         .args(["user", "create", "--username", "otavio", "--password-stdin"])
@@ -512,6 +1274,16 @@ fn worker_requires_queue_configuration_and_refuses_pending_schema() {
         format!("{}{}", fs::read_to_string(&config).unwrap(), queue_config),
     )
     .unwrap();
+    assert!(!directory.path().join("queue.db").exists());
+    command(&config)
+        .arg("worker")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "failed to connect to SQLite queue",
+        ));
+    assert!(!directory.path().join("queue.db").exists());
+    fs::File::create(directory.path().join("queue.db")).unwrap();
     command(&config)
         .arg("worker")
         .assert()
@@ -895,6 +1667,7 @@ fn config_check_validates_sqlite_options_without_creating_a_database() {
 fn password_argument_warning_precedes_schema_validation() {
     let directory = TempDir::new().unwrap();
     let config = config(&directory);
+    fs::File::create(directory.path().join("windwatcher.db")).unwrap();
     command(&config)
         .args([
             "user",

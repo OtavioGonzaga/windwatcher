@@ -22,6 +22,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Complete the operator CLI with `init`, redacted `config show`, `user disable`,
+  `user enable` and configuration-independent `version`.
+- Standalone `serve` runtime, also the default when no subcommand is supplied,
+  with configurable loopback listener and storage-schema preflight before bind.
+- Public unversioned liveness/readiness endpoints, independent of API quotas and
+  queue availability, with bounded primary-storage/schema readiness inspection.
+- Read-only `doctor` diagnostics for complete configuration, storage and optional
+  queue connectivity/schema, with independent checks and credential-safe output.
+- Coordinated HTTP, WebSocket and realtime-dispatch shutdown under one global
+  grace deadline, with 1001 shutdown closes and shared worker OS signal handling.
+
 - Runtime queue provider selection for SQLite, PostgreSQL, MySQL and Redis in the
   official binary, with common enqueue/worker policy and redacted connection URLs.
 - Redis migration commands report "migrations not applicable"; SQL queues retain
@@ -40,6 +51,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   silently reducing concurrency; graceful shutdown still drains active work.
 
 ### Changed
+
+- Normal runtime, inspection and operator connections never create missing SQLite
+  databases or data directories; only applying explicit migrations may create them.
+- Realtime admission during drain returns `503 realtime.shutting_down`.
 
 - Realtime publication is driven by library `DomainEvent` outcomes; the WebSocket
   wire contract is unchanged.

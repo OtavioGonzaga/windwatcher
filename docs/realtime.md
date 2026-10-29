@@ -47,6 +47,7 @@ No `connection.ready` application event is required.
 | Not a valid WebSocket upgrade | `426 realtime.upgrade_required` |
 | Peer quota exceeded | `429 rate_limit.exceeded` |
 | Internal failure | `500 internal.error` |
+| Server draining | `503 realtime.shutting_down` |
 
 Ticket-authenticated upgrade failures do not include a Bearer challenge. On ticket
 creation, only access-token authentication failures carry `WWW-Authenticate:
@@ -249,7 +250,7 @@ failed upgrade, normal exit or panic.
 | Close code | Meaning |
 | --- | --- |
 | `1000` | Normal close |
-| `1001` | Heartbeat timeout |
+| `1001` | Heartbeat timeout, or `server shutdown` during process drain |
 | `1003` | Unsupported client application data |
 | `1008` | Session expired, revoked or otherwise inactive |
 | `1011` | Internal runtime/storage failure |
@@ -292,8 +293,14 @@ Tickets, hub and fan-out are **in-memory and process-local**. Ticket issuance an
 upgrade must reach the same process, and only locally connected recipients see
 local notifications. Multiple processes require a future shared signaling design;
 there is no Redis, queue reuse, distributed quota or speculative fan-out adapter.
-This PR does not provide `serve`, production listener lifecycle, health/readiness
-or graceful process shutdown. Test listeners bind only temporary loopback ports.
+`windwatcher serve` owns the production listener and coordinates shutdown. On
+SIGINT/SIGTERM, realtime rejects new tickets/preparations with
+`503 realtime.shutting_down`, clears unused tickets and closes active/pending
+connections with `1001`, reason `server shutdown`. Connections remain tracked
+after leaving the event hub until their callbacks exit. Already admitted dispatch
+jobs may finish; new submissions are rejected. HTTP and realtime drain under the
+same `[server].shutdown_grace_period` deadline; remaining work may be cancelled
+at process exit. See [operations](operations.md).
 
 `RealtimeEvent` lives entirely in `windwatcher-server` and is not `DomainEvent`.
 The server maps committed library `DomainEvent` values through a server-side

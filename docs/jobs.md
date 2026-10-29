@@ -127,7 +127,15 @@ certification. Claims use short locking transactions and `SKIP LOCKED`; no handl
 runs inside a database transaction.
 
 Worker and jobs commands check SQL schema compatibility but never migrate. Queue
-operations receive explicit caller-supplied UTC time; distributed hosts should
+connections use existing-only SQLite files: missing persistence is not silently
+created by worker, jobs, doctor or migration status. Worker uses the shared
+SIGINT/SIGTERM source but retains its independent `[queue].shutdown_grace_period`,
+including lease renewal during active work and normal lease expiry after timeout.
+Serve never starts a worker, connects queue or includes queue in readiness.
+Doctor checks configured queue connectivity/schema independently of primary storage.
+See [operations](operations.md).
+
+Queue operations receive explicit caller-supplied UTC time; distributed hosts should
 maintain normal clock synchronization. All adapters use UTC microsecond precision:
 timestamps and durations are floored before comparison/addition, including for
 negative Unix timestamps. Enqueue returns the same normalized timestamps that
@@ -231,6 +239,10 @@ cargo test -p windwatcher --no-default-features --features queue-mysql --test my
 cargo test -p windwatcher --no-default-features --features queue-redis --test redis_queue -- --ignored
 cargo test -p windwatcher-server --test cli network_queue_migration_and_jobs_cli -- --ignored
 ```
+
+The server CLI test also checks doctor with SQL queues and Redis. Primary doctor
+composition (including MongoDB) is covered by the ignored
+`network_primary_doctor_composition` test; see [operations](operations.md#network-composition-tests).
 
 These commands fail if required URLs are absent. SQL tests require permission to
 create/drop uniquely named disposable databases; never use production/shared

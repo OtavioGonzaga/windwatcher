@@ -19,6 +19,7 @@ use crate::{cli::LogFormat, error::AppError, paths::ResolvedPaths};
 
 pub(crate) mod http;
 pub(crate) mod realtime;
+pub(crate) mod server;
 use http::RawHttp;
 use realtime::RawRealtime;
 
@@ -45,6 +46,7 @@ pub struct RawConfig {
     pub queue: Option<RawQueue>,
     pub auth: RawAuth,
     pub messages: RawMessages,
+    pub server: server::RawServer,
     pub http: RawHttp,
     pub realtime: RawRealtime,
     pub logging: RawLogging,
@@ -339,6 +341,39 @@ pub fn load(paths: &ResolvedPaths, explicit: Option<PathBuf>) -> Result<RawConfi
     Ok(raw)
 }
 
+pub(crate) fn show(
+    raw: &RawConfig,
+    filter: Option<&str>,
+    format: Option<LogFormat>,
+) -> Result<String, AppError> {
+    let mut safe = raw.clone();
+    let redact = |value: &mut Option<String>| {
+        if value.is_some() {
+            *value = Some("<redacted>".into());
+        }
+    };
+    redact(&mut safe.auth.jwt.secret);
+    if let Some(sqlite) = &mut safe.storage.sqlite {
+        redact(&mut sqlite.url);
+    }
+    redact(&mut safe.storage.postgres.url);
+    redact(&mut safe.storage.mysql.url);
+    redact(&mut safe.storage.mongodb.url);
+    if let Some(queue) = &mut safe.queue {
+        redact(&mut queue.postgres.url);
+        redact(&mut queue.mysql.url);
+        redact(&mut queue.redis.url);
+    }
+    if let Some(filter) = filter {
+        safe.logging.filter = filter.into();
+    }
+    if let Some(format) = format {
+        safe.logging.format = format;
+    }
+    toml::to_string_pretty(&safe)
+        .map_err(|_| AppError::Config("failed to display configuration".into()))
+}
+
 fn discover_config_file(path: &Path, explicit: bool) -> Result<Option<PathBuf>, AppError> {
     match fs::symlink_metadata(path) {
         Ok(metadata) if metadata.file_type().is_symlink() => match fs::metadata(path) {
@@ -583,17 +618,50 @@ pub fn resolve_jwt(raw: &RawConfig) -> Result<Hs256JwtAccessTokenCodec, AppError
     ))
 }
 
+pub(crate) struct ResolvedServeConfig {
+    pub server: server::ResolvedServerConfig,
+    pub storage: ResolvedStorageProvider,
+    pub registration: RegistrationPolicy,
+    pub session: SessionPolicy,
+    pub http: http::ResolvedHttpConfig,
+    pub realtime: realtime::ResolvedRealtimeConfig,
+    pub messages: MessagePolicy,
+    pub jwt: Hs256JwtAccessTokenCodec,
+}
+
+pub fn resolve_serve(
+    raw: &RawConfig,
+    paths: &ResolvedPaths,
+) -> Result<ResolvedServeConfig, AppError> {
+    Ok(ResolvedServeConfig {
+        server: raw.server.resolve()?,
+        storage: resolve_storage(raw, paths)?,
+        registration: resolve_registration(raw)?,
+        session: resolve_session(raw)?,
+        http: raw.http.resolve().map_err(AppError::Config)?,
+        realtime: raw.realtime.resolve().map_err(AppError::Config)?,
+        messages: resolve_messages(raw),
+        jwt: resolve_jwt(raw)?,
+    })
+}
+
 pub fn resolve_full(raw: &RawConfig, paths: &ResolvedPaths) -> Result<(), AppError> {
-    resolve_storage(raw, paths)?;
-    resolve_registration(raw)?;
-    resolve_session(raw)?;
-    raw.http.resolve().map_err(AppError::Config)?;
-    raw.realtime.resolve().map_err(AppError::Config)?;
+    resolve_serve(raw, paths)?;
     if raw.queue.is_some() {
         resolve_queue(raw, paths)?;
     }
-    let _messages = resolve_messages(raw);
-    let _jwt = resolve_jwt(raw)?;
+    Ok(())
+}
+
+/// Syntax-only asynchronous validation; never opens a database connection.
+pub async fn validate_full(raw: &RawConfig, paths: &ResolvedPaths) -> Result<(), AppError> {
+    resolve_full(raw, paths)?;
+    if let ResolvedStorageProvider::MongoDb(options) = resolve_storage(raw, paths)? {
+        options
+            .validate()
+            .await
+            .map_err(|error| AppError::Config(error.to_string()))?;
+    }
     Ok(())
 }
 
