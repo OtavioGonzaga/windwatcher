@@ -28,6 +28,7 @@ humantime = "2"
 rpassword = "7"
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"
+toml = "0.8"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time", "net", "signal"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 time = { version = "0.3", features = ["serde", "serde-well-known", "formatting", "parsing"] }

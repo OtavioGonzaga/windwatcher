@@ -8,25 +8,21 @@ Build the executable with the repository toolchain:
 cargo build -p windwatcher-server --bin windwatcher
 ```
 
-Use `target/debug/windwatcher` below, or install it on your PATH. Configure a
-stable JWT secret through [server configuration](server-configuration.md); keep
-the same secret across process restarts. For example, generate a local secret
-file with restrictive permissions and select its path in `[auth.jwt]`:
+Use `target/debug/windwatcher` below, or install it on your PATH. Initialize a
+minimal configuration and stable private JWT key:
 
 ```bash
-(umask 077; openssl rand -hex 32 > jwt.key)
+windwatcher init
 ```
 
-```toml
-[auth.jwt]
-secret_file = "jwt.key"
-```
-
-Place configuration in the mode-default location or pass `--config PATH` before
-the command. Then:
+The generated secret is kept across restarts. `--config PATH init` selects an
+explicit new configuration location. Existing files are never overwritten. See
+[server configuration](server-configuration.md) for alternative secret sources.
+Then:
 
 ```bash
 windwatcher config check
+windwatcher config show
 windwatcher migrate
 windwatcher user create --username alice
 windwatcher doctor

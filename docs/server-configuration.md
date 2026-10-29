@@ -18,6 +18,15 @@ file and requires it to exist; it does not change the selected mode's data path.
 does not load `.env` automatically. Relative explicit filesystem paths are relative
 to the process working directory.
 
+`windwatcher init` creates a minimal configuration and a 32-byte random JWT key
+in the selected configuration directory, without overwriting either file. The
+generated configuration references the absolute key path. `--config PATH init`
+selects an explicit new config file; `--system init` selects system paths.
+It never creates a database or applies migrations. Run `windwatcher migrate`
+separately. `config show` displays effective loaded values with sensitive URLs and
+direct secrets redacted without reading secret files or connecting dependencies;
+it does not perform semantic validation.
+
 Malformed values, including invalid duration syntax, invalidate every command.
 Semantic authentication failures such as a missing JWT secret or invalid session
 policy are resolved by `config check`, `serve` and `doctor`, so they do

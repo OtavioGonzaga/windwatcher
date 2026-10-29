@@ -138,13 +138,7 @@ pub async fn create_user(
     args: CreateUserArgs,
     argument_password: Option<SensitiveString>,
 ) -> Result<(), AppError> {
-    let status = storage
-        .migration_status()
-        .await
-        .map_err(AppError::MigrationStatus)?;
-    if !status.is_current() {
-        return Err(AppError::SchemaPending);
-    }
+    require_current_schema(storage).await?;
     let password = password(&args, argument_password)?;
     tracing::info!(username = %args.username, "user provisioning started");
     let hasher = Argon2idPasswordHasher;
@@ -163,6 +157,44 @@ pub async fn create_user(
         user.id()
     );
     tracing::info!(user_id = %user.id(), "user provisioning succeeded");
+    Ok(())
+}
+
+async fn require_current_schema(storage: &Storage) -> Result<(), AppError> {
+    let status = storage
+        .migration_status()
+        .await
+        .map_err(AppError::MigrationStatus)?;
+    if !status.is_current() {
+        return Err(AppError::SchemaPending);
+    }
+    Ok(())
+}
+
+pub async fn manage_user(
+    storage: &Storage,
+    id: windwatcher::UserId,
+    enable: bool,
+) -> Result<(), AppError> {
+    require_current_schema(storage).await?;
+    let now = OffsetDateTime::now_utc();
+    let result = if enable {
+        windwatcher::EnableUser::new(storage).execute(id, now).await
+    } else {
+        windwatcher::DisableUser::new(storage, storage)
+            .execute(id, now)
+            .await
+    };
+    let user = result.map_err(|error| match error {
+        windwatcher::ManageUserError::UserNotFound => AppError::UserNotFound(id),
+        other => AppError::UserManagement(other),
+    })?;
+    println!(
+        "{} user {:?} ({})",
+        if enable { "Enabled" } else { "Disabled" },
+        user.username().as_str(),
+        user.id()
+    );
     Ok(())
 }
 

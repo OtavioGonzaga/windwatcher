@@ -341,6 +341,39 @@ pub fn load(paths: &ResolvedPaths, explicit: Option<PathBuf>) -> Result<RawConfi
     Ok(raw)
 }
 
+pub(crate) fn show(
+    raw: &RawConfig,
+    filter: Option<&str>,
+    format: Option<LogFormat>,
+) -> Result<String, AppError> {
+    let mut safe = raw.clone();
+    let redact = |value: &mut Option<String>| {
+        if value.is_some() {
+            *value = Some("<redacted>".into());
+        }
+    };
+    redact(&mut safe.auth.jwt.secret);
+    if let Some(sqlite) = &mut safe.storage.sqlite {
+        redact(&mut sqlite.url);
+    }
+    redact(&mut safe.storage.postgres.url);
+    redact(&mut safe.storage.mysql.url);
+    redact(&mut safe.storage.mongodb.url);
+    if let Some(queue) = &mut safe.queue {
+        redact(&mut queue.postgres.url);
+        redact(&mut queue.mysql.url);
+        redact(&mut queue.redis.url);
+    }
+    if let Some(filter) = filter {
+        safe.logging.filter = filter.into();
+    }
+    if let Some(format) = format {
+        safe.logging.format = format;
+    }
+    toml::to_string_pretty(&safe)
+        .map_err(|_| AppError::Config("failed to display configuration".into()))
+}
+
 fn discover_config_file(path: &Path, explicit: bool) -> Result<Option<PathBuf>, AppError> {
     match fs::symlink_metadata(path) {
         Ok(metadata) if metadata.file_type().is_symlink() => match fs::metadata(path) {

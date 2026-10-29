@@ -24,6 +24,10 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// Initialize a minimal configuration and signing key.
+    Init,
+    /// Display the standalone server version.
+    Version,
     /// Run the standalone HTTP and realtime service (the default command).
     Serve,
     /// Diagnose configuration, storage and configured queue without changing them.
@@ -94,6 +98,10 @@ pub enum MigrateCommand {
 pub enum UserCommand {
     /// Provision a local user as a trusted operator.
     Create(CreateUserArgs),
+    /// Disable a user and revoke all sessions.
+    Disable { user_id: windwatcher::UserId },
+    /// Enable a user without restoring revoked sessions.
+    Enable { user_id: windwatcher::UserId },
 }
 
 #[derive(Args)]
@@ -171,6 +179,8 @@ impl std::fmt::Display for LogFormat {
 pub enum ConfigCommand {
     /// Fully validate server configuration without changing state.
     Check,
+    /// Display effective configuration with sensitive values redacted.
+    Show,
 }
 
 #[cfg(test)]

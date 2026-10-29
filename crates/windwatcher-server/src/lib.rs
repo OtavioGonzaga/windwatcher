@@ -6,6 +6,7 @@ mod config;
 mod connection;
 mod error;
 pub mod http;
+mod init;
 mod logging;
 mod password;
 mod paths;
@@ -40,6 +41,10 @@ pub async fn run_cli() {
 async fn run() -> Result<(), AppError> {
     let mut cli = Cli::parse();
     let mut command = cli.command.take().unwrap_or(Command::Serve);
+    if matches!(command, Command::Version) {
+        println!("windwatcher {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
     let argument_password = match &mut command {
         Command::User {
             command: cli::UserCommand::Create(args),
@@ -57,6 +62,9 @@ async fn run() -> Result<(), AppError> {
         RuntimeMode::User
     };
     let paths = ResolvedPaths::resolve(mode)?;
+    if matches!(command, Command::Init) {
+        return init::run(cli.config.unwrap_or(paths.config_file));
+    }
     let raw = config::load(&paths, cli.config).map_err(|error| {
         if matches!(command, Command::Doctor) {
             runtime::doctor::configuration_failure()
@@ -64,6 +72,18 @@ async fn run() -> Result<(), AppError> {
             error
         }
     })?;
+    if matches!(
+        command,
+        Command::Config {
+            command: cli::ConfigCommand::Show
+        }
+    ) {
+        print!(
+            "{}",
+            config::show(&raw, cli.log_filter.as_deref(), cli.log_format)?
+        );
+        return Ok(());
+    }
     logging::initialize(&raw.logging, cli.log_filter.as_deref(), cli.log_format).map_err(
         |error| {
             if matches!(command, Command::Doctor) {
@@ -75,8 +95,12 @@ async fn run() -> Result<(), AppError> {
     )?;
     tracing::info!(mode = ?mode, "configuration loaded");
     match command {
+        Command::Init | Command::Version => unreachable!("handled before configuration"),
         Command::Serve => runtime::serve::run(&raw, &paths).await,
         Command::Doctor => runtime::doctor::run(&raw, &paths).await,
+        Command::Config {
+            command: cli::ConfigCommand::Show,
+        } => unreachable!("handled before logging"),
         Command::Config {
             command: cli::ConfigCommand::Check,
         } => {
@@ -206,6 +230,18 @@ async fn run() -> Result<(), AppError> {
         } => {
             let storage = connect_storage(&raw, &paths, ConnectionPurpose::ExistingOnly).await?;
             commands::create_user(&storage, args, argument_password).await
+        }
+        Command::User {
+            command: cli::UserCommand::Disable { user_id },
+        } => {
+            let storage = connect_storage(&raw, &paths, ConnectionPurpose::ExistingOnly).await?;
+            commands::manage_user(&storage, user_id, false).await
+        }
+        Command::User {
+            command: cli::UserCommand::Enable { user_id },
+        } => {
+            let storage = connect_storage(&raw, &paths, ConnectionPurpose::ExistingOnly).await?;
+            commands::manage_user(&storage, user_id, true).await
         }
     }
 }

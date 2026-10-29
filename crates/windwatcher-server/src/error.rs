@@ -2,6 +2,16 @@ use std::{error::Error, path::PathBuf};
 
 #[derive(Debug, thiserror::Error)]
 pub enum AppError {
+    #[error("user {0} was not found")]
+    UserNotFound(windwatcher::UserId),
+    #[error("user management failed")]
+    UserManagement(#[source] windwatcher::ManageUserError),
+    #[error("initialization failed for {path}: {source}")]
+    Init {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
     #[error("installation is unhealthy")]
     DoctorUnhealthy,
     #[error("failed to bind server listener at {bind}")]

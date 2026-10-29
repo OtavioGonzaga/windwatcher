@@ -256,6 +256,224 @@ fn command(config: &Path) -> Command {
 }
 
 #[test]
+fn version_is_independent_of_configuration() {
+    let directory = TempDir::new().unwrap();
+    command(&directory.path().join("missing.toml"))
+        .arg("version")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(format!(
+            "windwatcher {}",
+            env!("CARGO_PKG_VERSION")
+        )))
+        .stderr(predicate::str::is_empty());
+    assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 0);
+}
+
+#[test]
+fn init_creates_private_configuration_without_persistence_or_overwrite() {
+    let directory = TempDir::new().unwrap();
+    let target = directory.path().join("new/config.toml");
+    let data = directory.path().join("data");
+    command(&target)
+        .env("XDG_DATA_HOME", &data)
+        .arg("init")
+        .assert()
+        .success();
+    let key = target.parent().unwrap().join("jwt.key");
+    let secret = fs::read(&key).unwrap();
+    assert_eq!(secret.len(), 32);
+    assert!(secret.iter().any(|b| *b != 0));
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(fs::metadata(&key).unwrap().permissions().mode() & 0o077, 0);
+    }
+    command(&target)
+        .args(["config", "check"])
+        .assert()
+        .success();
+    assert!(!data.exists());
+    let config_before = fs::read(&target).unwrap();
+    command(&target)
+        .arg("init")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("already exists"));
+    assert_eq!(fs::read(&target).unwrap(), config_before);
+    assert_eq!(fs::read(&key).unwrap(), secret);
+    fs::remove_file(&target).unwrap();
+    command(&target)
+        .arg("init")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("already exists"));
+    assert!(!target.exists());
+    assert_eq!(fs::read(&key).unwrap(), secret);
+}
+
+#[test]
+fn config_show_displays_effective_redacted_values_without_connecting_or_reading_secret() {
+    let directory = TempDir::new().unwrap();
+    let path = directory.path().join("show.toml");
+    fs::write(&path, "[auth.jwt]\nsecret = 'JWT_TOP_SECRET'\n[storage]\nprovider = 'postgres'\n[storage.postgres]\nurl = 'postgres://u:PG_TOP_SECRET@127.0.0.1:1/db'\n[storage.mysql]\nurl = 'mysql://u:MYSQL_TOP_SECRET@127.0.0.1:1/db'\n[storage.mongodb]\nurl = 'mongodb://u:MONGO_TOP_SECRET@127.0.0.1:1/'\n[queue]\nprovider = 'redis'\n[queue.redis]\nurl = 'redis://:REDIS_TOP_SECRET@127.0.0.1:1/'\n").unwrap();
+    let output = command(&path)
+        .env("WINDWATCHER__SERVER__BIND", "[::1]:1234")
+        .args([
+            "--log-filter",
+            "debug",
+            "--log-format",
+            "json",
+            "config",
+            "show",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    for secret in [
+        "JWT_TOP_SECRET",
+        "PG_TOP_SECRET",
+        "MYSQL_TOP_SECRET",
+        "MONGO_TOP_SECRET",
+        "REDIS_TOP_SECRET",
+    ] {
+        assert!(!text.contains(secret));
+        assert!(!stderr.contains(secret));
+    }
+    let parsed: toml::Value = toml::from_str(&text).unwrap();
+    assert_eq!(parsed["server"]["bind"].as_str(), Some("[::1]:1234"));
+    assert_eq!(parsed["server"]["readiness_timeout"].as_str(), Some("2s"));
+    assert_eq!(parsed["logging"]["filter"].as_str(), Some("debug"));
+    assert_eq!(parsed["logging"]["format"].as_str(), Some("json"));
+    assert_eq!(parsed["auth"]["jwt"]["secret"].as_str(), Some("<redacted>"));
+    command(&path)
+        .env(
+            "WINDWATCHER__AUTH__JWT__SECRET_FILE",
+            directory.path().join("missing-secret"),
+        )
+        .args(["config", "show"])
+        .assert()
+        .success();
+    assert!(!directory.path().join("windwatcher.db").exists());
+}
+
+#[tokio::test]
+async fn user_management_is_idempotent_and_disable_revokes_sessions() {
+    use windwatcher::{IdentityStore, RefreshTokenProvider, SessionStore};
+    let directory = TempDir::new().unwrap();
+    let path = config(&directory);
+    let id = windwatcher::UserId::new();
+    command(&path)
+        .args(["user", "disable", &id.to_string()])
+        .assert()
+        .failure();
+    assert!(!directory.path().join("windwatcher.db").exists());
+    fs::File::create(directory.path().join("windwatcher.db")).unwrap();
+    command(&path)
+        .args(["user", "disable", &id.to_string()])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("windwatcher migrate --storage"));
+    command(&path).arg("migrate").assert().success();
+    command(&path)
+        .args(["user", "disable", "not-a-uuid"])
+        .assert()
+        .failure();
+    command(&path)
+        .args(["user", "enable", &id.to_string()])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(format!("user {id} was not found")));
+    let output = command(&path)
+        .args(["user", "create", "--username", "alice", "--password-stdin"])
+        .write_stdin("test password")
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let output = String::from_utf8(output.stdout).unwrap();
+    let user_id: windwatcher::UserId = output
+        .split('(')
+        .nth(1)
+        .unwrap()
+        .trim()
+        .trim_end_matches(')')
+        .parse()
+        .unwrap();
+    let storage = windwatcher_server::Storage::connect(windwatcher::SqliteStorageOptions::new(
+        directory
+            .path()
+            .join("windwatcher.db")
+            .display()
+            .to_string(),
+    ))
+    .await
+    .unwrap();
+    let now = time::OffsetDateTime::now_utc();
+    let session = windwatcher::Session::new(
+        windwatcher::SessionId::new(),
+        user_id,
+        now,
+        now + time::Duration::hours(1),
+    )
+    .unwrap();
+    let provider = windwatcher::OsRefreshTokenProvider;
+    storage
+        .create_session(&session, &provider.hash(&provider.generate().unwrap()))
+        .await
+        .unwrap();
+    for _ in 0..2 {
+        command(&path)
+            .args(["user", "disable", &user_id.to_string()])
+            .assert()
+            .success();
+    }
+    assert!(
+        storage
+            .find_user(user_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .is_disabled()
+    );
+    assert!(
+        !storage
+            .find_session(session.id())
+            .await
+            .unwrap()
+            .unwrap()
+            .is_active(time::OffsetDateTime::now_utc())
+    );
+    for _ in 0..2 {
+        command(&path)
+            .args(["user", "enable", &user_id.to_string()])
+            .assert()
+            .success();
+    }
+    assert!(
+        !storage
+            .find_user(user_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .is_disabled()
+    );
+    assert!(
+        !storage
+            .find_session(session.id())
+            .await
+            .unwrap()
+            .unwrap()
+            .is_active(time::OffsetDateTime::now_utc())
+    );
+}
+
+#[test]
 fn server_configuration_overrides_and_validation_are_static() {
     let directory = TempDir::new().unwrap();
     let path = complete_config(&directory, "warn");

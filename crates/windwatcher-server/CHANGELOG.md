@@ -22,6 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Complete the operator CLI with `init`, redacted `config show`, `user disable`,
+  `user enable` and configuration-independent `version`.
 - Standalone `serve` runtime, also the default when no subcommand is supplied,
   with configurable loopback listener and storage-schema preflight before bind.
 - Public unversioned liveness/readiness endpoints, independent of API quotas and

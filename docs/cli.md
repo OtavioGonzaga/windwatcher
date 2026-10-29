@@ -3,18 +3,35 @@
 The `windwatcher` executable provides explicit operator actions:
 
 ```bash
+windwatcher init
+windwatcher
+windwatcher serve
+windwatcher doctor
 windwatcher migrate
 windwatcher migrate status
 windwatcher migrate --storage
 windwatcher migrate --queue
-windwatcher serve
-windwatcher doctor
 windwatcher worker
 windwatcher jobs list
 windwatcher jobs retry <job-id>
 windwatcher config check
+windwatcher config show
 windwatcher user create --username otavio
+windwatcher user disable <user-id>
+windwatcher user enable <user-id>
+windwatcher version
 ```
+
+`init` creates a minimal configuration and private signing key without
+overwriting existing files; it does not create persistence, migrate or provision
+users. Use `--config PATH` to select the new file. `version` is independent of
+configuration. `config show` displays loaded effective configuration with secret
+values and database/queue URLs redacted; it does not read secret-file contents,
+validate semantic rules or connect dependencies. Logging CLI overrides are shown.
+
+`user disable <user-id>` disables the user and revokes all existing sessions;
+retrying also retries revocation. `user enable <user-id>` does not restore revoked
+sessions. Both require existing storage and current schema, and are idempotent.
 
 No subcommand means `serve`; both forms respect the existing `--system`,
 `--config`, `--log-filter` and `--log-format` options before the command.

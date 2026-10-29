@@ -22,9 +22,11 @@ The packages are independently versioned.
 
 ## Operator commands
 
-Configure a stable JWT signing secret first; see [server configuration](docs/server-configuration.md).
+Initialize a configuration and stable JWT signing secret first; see
+[server configuration](docs/server-configuration.md).
 
 ```bash
+windwatcher init
 windwatcher migrate
 windwatcher user create --username alice
 windwatcher doctor
