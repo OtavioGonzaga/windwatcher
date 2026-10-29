@@ -7,7 +7,9 @@ use mongodb::{
 };
 
 use super::MigrationStatus;
+mod identity;
 mod migrations;
+mod transactions;
 #[cfg(test)]
 use mongodb::bson::{Binary, Bson, spec::BinarySubtype};
 

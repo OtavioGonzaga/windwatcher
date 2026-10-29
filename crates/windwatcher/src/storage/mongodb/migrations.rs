@@ -3,7 +3,7 @@ use mongodb::{
     Database, IndexModel,
     bson::{Document, doc},
     error::ErrorKind,
-    options::IndexOptions,
+    options::{Collation, IndexOptions},
 };
 use sha2::{Digest, Sha256};
 
@@ -95,14 +95,15 @@ fn index(keys: Document, name: &str, unique: bool, partial: Option<Document>) ->
 }
 
 async fn apply_indexes(database: &Database) -> Result<(), mongodb::error::Error> {
+    let mut username_index = index(doc! { "username": 1 }, "users_username_unique", true, None);
+    username_index
+        .options
+        .as_mut()
+        .expect("index options initialized")
+        .collation = Some(Collation::builder().locale("simple").build());
     database
         .collection::<Document>("users")
-        .create_index(index(
-            doc! { "username": 1 },
-            "users_username_unique",
-            true,
-            None,
-        ))
+        .create_index(username_index)
         .await?;
     database
         .collection::<Document>("sessions")
@@ -229,6 +230,11 @@ fn validate_history(records: &[Document]) -> Result<usize, MongoDbStorageError> 
         let stored_checksum = record.get_str("checksum").map_err(|_| {
             MongoDbStorageError::InvalidMigrationHistory(
                 "ledger checksum is missing or invalid".into(),
+            )
+        })?;
+        record.get_i64("applied_at").map_err(|_| {
+            MongoDbStorageError::InvalidMigrationHistory(
+                "ledger applied_at is missing or invalid".into(),
             )
         })?;
         let Some(expected) = MIGRATIONS
