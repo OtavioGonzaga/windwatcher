@@ -225,34 +225,16 @@ async fn access(
     actor: UserId,
     conversation: ConversationId,
 ) -> mongodb::error::Result<Option<Option<bool>>> {
-    let key = bin(conversation.as_uuid());
-    let Some(conv) = db
-        .collection::<Document>("conversations")
-        .find_one(doc! { "_id": &key })
-        .session(&mut *session)
+    Ok(conversations::access(db, session, conversation, actor)
         .await?
-    else {
-        return Ok(None);
-    };
-    let member = db
-        .collection::<Document>("conversation_members")
-        .find_one(doc! { "conversation_id": &key, "user_id": bin(actor.as_uuid()) })
-        .session(session)
-        .await?;
-    let Some(member) = member else {
-        return Ok(Some(None));
-    };
-    let kind = conv
-        .get_str("kind")
-        .map_err(|_| mongo_bad("invalid conversation kind"))?;
-    let role = member
-        .get_str("role")
-        .map_err(|_| mongo_bad("invalid membership role"))?;
-    match (kind, role) {
-        ("direct", "direct") | ("group", "member") => Ok(Some(Some(false))),
-        ("group", "owner" | "admin") => Ok(Some(Some(true))),
-        _ => Err(mongo_bad("incompatible membership role")),
-    }
+        .map(|(_, member)| {
+            member.map(|member| {
+                matches!(
+                    member.role(),
+                    crate::MembershipRole::Group(crate::GroupRole::Owner | crate::GroupRole::Admin)
+                )
+            })
+        }))
 }
 async fn unread(
     db: &mongodb::Database,
@@ -336,13 +318,7 @@ impl MessageStore for MongoDbStorage {
             if !conversations::touch(&db, session, conv).await? {
                 return Ok((0_u8, None));
             }
-            if db
-                .collection::<Document>("conversation_members")
-                .find_one(doc! { "conversation_id": &key, "user_id": bin(actor.as_uuid()) })
-                .session(&mut *session)
-                .await?
-                .is_none()
-            {
+            if !matches!(access(&db, session, actor, conv).await?, Some(Some(_))) {
                 return Ok((1, None));
             }
             if let Some(reply) = reply {
@@ -427,18 +403,53 @@ impl MessageStore for MongoDbStorage {
         let content = content.as_str().to_owned();
         let db = self.database();
         let result = transactions::run(&self.client, false, async move |session| {
-            let Some(record) = db.collection::<Document>("messages").find_one(doc! { "_id": bin(message_id.as_uuid()) }).session(&mut *session).await? else { return Ok((0_u8, None)); };
-            let conv = ConversationId::try_from(uuid(&record, "conversation_id").map_err(|_| mongo_bad("invalid message conversation"))?).map_err(|_| mongo_bad("invalid conversation id"))?;
-            if !conversations::touch(&db, session, conv).await? { return Ok((1, None)); }
-            let member = db.collection::<Document>("conversation_members").find_one(doc! { "conversation_id": bin(conv.as_uuid()), "user_id": bin(actor.as_uuid()) }).session(&mut *session).await?;
-            if member.is_none() { return Ok((1, None)); }
-            if uuid(&record, "sender_id").map_err(|_| mongo_bad("invalid message author"))? != actor.as_uuid() { return Ok((2, None)); }
-            if !matches!(record.get("deleted_at"), Some(Bson::Null)) { return Ok((3, None)); }
-            if record.get_str("content").ok() == Some(content.as_str()) { return Ok((4, Some(view(&db, session, record).await?))); }
-            db.collection::<Document>("messages").update_one(doc! { "_id": bin(message_id.as_uuid()), "deleted_at": Bson::Null }, doc! { "$set": { "content": &content, "edited_at": timestamp } }).session(&mut *session).await?;
-            let updated = db.collection::<Document>("messages").find_one(doc! { "_id": bin(message_id.as_uuid()) }).session(&mut *session).await?.ok_or_else(|| mongo_bad("updated message missing"))?;
+            let Some(record) = db
+                .collection::<Document>("messages")
+                .find_one(doc! { "_id": bin(message_id.as_uuid()) })
+                .session(&mut *session)
+                .await?
+            else {
+                return Ok((0_u8, None));
+            };
+            let conv = ConversationId::try_from(
+                uuid(&record, "conversation_id")
+                    .map_err(|_| mongo_bad("invalid message conversation"))?,
+            )
+            .map_err(|_| mongo_bad("invalid conversation id"))?;
+            if !conversations::touch(&db, session, conv).await? {
+                return Ok((1, None));
+            }
+            if !matches!(access(&db, session, actor, conv).await?, Some(Some(_))) {
+                return Ok((1, None));
+            }
+            if uuid(&record, "sender_id").map_err(|_| mongo_bad("invalid message author"))?
+                != actor.as_uuid()
+            {
+                return Ok((2, None));
+            }
+            if !matches!(record.get("deleted_at"), Some(Bson::Null)) {
+                return Ok((3, None));
+            }
+            if record.get_str("content").ok() == Some(content.as_str()) {
+                return Ok((4, Some(view(&db, session, record).await?)));
+            }
+            db.collection::<Document>("messages")
+                .update_one(
+                    doc! { "_id": bin(message_id.as_uuid()), "deleted_at": Bson::Null },
+                    doc! { "$set": { "content": &content, "edited_at": timestamp } },
+                )
+                .session(&mut *session)
+                .await?;
+            let updated = db
+                .collection::<Document>("messages")
+                .find_one(doc! { "_id": bin(message_id.as_uuid()) })
+                .session(&mut *session)
+                .await?
+                .ok_or_else(|| mongo_bad("updated message missing"))?;
             Ok((5, Some(view(&db, session, updated).await?)))
-        }).await.map_err(db_error)?;
+        })
+        .await
+        .map_err(db_error)?;
         match result {
             (0, _) => Ok(Edit::MessageNotFound),
             (1, _) => Ok(Edit::NotMember),
@@ -461,20 +472,51 @@ impl MessageStore for MongoDbStorage {
         let timestamp = micros(now)?;
         let db = self.database();
         let result = transactions::run(&self.client, false, async move |session| {
-            let Some(record) = db.collection::<Document>("messages").find_one(doc! { "_id": bin(message_id.as_uuid()) }).session(&mut *session).await? else { return Ok((0_u8, None)); };
-            let conv = ConversationId::try_from(uuid(&record, "conversation_id").map_err(|_| mongo_bad("invalid message conversation"))?).map_err(|_| mongo_bad("invalid conversation id"))?;
-            if !conversations::touch(&db, session, conv).await? { return Ok((1, None)); }
-            let member = db.collection::<Document>("conversation_members").find_one(doc! { "conversation_id": bin(conv.as_uuid()), "user_id": bin(actor.as_uuid()) }).session(&mut *session).await?;
-            let Some(member) = member else { return Ok((1, None)); };
-            let author = uuid(&record, "sender_id").map_err(|_| mongo_bad("invalid message author"))? == actor.as_uuid();
-            let role = member.get_str("role").map_err(|_| mongo_bad("invalid membership role"))?;
-            let moderator = matches!(role, "owner" | "admin");
-            if !author && !moderator { return Ok((2, None)); }
-            if !matches!(record.get("deleted_at"), Some(Bson::Null)) { return Ok((4, Some(view(&db, session, record).await?))); }
-            db.collection::<Document>("messages").update_one(doc! { "_id": bin(message_id.as_uuid()), "deleted_at": Bson::Null }, doc! { "$set": { "content": Bson::Null, "deleted_at": timestamp } }).session(&mut *session).await?;
-            let updated = db.collection::<Document>("messages").find_one(doc! { "_id": bin(message_id.as_uuid()) }).session(&mut *session).await?.ok_or_else(|| mongo_bad("deleted message missing"))?;
+            let Some(record) = db
+                .collection::<Document>("messages")
+                .find_one(doc! { "_id": bin(message_id.as_uuid()) })
+                .session(&mut *session)
+                .await?
+            else {
+                return Ok((0_u8, None));
+            };
+            let conv = ConversationId::try_from(
+                uuid(&record, "conversation_id")
+                    .map_err(|_| mongo_bad("invalid message conversation"))?,
+            )
+            .map_err(|_| mongo_bad("invalid conversation id"))?;
+            if !conversations::touch(&db, session, conv).await? {
+                return Ok((1, None));
+            }
+            let Some(Some(moderator)) = access(&db, session, actor, conv).await? else {
+                return Ok((1, None));
+            };
+            let author = uuid(&record, "sender_id")
+                .map_err(|_| mongo_bad("invalid message author"))?
+                == actor.as_uuid();
+            if !author && !moderator {
+                return Ok((2, None));
+            }
+            if !matches!(record.get("deleted_at"), Some(Bson::Null)) {
+                return Ok((4, Some(view(&db, session, record).await?)));
+            }
+            db.collection::<Document>("messages")
+                .update_one(
+                    doc! { "_id": bin(message_id.as_uuid()), "deleted_at": Bson::Null },
+                    doc! { "$set": { "content": Bson::Null, "deleted_at": timestamp } },
+                )
+                .session(&mut *session)
+                .await?;
+            let updated = db
+                .collection::<Document>("messages")
+                .find_one(doc! { "_id": bin(message_id.as_uuid()) })
+                .session(&mut *session)
+                .await?
+                .ok_or_else(|| mongo_bad("deleted message missing"))?;
             Ok((3, Some(view(&db, session, updated).await?)))
-        }).await.map_err(db_error)?;
+        })
+        .await
+        .map_err(db_error)?;
         match result {
             (0, _) => Ok(Delete::MessageNotFound),
             (1, _) => Ok(Delete::NotMember),

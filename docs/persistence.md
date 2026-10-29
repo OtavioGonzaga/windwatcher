@@ -64,6 +64,13 @@ Direct creation retries uniqueness races within a fresh transaction, including
 any idempotency reservation. Replay resolves the saved mapping first, so a
 physically deleted conversation/message returns `ResultUnavailable` until expiry.
 
+MongoDB membership authorization and projections validate conversation kind and
+role together: Direct permits only Direct, Group only Owner/Admin/Member.
+Incompatible persisted combinations fail as unexpected storage corruption, not
+business authorization failures. Enabled users require an explicit BSON Null
+`disabled_at`; missing, incorrectly typed or out-of-domain timestamps fail closed
+in discovery, new-session and new-membership authorization.
+
 MongoDB migrations embed ordered command files from `migrations/mongodb`; each
 step runs before its version is recorded, and checksums cover the command bytes.
 The ledger has a unique version index. The initial DDL steps can be re-run safely

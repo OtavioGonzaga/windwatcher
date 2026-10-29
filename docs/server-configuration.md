@@ -37,6 +37,10 @@ provider. Queue provider configuration remains separate; see [jobs](jobs.md).
 Select `mongodb` with `[storage.mongodb]`, which requires `url` and `database`.
 MongoDB primary storage requires a transaction-capable replica set; standalone
 servers and `mongos` are unsupported.
+`config check` parses MongoDB URL syntax without connecting to the database;
+topology is validated when opening storage. Safe topology and migration-ledger
+errors are included in operator diagnostics; driver connection details remain
+hidden so credentials cannot leak.
 
 The durable queue is optional. When `[queue]` is configured, SQLite is currently
 the supported provider and the default file is `queue.db`, separate from

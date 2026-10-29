@@ -3,7 +3,7 @@ use mongodb::{
     bson::{Binary, Bson, Document, doc, spec::BinarySubtype},
     error::ErrorKind,
 };
-use time::OffsetDateTime;
+use time::{Duration, OffsetDateTime};
 use uuid::Uuid;
 
 use super::{MongoDbStorage, conversations, messages, transactions};
@@ -87,23 +87,36 @@ struct Record {
     fingerprint: [u8; 32],
     candidate: Uuid,
     now: i64,
+    expires_at: i64,
 }
 impl Record {
     fn conversation(
         command: &ConversationCreateCommand,
         key: Option<&IdempotencyKey>,
-        now: i64,
-    ) -> Option<Self> {
-        key.map(|key| Self {
+        now: OffsetDateTime,
+    ) -> Result<Option<Self>> {
+        key.map(|key| Ok(Self {
             filter: doc! { "actor_id": bin(command.actor.as_uuid()), "operation": "create_conversation_v1", "scope_id": bin(command.actor.as_uuid()), "key_hash": hash(key.hash()) },
-            fingerprint: command.fingerprint(), candidate: command.conversation.id().as_uuid(), now,
-        })
+            fingerprint: command.fingerprint(), candidate: command.conversation.id().as_uuid(),
+            now: micros(now)?, expires_at: Self::expiry(now)?,
+        })).transpose()
     }
-    fn message(message: &Message, key: Option<&IdempotencyKey>, now: i64) -> Option<Self> {
-        key.map(|key| Self {
+    fn message(
+        message: &Message,
+        key: Option<&IdempotencyKey>,
+        now: OffsetDateTime,
+    ) -> Result<Option<Self>> {
+        key.map(|key| Ok(Self {
             filter: doc! { "actor_id": bin(message.sender_id().as_uuid()), "operation": "send_message_v1", "scope_id": bin(message.conversation_id().as_uuid()), "key_hash": hash(key.hash()) },
-            fingerprint: message_request_fingerprint(message), candidate: message.id().as_uuid(), now,
-        })
+            fingerprint: message_request_fingerprint(message), candidate: message.id().as_uuid(),
+            now: micros(now)?, expires_at: Self::expiry(now)?,
+        })).transpose()
+    }
+    fn expiry(now: OffsetDateTime) -> Result<i64> {
+        micros(
+            now.checked_add(Duration::days(1))
+                .ok_or_else(|| invalid("idempotency expiry overflow"))?,
+        )
     }
     async fn reserve(&self, db: &Database, session: &mut ClientSession) -> Result<Option<Uuid>> {
         let collection = db.collection::<Document>("idempotency_records");
@@ -142,7 +155,7 @@ impl Record {
                 .await?;
         }
         let mut record = self.filter.clone();
-        record.extend(doc! { "request_hash": hash(self.fingerprint), "resource_id": bin(self.candidate), "created_at": self.now, "expires_at": self.now.saturating_add(86_400_000_000_i64) });
+        record.extend(doc! { "request_hash": hash(self.fingerprint), "resource_id": bin(self.candidate), "created_at": self.now, "expires_at": self.expires_at });
         collection.insert_one(record).session(session).await?;
         Ok(None)
     }
@@ -169,9 +182,10 @@ async fn is_member(
     actor: UserId,
     conversation: ConversationId,
 ) -> Result<bool> {
-    Ok(db.collection::<Document>("conversation_members")
-        .find_one(doc! { "conversation_id": bin(conversation.as_uuid()), "user_id": bin(actor.as_uuid()) })
-        .session(session).await?.is_some())
+    Ok(conversations::access(db, session, conversation, actor)
+        .await?
+        .and_then(|(_, member)| member)
+        .is_some())
 }
 
 async fn create_in(
@@ -326,12 +340,11 @@ impl CreateCommandStore for MongoDbStorage {
         now: OffsetDateTime,
     ) -> std::result::Result<CreateResult<ConversationId>, Error> {
         let db = self.database();
-        let now = micros(now).map_err(command_error)?;
         // A uniqueness loser must restart the entire reservation/create with a
         // fresh snapshot. MongoDB does not always label 11000 as transient.
         for attempt in 0..4 {
             let (db, command) = (db.clone(), command.clone());
-            let record = Record::conversation(&command, key, now);
+            let record = Record::conversation(&command, key, now).map_err(command_error)?;
             let result = transactions::run(&self.client, false, async move |session| {
                 create_in(&db, session, &command, record.as_ref()).await
             })
@@ -353,11 +366,10 @@ impl CreateCommandStore for MongoDbStorage {
         now: OffsetDateTime,
     ) -> std::result::Result<CreateResult<MessageView>, Error> {
         let db = self.database();
-        let now = micros(now).map_err(command_error)?;
         let document = messages::write_message(message).map_err(Error::Message)?;
         for attempt in 0..4 {
             let (db, message, document) = (db.clone(), message.clone(), document.clone());
-            let record = Record::message(&message, key, now);
+            let record = Record::message(&message, key, now).map_err(command_error)?;
             let result = transactions::run(&self.client, false, async move |session| {
                 send_in(&db, session, &message, &document, record.as_ref()).await
             })

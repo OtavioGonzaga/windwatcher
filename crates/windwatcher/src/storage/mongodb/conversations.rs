@@ -12,7 +12,7 @@ use crate::{
     LeaveStoreOutcome, MembershipRole, MessageId, StartDirectStoreOutcome, UserId,
 };
 
-use super::{MongoDbStorage, transactions};
+use super::{MongoDbStorage, identity, transactions};
 
 #[derive(Debug)]
 struct Invalid(&'static str);
@@ -117,6 +117,7 @@ fn role(value: &str) -> Result<MembershipRole, ConversationStoreError> {
 }
 pub(super) fn read_member(
     document: &Document,
+    kind: ConversationKind,
 ) -> Result<ConversationMember, ConversationStoreError> {
     let conversation = ConversationId::try_from(uuid(document, "conversation_id")?)
         .map_err(|_| bad("invalid conversation ID"))?;
@@ -126,6 +127,7 @@ pub(super) fn read_member(
             .get_str("role")
             .map_err(|_| bad("persisted membership role is invalid"))?,
     )?;
+    validate_membership_role(kind, role)?;
     let marker = match document.get("last_read_message_id") {
         None | Some(Bson::Null) => None,
         Some(Bson::Binary(value))
@@ -147,6 +149,50 @@ pub(super) fn read_member(
         date(document, "joined_at")?,
         marker,
     ))
+}
+fn validate_membership_role(
+    kind: ConversationKind,
+    role: MembershipRole,
+) -> Result<(), ConversationStoreError> {
+    match (kind, role) {
+        (ConversationKind::Direct, MembershipRole::Direct)
+        | (ConversationKind::Group, MembershipRole::Group(_)) => Ok(()),
+        _ => Err(bad("incompatible persisted membership role")),
+    }
+}
+
+// Read authorization in the caller's snapshot. Writers must touch first. All
+// consumers share the same kind/role validation, including business no-op paths.
+pub(super) async fn access(
+    db: &mongodb::Database,
+    session: &mut mongodb::ClientSession,
+    conversation: ConversationId,
+    actor: UserId,
+) -> mongodb::error::Result<Option<(ConversationKind, Option<ConversationMember>)>> {
+    let Some(document) = db
+        .collection::<Document>("conversations")
+        .find_one(doc! { "_id": id(conversation.as_uuid()) })
+        .session(&mut *session)
+        .await?
+    else {
+        return Ok(None);
+    };
+    let kind = read_conversation(&document)
+        .map_err(|_| mongodb::error::Error::custom("invalid conversation"))?
+        .kind();
+    let member = db
+        .collection::<Document>("conversation_members")
+        .find_one(
+            doc! { "conversation_id": id(conversation.as_uuid()), "user_id": id(actor.as_uuid()) },
+        )
+        .session(session)
+        .await?;
+    let member = member
+        .as_ref()
+        .map(|document| read_member(document, kind))
+        .transpose()
+        .map_err(|_| mongodb::error::Error::custom("invalid membership"))?;
+    Ok(Some((kind, member)))
 }
 pub(super) fn direct_key(a: UserId, b: UserId) -> Binary {
     let (mut left, mut right) = (*a.as_uuid().as_bytes(), *b.as_uuid().as_bytes());
@@ -196,12 +242,21 @@ pub(super) async fn enabled(
     let result = db
         .collection::<Document>("users")
         .update_one(
-            doc! { "_id": &key, "disabled_at": Bson::Null },
+            doc! { "_id": &key },
             doc! { "$inc": { "_ww_revision": 1_i64 } },
         )
-        .session(session)
+        .session(&mut *session)
         .await?;
-    Ok(result.matched_count == 1)
+    if result.matched_count == 0 {
+        return Ok(false);
+    }
+    let user = db
+        .collection::<Document>("users")
+        .find_one(doc! { "_id": &key })
+        .session(session)
+        .await?
+        .ok_or_else(|| mongodb::error::Error::custom("user disappeared"))?;
+    identity::is_enabled(&user).map_err(mongodb::error::Error::custom)
 }
 // All membership/role and message mutations serialize on this private write.
 // A snapshot read alone cannot protect authorization against concurrent changes.
@@ -229,17 +284,14 @@ async fn auth_role(
     actor: UserId,
     owner_only: bool,
 ) -> Result<bool, mongodb::error::Error> {
-    let filter = if owner_only {
-        doc! { "conversation_id": id(conversation.as_uuid()), "user_id": id(actor.as_uuid()), "role": "owner" }
-    } else {
-        doc! { "conversation_id": id(conversation.as_uuid()), "user_id": id(actor.as_uuid()), "role": { "$in": ["owner", "admin"] } }
-    };
-    Ok(db
-        .collection::<Document>("conversation_members")
-        .find_one(filter)
-        .session(session)
+    let member = access(db, session, conversation, actor)
         .await?
-        .is_some())
+        .and_then(|(_, member)| member);
+    Ok(member.is_some_and(|member| match member.role() {
+        MembershipRole::Group(GroupRole::Owner) => true,
+        MembershipRole::Group(GroupRole::Admin) => !owner_only,
+        _ => false,
+    }))
 }
 
 pub(super) async fn direct(
@@ -256,6 +308,10 @@ pub(super) async fn direct(
         .session(&mut *session)
         .await?
     {
+        let persisted = read_conversation(&existing)
+            .map_err(|_| mongodb::error::Error::custom("invalid direct conversation"))?;
+        access(db, session, persisted.id(), first).await?;
+        access(db, session, persisted.id(), second).await?;
         return Ok((existing, false));
     }
     let mut users = vec![first, second];
@@ -297,22 +353,37 @@ impl ConversationStore for MongoDbStorage {
         &self,
         conversation_id: ConversationId,
     ) -> Result<Vec<UserId>, ConversationStoreError> {
-        use futures_util::TryStreamExt;
         let db = self.database();
         let key = id(conversation_id.as_uuid());
-        let docs: Vec<Document> = db
-            .collection("conversation_members")
-            .find(doc! { "conversation_id": key })
-            .await
-            .map_err(db_error)?
-            .try_collect()
-            .await
-            .map_err(db_error)?;
-        docs.iter()
-            .map(|member| {
-                UserId::try_from(uuid(member, "user_id")?).map_err(|_| bad("invalid user ID"))
-            })
-            .collect()
+        transactions::run(&self.client, true, async move |session| {
+            let Some(conversation) = db
+                .collection::<Document>("conversations")
+                .find_one(doc! { "_id": &key })
+                .session(&mut *session)
+                .await?
+            else {
+                return Ok(Vec::new());
+            };
+            let kind = read_conversation(&conversation)
+                .map_err(|_| mongodb::error::Error::custom("invalid conversation"))?
+                .kind();
+            let mut cursor = db
+                .collection::<Document>("conversation_members")
+                .find(doc! { "conversation_id": &key })
+                .session(&mut *session)
+                .await?;
+            let mut users = Vec::new();
+            while let Some(document) = cursor.next(&mut *session).await.transpose()? {
+                users.push(
+                    read_member(&document, kind)
+                        .map_err(|_| mongodb::error::Error::custom("invalid membership"))?
+                        .user_id(),
+                );
+            }
+            Ok(users)
+        })
+        .await
+        .map_err(db_error)
     }
     async fn get_or_create_direct(
         &self,
@@ -436,36 +507,12 @@ impl ConversationStore for MongoDbStorage {
         user: UserId,
     ) -> Result<Option<ConversationMember>, ConversationStoreError> {
         let db = self.database();
-        let key = id(conversation.as_uuid());
-        let user_key = id(user.as_uuid());
         let result = transactions::run(&self.client, true, async move |session| {
-            let conversation = db
-                .collection::<Document>("conversations")
-                .find_one(doc! { "_id": &key })
-                .session(&mut *session)
-                .await?;
-            let member = db
-                .collection::<Document>("conversation_members")
-                .find_one(doc! { "conversation_id": &key, "user_id": &user_key })
-                .session(session)
-                .await?;
-            Ok((conversation, member))
+            access(&db, session, conversation, user).await
         })
         .await
         .map_err(db_error)?;
-        let Some((Some(conversation), Some(member))) = Some(result) else {
-            return Ok(None);
-        };
-        let kind = conversation
-            .get_str("kind")
-            .map_err(|_| bad("invalid persisted conversation kind"))?;
-        let member = read_member(&member)?;
-        match (kind, member.role()) {
-            ("direct", MembershipRole::Direct) | ("group", MembershipRole::Group(_)) => {
-                Ok(Some(member))
-            }
-            _ => Err(bad("incompatible persisted membership role")),
-        }
+        Ok(result.and_then(|(_, member)| member))
     }
     async fn add_group_member(
         &self,
@@ -484,12 +531,9 @@ impl ConversationStore for MongoDbStorage {
                 return Ok(0_u8);
             }
             let key = id(conversation.as_uuid());
-            let target = id(member.as_uuid());
-            if db
-                .collection::<Document>("conversation_members")
-                .find_one(doc! { "conversation_id": &key, "user_id": &target })
-                .session(&mut *session)
+            if access(&db, session, conversation, member)
                 .await?
+                .and_then(|(_, member)| member)
                 .is_some()
             {
                 return Ok(1);
@@ -541,6 +585,7 @@ impl ConversationStore for MongoDbStorage {
         let db = self.database();
         let changed = transactions::run(&self.client, false, async move |session| {
             if !touch(&db, session, conversation).await? || !auth_role(&db, session, conversation, actor, false).await? { return Ok(0_u8); }
+            access(&db, session, conversation, member).await?;
             let result = db.collection::<Document>("conversation_members").delete_one(doc! { "conversation_id": id(conversation.as_uuid()), "user_id": id(member.as_uuid()), "role": { "$in": ["admin", "member"] } }).session(&mut *session).await?;
             if result.deleted_count > 0 { db.collection::<Document>("conversations").update_one(doc! { "_id": id(conversation.as_uuid()) }, doc! { "$set": { "updated_at": timestamp } }).session(session).await?; }
             Ok(if result.deleted_count > 0 { 1 } else { 2 })
@@ -572,6 +617,7 @@ impl ConversationStore for MongoDbStorage {
             let db = db_for_transaction.clone();
             let value = value.clone();
             if !touch(&db, session, conversation).await? || !auth_role(&db, session, conversation, actor, false).await? { return Ok(0_u8); }
+            access(&db, session, conversation, member).await?;
             let filter = doc! { "conversation_id": id(conversation.as_uuid()), "user_id": id(member.as_uuid()), "role": { "$in": ["admin", "member"] } };
             let current = db.collection::<Document>("conversation_members").find_one(filter.clone()).session(&mut *session).await?;
             if current.as_ref().and_then(|doc| doc.get_str("role").ok()) == Some(value.as_str()) { return Ok(2); }
@@ -597,6 +643,7 @@ impl ConversationStore for MongoDbStorage {
         let db = self.database();
         let changed = transactions::run(&self.client, false, async move |session| {
             if !touch(&db, session, conversation).await? || !auth_role(&db, session, conversation, actor, true).await? { return Ok(0_u8); }
+            access(&db, session, conversation, target).await?;
             if actor == target { return Ok(2); }
             let target_filter = doc! { "conversation_id": id(conversation.as_uuid()), "user_id": id(target.as_uuid()), "role": { "$in": ["admin", "member"] } };
             if db.collection::<Document>("conversation_members").find_one(target_filter.clone()).session(&mut *session).await?.is_none() { return Ok(2); }
@@ -624,6 +671,7 @@ impl ConversationStore for MongoDbStorage {
             if !touch(&db, session, conversation).await? {
                 return Ok(0_u8);
             }
+            access(&db, session, conversation, actor).await?;
             let key = id(conversation.as_uuid());
             let conv = db
                 .collection::<Document>("conversations")

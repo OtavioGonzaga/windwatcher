@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Reject idempotency expiry outside the portable datetime domain in MongoDB,
+  and align SQLite replay validation with the same keyed-command boundary.
+- Fail closed on incompatible MongoDB conversation/member roles and malformed
+  persisted user disabled timestamps across authorization and projections.
+
 - Serialize MongoDB message authorization with membership/role changes, converge
   concurrent Direct commands, and preserve replay outcomes after resource deletion.
 - Execute MongoDB migrations as checksummed forward steps with a unique version

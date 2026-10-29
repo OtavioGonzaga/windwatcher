@@ -85,6 +85,10 @@ fn optional_timestamp(
     }
 }
 
+pub(super) fn is_enabled(document: &Document) -> Result<bool, &'static str> {
+    optional_timestamp(document, "disabled_at").map(|disabled_at| disabled_at.is_none())
+}
+
 fn micros(value: OffsetDateTime) -> Result<i64, &'static str> {
     i64::try_from(value.unix_timestamp_nanos().div_euclid(1_000))
         .map_err(|_| "timestamp out of range")
@@ -310,10 +314,9 @@ impl SessionStore for MongoDbStorage {
                 .find_one(doc! { "_id": &user_id })
                 .session(&mut *session_ctx)
                 .await?;
-            match user.as_ref().and_then(|user| user.get("disabled_at")) {
-                None | Some(Bson::Null) => (),
-                Some(Bson::Int64(_)) => return Ok(1_u8),
-                Some(_) => return Ok(3_u8),
+            let user = user.ok_or_else(|| mongodb::error::Error::custom("user disappeared"))?;
+            if !is_enabled(&user).map_err(mongodb::error::Error::custom)? {
+                return Ok(1_u8);
             }
             database
                 .collection::<Document>("sessions")
@@ -326,9 +329,6 @@ impl SessionStore for MongoDbStorage {
         match outcome {
             Ok(0) => Err(SessionStoreError::OwnerNotFound),
             Ok(1) => Err(SessionStoreError::OwnerDisabled),
-            Ok(3) => Err(session_corrupt(
-                "persisted disabled timestamp has invalid BSON type",
-            )),
             Ok(_) => Ok(()),
             Err(error)
                 if duplicate_for(&error, "_id_")

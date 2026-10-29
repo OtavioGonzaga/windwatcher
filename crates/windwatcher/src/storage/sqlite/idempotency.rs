@@ -36,7 +36,16 @@ struct Record {
 }
 
 impl Record {
+    fn expiry(&self) -> Result<OffsetDateTime, Error> {
+        self.now
+            .checked_add(Duration::days(1))
+            .ok_or_else(|| corrupt("idempotency expiry overflow"))
+    }
+
     async fn lookup(&self, connection: &mut SqliteConnection) -> Result<Option<Vec<u8>>, Error> {
+        // Validate the command's retention interval before replay, matching the
+        // network adapters even at the boundary of the portable datetime domain.
+        self.expiry()?;
         let now = to_micros(self.now).map_err(corrupt)?;
         sqlx::query("DELETE FROM idempotency_records WHERE expires_at <= ?")
             .bind(now)
@@ -60,10 +69,7 @@ impl Record {
         connection: &mut SqliteConnection,
         resource: Vec<u8>,
     ) -> Result<(), Error> {
-        let expires = self
-            .now
-            .checked_add(Duration::days(1))
-            .ok_or_else(|| corrupt("idempotency expiry overflow"))?;
+        let expires = self.expiry()?;
         sqlx::query("INSERT INTO idempotency_records (actor_id, operation, scope_id, key_hash, request_hash, resource_id, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
             .bind(id_bytes(self.actor)).bind(self.operation).bind(&self.scope).bind(self.key_hash.as_slice()).bind(self.request_hash.as_slice()).bind(resource)
             .bind(to_micros(self.now).map_err(corrupt)?).bind(to_micros(expires).map_err(corrupt)?)

@@ -102,6 +102,39 @@ fn network_storage_config_selection_and_safe_errors() {
     }
 }
 
+#[test]
+fn mongodb_config_check_parses_urls_without_connecting_or_disclosing_them() {
+    let directory = TempDir::new().unwrap();
+    let path = complete_config(&directory, "warn");
+    let base = fs::read_to_string(&path).unwrap();
+    let secret = "primary_mongo_fake_password";
+    for (url, valid) in [
+        (
+            format!("mongodb://user:{secret}@127.0.0.1:1/?replicaSet=rs0"),
+            true,
+        ),
+        (format!("https://user:{secret}@localhost"), false),
+        (format!("mongodb://user:{secret}@localhost:invalid"), false),
+    ] {
+        fs::write(&path, format!("{base}\n[storage]\nprovider = 'mongodb'\n[storage.mongodb]\nurl = '{url}'\ndatabase = 'windwatcher'\n")).unwrap();
+        let result = command(&path).args(["config", "check"]).assert();
+        if valid {
+            result
+                .success()
+                .stdout(predicate::str::contains("Storage: MongoDB"))
+                .stdout(predicate::str::contains(secret).not())
+                .stderr(predicate::str::contains(secret).not());
+        } else {
+            result
+                .failure()
+                .stderr(predicate::str::contains("invalid MongoDB URL"))
+                .stdout(predicate::str::contains(secret).not())
+                .stderr(predicate::str::contains(secret).not());
+        }
+    }
+    assert!(!directory.path().join("windwatcher.db").exists());
+}
+
 #[tokio::test]
 #[ignore = "requires disposable PostgreSQL, MySQL and Redis; set WINDWATCHER_TEST_*_URL"]
 async fn network_queue_migration_and_jobs_cli() {

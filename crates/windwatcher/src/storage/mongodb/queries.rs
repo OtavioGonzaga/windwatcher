@@ -4,9 +4,9 @@ use mongodb::{
 };
 use time::OffsetDateTime;
 
-use super::{MongoDbStorage, conversations, messages, transactions};
+use super::{MongoDbStorage, conversations, identity, messages, transactions};
 use crate::{
-    ConversationBoundary, ConversationId, ConversationMemberSummary,
+    ConversationBoundary, ConversationId, ConversationKind, ConversationMemberSummary,
     ConversationQueryOutcome as Outcome, ConversationSummary, MemberBoundary, MessagingQueryStore,
     PageLimit, QuerySlice, QueryStoreError, UserId, UserSummary, Username,
 };
@@ -76,8 +76,12 @@ fn first<'a>(document: &'a Document, field: &str) -> Result<Option<&'a Document>
         })
         .transpose()
 }
-fn member_summary(document: &Document) -> Result<ConversationMemberSummary> {
-    let member = conversations::read_member(document).map_err(|_| invalid("invalid membership"))?;
+fn member_summary(
+    document: &Document,
+    kind: ConversationKind,
+) -> Result<ConversationMemberSummary> {
+    let member =
+        conversations::read_member(document, kind).map_err(|_| invalid("invalid membership"))?;
     let user = user(first(document, "user")?.ok_or_else(|| invalid("member user missing"))?)?;
     if user.id != member.user_id() {
         return Err(invalid("incompatible member user"));
@@ -94,27 +98,14 @@ async fn authorized(
     session: &mut mongodb::ClientSession,
     actor: UserId,
     conversation: ConversationId,
-) -> Result<Outcome<()>> {
-    let key = bin(conversation.as_uuid());
-    if db
-        .collection::<Document>("conversations")
-        .find_one(doc! { "_id": &key })
-        .session(&mut *session)
-        .await?
-        .is_none()
-    {
-        return Ok(Outcome::ConversationNotFound);
-    }
-    if db
-        .collection::<Document>("conversation_members")
-        .find_one(doc! { "conversation_id": &key, "user_id": bin(actor.as_uuid()) })
-        .session(session)
-        .await?
-        .is_none()
-    {
-        return Ok(Outcome::NotMember);
-    }
-    Ok(Outcome::Found(()))
+) -> Result<Outcome<ConversationKind>> {
+    Ok(
+        match conversations::access(db, session, conversation, actor).await? {
+            None => Outcome::ConversationNotFound,
+            Some((_, None)) => Outcome::NotMember,
+            Some((kind, Some(_))) => Outcome::Found(kind),
+        },
+    )
 }
 
 fn user_lookup(local_field: &str, output: &str) -> Document {
@@ -202,8 +193,8 @@ async fn summaries(
         .map(|record| {
             let conversation = conversations::read_conversation(embedded(&record, "conversation")?)
                 .map_err(|_| invalid("invalid conversation"))?;
-            let membership =
-                conversations::read_member(&record).map_err(|_| invalid("invalid membership"))?;
+            let membership = conversations::read_member(&record, conversation.kind())
+                .map_err(|_| invalid("invalid membership"))?;
             let last_message = if first(&record, "last")?.is_some() {
                 Some(
                     last_messages
@@ -215,11 +206,19 @@ async fn summaries(
             };
             let title = match conversation.title() {
                 Some(title) => title.as_str().to_owned(),
-                None => user(
-                    first(&record, "peer_user")?.ok_or_else(|| invalid("direct peer missing"))?,
-                )?
-                .username
-                .to_string(),
+                None => {
+                    conversations::read_member(
+                        first(&record, "peer")?.ok_or_else(|| invalid("direct peer missing"))?,
+                        conversation.kind(),
+                    )
+                    .map_err(|_| invalid("invalid direct peer membership"))?;
+                    user(
+                        first(&record, "peer_user")?
+                            .ok_or_else(|| invalid("direct peer missing"))?,
+                    )?
+                    .username
+                    .to_string()
+                }
             };
             let unread_count = first(&record, "unread")?
                 .map(|count| {
@@ -258,32 +257,35 @@ impl MessagingQueryStore for MongoDbStorage {
     ) -> std::result::Result<Outcome<Option<ConversationMemberSummary>>, QueryStoreError> {
         let db = self.database();
         transactions::run(&self.client, true, async move |session| {
-            match authorized(&db, session, actor, conversation).await? {
+            let kind = match authorized(&db, session, actor, conversation).await? {
                 Outcome::ConversationNotFound => return Ok(Outcome::ConversationNotFound),
                 Outcome::NotMember => return Ok(Outcome::NotMember),
-                Outcome::Found(()) => (),
-            }
+                Outcome::Found(kind) => kind,
+            };
             let mut cursor = db.collection::<Document>("conversation_members").aggregate(vec![
                 doc! { "$match": { "conversation_id": bin(conversation.as_uuid()), "user_id": bin(target.as_uuid()) } },
                 user_lookup("user_id", "user"),
             ]).session(&mut *session).await?;
-            Ok(Outcome::Found(cursor.next(&mut *session).await.transpose()?.as_ref().map(member_summary).transpose()?))
+            Ok(Outcome::Found(cursor.next(&mut *session).await.transpose()?.as_ref().map(|document| member_summary(document, kind)).transpose()?))
         }).await.map_err(db_error)
     }
     async fn find_users(
         &self,
         name: &Username,
     ) -> std::result::Result<Vec<UserSummary>, QueryStoreError> {
-        self.database()
+        let document = self
+            .database()
             .collection::<Document>("users")
-            .find_one(doc! { "username": name.as_str(), "disabled_at": Bson::Null })
+            .find_one(doc! { "username": name.as_str() })
             .await
-            .map_err(db_error)?
-            .as_ref()
-            .map(user)
-            .transpose()
-            .map(|user| user.into_iter().collect())
-            .map_err(db_error)
+            .map_err(db_error)?;
+        let Some(document) = document else {
+            return Ok(Vec::new());
+        };
+        if !identity::is_enabled(&document).map_err(|message| db_error(invalid(message)))? {
+            return Ok(Vec::new());
+        }
+        Ok(vec![user(&document).map_err(db_error)?])
     }
     async fn list_conversations(
         &self,
@@ -320,7 +322,7 @@ impl MessagingQueryStore for MongoDbStorage {
             match authorized(&db, session, actor, conversation).await? {
                 Outcome::ConversationNotFound => return Ok(Outcome::ConversationNotFound),
                 Outcome::NotMember => return Ok(Outcome::NotMember),
-                Outcome::Found(()) => (),
+                Outcome::Found(_) => (),
             }
             Ok(Outcome::Found(
                 summaries(
@@ -356,11 +358,11 @@ impl MessagingQueryStore for MongoDbStorage {
             );
         }
         transactions::run(&self.client, true, async move |session| {
-            match authorized(&db, session, actor, conversation).await? {
+            let kind = match authorized(&db, session, actor, conversation).await? {
                 Outcome::ConversationNotFound => return Ok(Outcome::ConversationNotFound),
                 Outcome::NotMember => return Ok(Outcome::NotMember),
-                Outcome::Found(()) => (),
-            }
+                Outcome::Found(kind) => kind,
+            };
             let mut cursor = db
                 .collection::<Document>("conversation_members")
                 .aggregate(vec![
@@ -373,7 +375,7 @@ impl MessagingQueryStore for MongoDbStorage {
                 .await?;
             let mut items = Vec::new();
             while let Some(record) = cursor.next(&mut *session).await.transpose()? {
-                items.push(member_summary(&record)?);
+                items.push(member_summary(&record, kind)?);
             }
             let has_more = items.len() > limit.get();
             items.truncate(limit.get());
