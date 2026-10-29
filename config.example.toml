@@ -1,6 +1,6 @@
 # Windwatcher configuration. Precedence: defaults < TOML < WINDWATCHER__... < CLI.
 
-# Primary persistence provider: sqlite, postgres, or mysql. This is independent
+# Primary persistence provider: sqlite, postgres, mysql, or mongodb. This is independent
 # from the optional queue.provider below.
 [storage]
 provider = "sqlite"
@@ -8,6 +8,7 @@ provider = "sqlite"
 [storage.sqlite]
 # Omit url for the mode-specific default database path.
 # url = "/var/lib/windwatcher/windwatcher.db"
+# Only applying migrations may create missing SQLite persistence.
 create_if_missing = true
 max_connections = 8
 busy_timeout = "5s"
@@ -81,6 +82,13 @@ secret_file = "/etc/windwatcher/jwt.key"
 [messages]
 # Inclusive UTF-8 byte limit for new sends/edits; 131072 bytes = 128 KiB.
 max_content_bytes = 131072
+
+[server]
+# Loopback is safe by default; explicitly use 0.0.0.0:8080 for container networking.
+bind = "127.0.0.1:8080"
+# One total HTTP + realtime drain budget.
+shutdown_grace_period = "30s"
+readiness_timeout = "2s"
 
 [http.cors]
 # Empty denies cross-origin browser access; ["*"] explicitly allows any origin.

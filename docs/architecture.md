@@ -148,7 +148,9 @@ secrets or execute SQL. Resources are organized by API version then resource,
 with explicit handler modules. Utoipa-aware route composition generates the
 OpenAPI 3.1 contract and Swagger uses vendored assets. A server-package library
 target exposes deliberate composition entry points, while the executable retains
-its existing operator CLI. There is no production listener or `serve` yet.
+its operator CLI. Private server runtime composition adds operational routes,
+binds the listener with peer ConnectInfo and owns bounded graceful shutdown;
+the public router remains constructable without process lifecycle.
 
 The messaging surface includes authenticated discovery, inbox/detail/member
 queries, Group lifecycle, enriched message history/global items and own read-state
@@ -188,9 +190,14 @@ Database plus HTTP remain authoritative; sockets offer no replay, ACK, durable
 snapshot boundary or domain ordering. Clients reconcile through HTTP after reconnect.
 
 `RealtimeEvent` is not `DomainEvent`. The server maps library facts to the wire
-protocol without equating internal names or payloads. There is still no
-production listener, `serve`, health/readiness or HTTP serving lifecycle. The
-standalone `worker` process is implemented separately and consumes `QueueStore`;
+protocol without equating internal names or payloads. The standalone `serve`
+process runs HTTP/realtime with primary storage only. Operational liveness is
+dependency-free; readiness inspects primary schema with a timeout and fails
+immediately when draining. One cancellation token triggers HTTP shutdown;
+WebSocket and dispatch tasks are explicitly tracked and drain concurrently under
+one total deadline. Doctor inspects the full installation without mutations or
+listener binding. See [operations](operations.md) and [ADR 0016](adr/0016-standalone-runtime-lifecycle.md).
+The standalone `worker` process is implemented separately and consumes `QueueStore`;
 it does not start HTTP and currently has no official production handlers.
 `DomainEvent` does not automatically enqueue jobs. Primary storage and queue
 storage are operationally independent and are not transactionally coupled:

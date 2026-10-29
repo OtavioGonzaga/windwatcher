@@ -2,9 +2,10 @@
 
 ## Availability and versioning
 
-The server package provides a constructable, tested HTTP router. The CLI does
-**not** serve it yet: listener binding, graceful shutdown, health/readiness and
-the process lifecycle are intentionally deferred. No `serve` placeholder exists.
+The server package provides a constructable, tested HTTP router. `windwatcher
+serve` (or plain `windwatcher`) runs it with the configured TCP listener, realtime
+and graceful shutdown. Router construction remains available without starting a
+listener. See [operations](operations.md).
 
 Public resources live below `/v1`. Documentation lives at `/docs` (redirecting to
 `/docs/`) and `/openapi/v1.json`. Future API majors can coexist as `/v2` and
@@ -36,8 +37,9 @@ Registration remains a registered route when closed and returns
 `403 registration.closed`. It reuses `auth.registration`, not an HTTP-specific
 toggle. All discovery/conversation/message routes require bearer authentication.
 Dependent collections are nested; globally identifiable message items have
-top-level routes. There is no unrestricted user listing, session listing or health
-endpoint. Axum also supplies the normal implicit HEAD handling for GET.
+top-level routes. There is no unrestricted user listing or session listing.
+Operational `/health/live` and `/health/ready` are unversioned and intentionally
+excluded from the client OpenAPI contract. Axum also supplies implicit HEAD for GET.
 
 ## Client messaging journey
 

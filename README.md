@@ -5,7 +5,7 @@ An embeddable, self-hostable messaging engine written in Rust.
 ## Status
 
 Windwatcher is in early development. The repository currently provides project
-foundations only and is not production-ready.
+an embeddable engine and standalone HTTP/realtime service, but is not production-ready.
 
 ## What is Windwatcher?
 
@@ -22,17 +22,19 @@ The packages are independently versioned.
 
 ## Operator commands
 
+Configure a stable JWT signing secret first; see [server configuration](docs/server-configuration.md).
+
 ```bash
 windwatcher migrate
-windwatcher worker
-windwatcher jobs list
-windwatcher user create --username otavio
-windwatcher config check
+windwatcher user create --username alice
+windwatcher doctor
+windwatcher serve
 ```
 
-An [HTTP v1 router](docs/http-api.md) is implemented and tested, but the CLI does
-not bind a listener yet; there is no `serve` command in this delivery. The
-optional durable queue and separate worker process are documented in
+Plain `windwatcher` is equivalent to `windwatcher serve`, listening on
+`127.0.0.1:8080` by default. See [operations](docs/operations.md) for health,
+diagnostics and graceful shutdown. The optional durable queue and separate
+`windwatcher worker` process are documented in
 [Durable jobs](docs/jobs.md); no production job handlers are shipped yet.
 
 ## Development
