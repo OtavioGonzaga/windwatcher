@@ -636,6 +636,24 @@ fn realtime_openapi_contract() {
     assert_eq!(ticket["security"], json!([{"bearerAuth":[]}]));
     assert_eq!(connect["operationId"], "connectRealtime");
     assert_eq!(connect["security"], json!([{"realtimeTicket":[]}]));
+    let parameter = connect["parameters"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["name"] == "ticket")
+        .unwrap();
+    assert_eq!(parameter["in"], "query");
+    assert_eq!(parameter["required"], true);
+    for schema in [
+        &parameter["schema"],
+        &spec["components"]["schemas"]["TicketResponse"]["properties"]["ticket"],
+    ] {
+        assert_eq!(schema["minLength"], 43);
+        assert_eq!(schema["maxLength"], 43);
+        // Final sextet carries only four data bits; noncanonical trailing bits
+        // must not be advertised as a valid 32-byte ticket representation.
+        assert_eq!(schema["pattern"], "^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$");
+    }
     assert!(connect["responses"]["101"]["content"].is_null());
     for code in ["101", "400", "401", "426", "429", "500"] {
         assert!(connect["responses"][code].is_object());

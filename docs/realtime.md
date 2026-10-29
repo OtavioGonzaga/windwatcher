@@ -4,6 +4,8 @@ Incoming tickets must be the canonical 43-character unpadded base64url encoding
 of exactly 32 bytes. Malformed tickets are rejected before hashing or registry
 access, using the same unavailable-ticket failure as other invalid credentials.
 This does not introduce a connection-count policy.
+OpenAPI declares the exact length and canonical base64url pattern for both the
+issued ticket and the connection query, including zero unused trailing bits.
 
 The database and HTTP API are authoritative. WebSocket delivers **best-effort
 state-change notifications**, not an ordered event log, queue, snapshot, or

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Publish exact canonical WebSocket ticket length/pattern in query and response
+  OpenAPI schemas, matching runtime validation.
+
 - Bound pagination cursors to 1024 encoded bytes in HTTP validation and OpenAPI.
 
 - Update locked TLS dependencies to patched releases and expand authorization,
