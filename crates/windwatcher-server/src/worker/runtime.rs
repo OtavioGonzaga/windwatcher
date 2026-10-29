@@ -16,11 +16,13 @@ pub(crate) async fn run(
     queue: Arc<ConfiguredQueue>,
     config: ResolvedQueueConfig,
 ) -> Result<(), AppError> {
+    let signal =
+        crate::runtime::signal::ShutdownSignal::register().map_err(AppError::ShutdownSignal)?;
     run_until(
         queue,
         config,
         Arc::new(JobRegistry::default()),
-        shutdown_signal(),
+        signal.wait(),
     )
     .await
 }
@@ -62,7 +64,7 @@ async fn run_until(
     let trigger = tokio::select! {
         biased;
         _ = tasks.join_next() => Err(AppError::WorkerTaskTerminated),
-        signal = shutdown => signal.map_err(AppError::WorkerSignal),
+        signal = shutdown => signal.map_err(AppError::ShutdownSignal),
     };
     let _ = stop_tx.send(true);
     tracing::info!(worker_id = %worker, "worker_stopping");
@@ -268,19 +270,6 @@ async fn maintenance_loop(
                 Err(error) => tracing::error!(error=%error, "queue maintenance failed"),
             }
         }
-    }
-}
-
-async fn shutdown_signal() -> std::io::Result<()> {
-    #[cfg(unix)]
-    {
-        use tokio::signal::unix::{SignalKind, signal};
-        let mut terminate = signal(SignalKind::terminate())?;
-        tokio::select! { result = tokio::signal::ctrl_c() => result, _ = terminate.recv() => Ok(()) }
-    }
-    #[cfg(not(unix))]
-    {
-        tokio::signal::ctrl_c().await
     }
 }
 
@@ -728,7 +717,7 @@ mod tests {
             Err(std::io::Error::other("test signal failure"))
         })
         .await;
-        assert!(matches!(result, Err(AppError::WorkerSignal(_))));
+        assert!(matches!(result, Err(AppError::ShutdownSignal(_))));
     }
 
     #[tokio::test]

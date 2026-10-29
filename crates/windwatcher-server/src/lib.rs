@@ -11,6 +11,7 @@ mod password;
 mod paths;
 mod queue;
 mod realtime;
+mod runtime;
 mod storage;
 mod worker;
 
