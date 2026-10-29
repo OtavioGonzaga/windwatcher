@@ -60,14 +60,8 @@ async fn run() -> Result<(), AppError> {
         Command::Config {
             command: cli::ConfigCommand::Check,
         } => {
-            config::resolve_full(&raw, &paths)?;
+            config::validate_full(&raw, &paths).await?;
             let storage = config::resolve_storage(&raw, &paths)?;
-            if let config::ResolvedStorageProvider::MongoDb(options) = &storage {
-                options
-                    .validate()
-                    .await
-                    .map_err(|error| AppError::Config(error.to_string()))?;
-            }
             println!(
                 "Configuration valid.\nMode: {}\nStorage: {}\nQueue: {}",
                 if cli.system { "system" } else { "user" },

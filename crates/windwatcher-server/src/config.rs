@@ -19,6 +19,7 @@ use crate::{cli::LogFormat, error::AppError, paths::ResolvedPaths};
 
 pub(crate) mod http;
 pub(crate) mod realtime;
+pub(crate) mod server;
 use http::RawHttp;
 use realtime::RawRealtime;
 
@@ -45,6 +46,7 @@ pub struct RawConfig {
     pub queue: Option<RawQueue>,
     pub auth: RawAuth,
     pub messages: RawMessages,
+    pub server: server::RawServer,
     pub http: RawHttp,
     pub realtime: RawRealtime,
     pub logging: RawLogging,
@@ -583,17 +585,35 @@ pub fn resolve_jwt(raw: &RawConfig) -> Result<Hs256JwtAccessTokenCodec, AppError
     ))
 }
 
-pub fn resolve_full(raw: &RawConfig, paths: &ResolvedPaths) -> Result<(), AppError> {
+pub fn resolve_serve(raw: &RawConfig, paths: &ResolvedPaths) -> Result<(), AppError> {
+    raw.server.resolve()?;
     resolve_storage(raw, paths)?;
     resolve_registration(raw)?;
     resolve_session(raw)?;
     raw.http.resolve().map_err(AppError::Config)?;
     raw.realtime.resolve().map_err(AppError::Config)?;
+    let _messages = resolve_messages(raw);
+    let _jwt = resolve_jwt(raw)?;
+    Ok(())
+}
+
+pub fn resolve_full(raw: &RawConfig, paths: &ResolvedPaths) -> Result<(), AppError> {
+    resolve_serve(raw, paths)?;
     if raw.queue.is_some() {
         resolve_queue(raw, paths)?;
     }
-    let _messages = resolve_messages(raw);
-    let _jwt = resolve_jwt(raw)?;
+    Ok(())
+}
+
+/// Syntax-only asynchronous validation; never opens a database connection.
+pub async fn validate_full(raw: &RawConfig, paths: &ResolvedPaths) -> Result<(), AppError> {
+    resolve_full(raw, paths)?;
+    if let ResolvedStorageProvider::MongoDb(options) = resolve_storage(raw, paths)? {
+        options
+            .validate()
+            .await
+            .map_err(|error| AppError::Config(error.to_string()))?;
+    }
     Ok(())
 }
 

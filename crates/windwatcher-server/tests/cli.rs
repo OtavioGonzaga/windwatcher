@@ -41,6 +41,32 @@ fn command(config: &Path) -> Command {
 }
 
 #[test]
+fn server_configuration_overrides_and_validation_are_static() {
+    let directory = TempDir::new().unwrap();
+    let path = complete_config(&directory, "warn");
+    for bind in ["127.0.0.1:0", "[::1]:0"] {
+        command(&path)
+            .env("WINDWATCHER__SERVER__BIND", bind)
+            .args(["config", "check"])
+            .assert()
+            .success();
+    }
+    for (key, value) in [
+        ("BIND", "localhost:8080"),
+        ("SHUTDOWN_GRACE_PERIOD", "0s"),
+        ("READINESS_TIMEOUT", "0s"),
+        ("UNKNOWN", "true"),
+    ] {
+        command(&path)
+            .env(format!("WINDWATCHER__SERVER__{key}"), value)
+            .args(["config", "check"])
+            .assert()
+            .failure();
+    }
+    assert!(!directory.path().join("windwatcher.db").exists());
+}
+
+#[test]
 fn network_queue_config_selection_and_safe_errors() {
     let directory = TempDir::new().unwrap();
     let path = complete_config(&directory, "warn");
