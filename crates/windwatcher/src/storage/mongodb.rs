@@ -3,10 +3,11 @@ use std::{error::Error, fmt};
 use mongodb::{
     Client,
     bson::{Document, doc},
-    options::ClientOptions,
+    options::{ClientOptions, ReadPreference, SelectionCriteria, WriteConcern},
 };
 
 use super::MigrationStatus;
+mod conversations;
 mod identity;
 mod migrations;
 mod transactions;
@@ -60,9 +61,13 @@ impl MongoDbStorageOptions {
                 "MongoDB database name is required",
             ));
         }
-        ClientOptions::parse(&self.url)
+        let mut options = ClientOptions::parse(&self.url)
             .await
-            .map_err(|_| MongoDbStorageError::Configuration("invalid MongoDB URL"))
+            .map_err(|_| MongoDbStorageError::Configuration("invalid MongoDB URL"))?;
+        options.write_concern = Some(WriteConcern::majority());
+        options.selection_criteria =
+            Some(SelectionCriteria::ReadPreference(ReadPreference::Primary));
+        Ok(options)
     }
 }
 

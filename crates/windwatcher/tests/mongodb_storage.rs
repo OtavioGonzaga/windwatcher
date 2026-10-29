@@ -2,9 +2,12 @@
 
 use mongodb::Client;
 use windwatcher::{
-    IdentityStore, MongoDbStorage, MongoDbStorageOptions, PasswordHash, User, UserId,
+    ConversationStore, IdentityStore, MongoDbStorage, MongoDbStorageOptions, PasswordHash, User,
+    UserId,
 };
 
+#[path = "support/conversation_store_contract.rs"]
+mod conversation_contract;
 #[path = "support/identity_store_contract.rs"]
 mod identity_contract;
 #[path = "support/session_store_contract.rs"]
@@ -54,9 +57,53 @@ async fn identity_and_session_contracts_on_disposable_database() {
         )
         .await;
 
+        let (owner, admin, member, outsider) = (
+            User::new(UserId::new(), "conversation_owner".parse().unwrap(), now),
+            User::new(UserId::new(), "conversation_admin".parse().unwrap(), now),
+            User::new(UserId::new(), "conversation_member".parse().unwrap(), now),
+            User::new(UserId::new(), "conversation_outsider".parse().unwrap(), now),
+        );
+        for user in [&owner, &admin, &member, &outsider] {
+            storage.create_local_user(user, &hash).await.unwrap();
+        }
+        conversation_contract::run(&storage, owner.id(), admin.id(), member.id(), outsider.id())
+            .await;
+        conversation_contract::disabled_memberships(
+            &storage,
+            owner.clone(),
+            admin.clone(),
+            outsider.clone(),
+        )
+        .await;
+
         let second = MongoDbStorage::connect(MongoDbStorageOptions::new(&url, &database))
             .await
             .unwrap();
+        let direct_left = User::new(UserId::new(), "direct_race_left".parse().unwrap(), now);
+        let direct_right = User::new(UserId::new(), "direct_race_right".parse().unwrap(), now);
+        for user in [&direct_left, &direct_right] {
+            storage.create_local_user(user, &hash).await.unwrap();
+        }
+        let left_conversation =
+            windwatcher::Conversation::new_direct(windwatcher::ConversationId::new(), now);
+        let right_conversation =
+            windwatcher::Conversation::new_direct(windwatcher::ConversationId::new(), now);
+        let (left, right) = tokio::join!(
+            storage.get_or_create_direct(&left_conversation, direct_left.id(), direct_right.id()),
+            second.get_or_create_direct(&right_conversation, direct_right.id(), direct_left.id())
+        );
+        let left = left.unwrap();
+        let right = right.unwrap();
+        let left_id = match left {
+            windwatcher::StartDirectStoreOutcome::Created(value)
+            | windwatcher::StartDirectStoreOutcome::Existing(value) => value.id(),
+        };
+        let right_id = match right {
+            windwatcher::StartDirectStoreOutcome::Created(value)
+            | windwatcher::StartDirectStoreOutcome::Existing(value) => value.id(),
+        };
+        assert_eq!(left_id, right_id);
+
         let left = User::new(UserId::new(), "race_username".parse().unwrap(), now);
         let right = User::new(UserId::new(), "race_username".parse().unwrap(), now);
         let (a, b) = tokio::join!(
