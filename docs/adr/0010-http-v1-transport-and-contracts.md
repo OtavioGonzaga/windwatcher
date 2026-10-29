@@ -1,6 +1,7 @@
 # 0010: HTTP v1 transport and contracts
 
 - Status: Accepted
+- Immediate-peer-only rate-limit addressing superseded by [ADR 0017](0017-trusted-proxy-rate-limit-addresses.md); other decisions remain accepted.
 - Date: 2026-10-26
 
 ## Context

@@ -79,7 +79,7 @@ catalog! {
     UserDisabled => (FORBIDDEN, "auth.user_disabled", "auth:user-disabled", "User disabled", "The user is disabled."),
     InvalidAccessToken => (UNAUTHORIZED, "auth.invalid_access_token", "auth:invalid-access-token", "Invalid access token", "A valid bearer access token is required."),
     InvalidRefreshToken => (UNAUTHORIZED, "auth.invalid_refresh_token", "auth:invalid-refresh-token", "Invalid refresh token", "The supplied refresh token is invalid."),
-    RateLimitExceeded => (TOO_MANY_REQUESTS, "rate_limit.exceeded", "rate-limit:exceeded", "Rate limit exceeded", "The peer request quota has been exceeded."),
+    RateLimitExceeded => (TOO_MANY_REQUESTS, "rate_limit.exceeded", "rate-limit:exceeded", "Rate limit exceeded", "The client request quota has been exceeded."),
     Internal => (INTERNAL_SERVER_ERROR, "internal.error", "internal:error", "Internal server error", "The request could not be completed."),
 }
 

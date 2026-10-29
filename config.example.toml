@@ -96,6 +96,9 @@ allowed_origins = []
 
 [http.rate_limit]
 enabled = true
+# Opt-in only: proxies must overwrite/append X-Forwarded-For correctly.
+# Example for a local proxy: ["127.0.0.1/32", "::1/128"].
+trusted_proxies = []
 
 [http.rate_limit.general]
 requests = 100

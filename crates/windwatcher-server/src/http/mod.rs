@@ -92,7 +92,7 @@ fn routes(config: &ResolvedHttpConfig) -> OpenApiRouter<HttpState> {
 
 /// Builds the HTTP adapter without binding a listener or reading configuration.
 /// When limiting is enabled, serving must install `ConnectInfo<SocketAddr>` using
-/// Axum's connect-info make-service; forwarded headers are deliberately ignored.
+/// Axum's connect-info make-service; forwarded addresses require explicit trusted proxies.
 pub fn router(state: HttpState, config: ResolvedHttpConfig) -> Router {
     common_layers(application(state, config))
 }

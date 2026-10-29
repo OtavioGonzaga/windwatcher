@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Add opt-in trusted proxy CIDRs for bounded, spoof-resistant X-Forwarded-For
+  rate-limit addressing, with unchanged immediate-peer defaults.
+
 - Validate MongoDB URL syntax during `config check` and expose safe, actionable
   unsupported-topology and invalid-migration-history diagnostics.
 

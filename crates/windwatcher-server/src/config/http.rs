@@ -12,7 +12,7 @@ use super::DurationValue;
 pub struct RawHttp {
     /// Cross-origin browser access policy.
     pub cors: RawCors,
-    /// Process-local peer-IP quotas.
+    /// Process-local client-IP quotas.
     pub rate_limit: RawRateLimit,
 }
 
@@ -28,9 +28,11 @@ pub struct RawCors {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct RawRateLimit {
-    /// Whether peer-IP quotas are enforced.
+    /// Explicit proxy CIDRs allowed to supply X-Forwarded-For. Empty by default.
+    pub trusted_proxies: Vec<String>,
+    /// Whether client-IP quotas are enforced.
     pub enabled: bool,
-    /// Quota shared by every API request from a peer.
+    /// Quota shared by every API request from a resolved client IP.
     pub general: RawRateLimitPolicy,
     /// Additional quota shared by registration, login and refresh.
     pub auth: RawRateLimitPolicy,
@@ -38,6 +40,7 @@ pub struct RawRateLimit {
 impl Default for RawRateLimit {
     fn default() -> Self {
         Self {
+            trusted_proxies: Vec::new(),
             enabled: true,
             general: RawRateLimitPolicy::default(),
             auth: RawRateLimitPolicy {
@@ -73,6 +76,7 @@ impl Default for RawRateLimitPolicy {
 /// Validated HTTP configuration, ready for router composition without further I/O.
 #[derive(Clone, Debug)]
 pub struct ResolvedHttpConfig {
+    pub(crate) trusted_proxies: Vec<ipnet::IpNet>,
     pub(crate) origins: Vec<HeaderValue>,
     pub(crate) any_origin: bool,
     pub(crate) enabled: bool,
@@ -107,6 +111,20 @@ impl RawHttp {
             }
         }
         Ok(ResolvedHttpConfig {
+            trusted_proxies: self
+                .rate_limit
+                .trusted_proxies
+                .iter()
+                .map(|value| {
+                    value
+                        .parse::<ipnet::IpNet>()
+                        .map(|network| network.trunc())
+                        .map_err(|_| {
+                            "http.rate_limit.trusted_proxies requires explicit IPv4 or IPv6 CIDRs"
+                                .to_owned()
+                        })
+                })
+                .collect::<Result<_, _>>()?,
             origins,
             any_origin,
             enabled: self.rate_limit.enabled,
@@ -143,6 +161,28 @@ impl RawRateLimitPolicy {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn validates_trusted_proxy_cidrs_even_when_disabled() {
+        let mut raw = RawHttp::default();
+        assert!(raw.resolve().unwrap().trusted_proxies.is_empty());
+        raw.rate_limit.enabled = false;
+        for value in [
+            "",
+            "127.0.0.1",
+            "localhost/32",
+            "0.0.0.0/33",
+            "::1/129",
+            "http://127.0.0.1/32",
+            "SENTINEL_PROXY_SECRET",
+        ] {
+            raw.rate_limit.trusted_proxies = vec![value.into()];
+            let error = raw.resolve().unwrap_err();
+            assert!(!error.contains(value) || value.is_empty());
+        }
+        raw.rate_limit.trusted_proxies = vec!["127.0.0.1/32".into(), "::1/128".into()];
+        assert_eq!(raw.resolve().unwrap().trusted_proxies.len(), 2);
+    }
 
     #[test]
     fn validates_origins_and_wildcard() {

@@ -256,6 +256,48 @@ fn command(config: &Path) -> Command {
 }
 
 #[test]
+fn trusted_proxies_follow_configuration_precedence_and_validate_when_disabled() {
+    let directory = TempDir::new().unwrap();
+    let path = complete_config(&directory, "warn");
+    let base = fs::read_to_string(&path).unwrap();
+    fs::write(
+        &path,
+        format!("{base}\n[http.rate_limit]\nenabled = false\ntrusted_proxies = ['127.0.0.1/32']\n"),
+    )
+    .unwrap();
+    command(&path).args(["config", "check"]).assert().success();
+    let shown = command(&path)
+        .args(["config", "show"])
+        .env(
+            "WINDWATCHER__HTTP__RATE_LIMIT__TRUSTED_PROXIES",
+            "[\"::1/128\"]",
+        )
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let parsed: toml::Value = toml::from_str(std::str::from_utf8(&shown).unwrap()).unwrap();
+    assert_eq!(
+        parsed["http"]["rate_limit"]["trusted_proxies"]
+            .as_array()
+            .unwrap()[0]
+            .as_str(),
+        Some("::1/128")
+    );
+    command(&path)
+        .args(["config", "check"])
+        .env(
+            "WINDWATCHER__HTTP__RATE_LIMIT__TRUSTED_PROXIES",
+            "[\"SENTINEL_PROXY_SECRET\"]",
+        )
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("trusted_proxies"))
+        .stderr(predicate::str::contains("SENTINEL_PROXY_SECRET").not());
+}
+
+#[test]
 fn version_is_independent_of_configuration() {
     let directory = TempDir::new().unwrap();
     command(&directory.path().join("missing.toml"))

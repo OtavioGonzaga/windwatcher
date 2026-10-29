@@ -1101,3 +1101,61 @@ async fn quotas_are_shared_by_peer_not_forwarded_headers_and_auth_is_additional(
         "registration.closed",
     );
 }
+
+#[tokio::test]
+async fn trusted_proxy_clients_have_independent_general_and_auth_buckets() {
+    let mut cfg = config();
+    cfg.rate_limit.enabled = true;
+    cfg.rate_limit.trusted_proxies = vec!["127.0.0.1/32".into()];
+    cfg.rate_limit.auth.burst = 1;
+    cfg.rate_limit.auth.period = "1h".into();
+    cfg.rate_limit.general.burst = 3;
+    cfg.rate_limit.general.period = "1h".into();
+    let fixture = Fixture::new(cfg, RegistrationPolicy::Closed, true).await;
+    for client in ["198.51.100.1", "198.51.100.2"] {
+        let forwarded = |mut request: Request<Body>| {
+            request
+                .headers_mut()
+                .insert("x-forwarded-for", client.parse().unwrap());
+            request
+        };
+        problem(
+            &send(
+                &fixture.router,
+                forwarded(command(
+                    "POST",
+                    "/v1/users",
+                    json!({"username":"alice", "password":"test password"}),
+                )),
+            )
+            .await,
+            403,
+            "registration.closed",
+        );
+        let limited = send(
+            &fixture.router,
+            forwarded(command("POST", "/v1/sessions/refresh", json!({}))),
+        )
+        .await;
+        problem(&limited, 429, "rate_limit.exceeded");
+        assert!(limited.1.contains_key("retry-after"));
+        problem(
+            &send(
+                &fixture.router,
+                forwarded(bearer("GET", "/v1/users/me", "bad")),
+            )
+            .await,
+            401,
+            "auth.invalid_access_token",
+        );
+        problem(
+            &send(
+                &fixture.router,
+                forwarded(bearer("GET", "/v1/users/me", "bad")),
+            )
+            .await,
+            429,
+            "rate_limit.exceeded",
+        );
+    }
+}

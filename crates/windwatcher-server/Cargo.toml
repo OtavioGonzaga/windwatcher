@@ -25,6 +25,7 @@ clap = { version = "4", features = ["derive"] }
 directories = "6"
 figment = { version = "0.10", features = ["env", "toml"] }
 humantime = "2"
+ipnet = { version = "2", default-features = false, features = ["std"] }
 rpassword = "7"
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"
