@@ -94,10 +94,30 @@ fn routes(config: &ResolvedHttpConfig) -> OpenApiRouter<HttpState> {
 /// When limiting is enabled, serving must install `ConnectInfo<SocketAddr>` using
 /// Axum's connect-info make-service; forwarded headers are deliberately ignored.
 pub fn router(state: HttpState, config: ResolvedHttpConfig) -> Router {
+    common_layers(application(state, config))
+}
+
+pub(crate) fn runtime_router(
+    state: HttpState,
+    config: ResolvedHttpConfig,
+    health: crate::runtime::health::RuntimeHealth,
+) -> Router {
+    common_layers(application(state, config).merge(health.router()))
+}
+
+fn application(state: HttpState, config: ResolvedHttpConfig) -> Router {
     let (router, spec) = routes(&config).split_for_parts();
     router
-        .merge(utoipa_swagger_ui::SwaggerUi::new("/docs").url("/openapi/v1.json", openapi::finish(spec)))
-        .fallback(not_found).with_state(state)
+        .merge(
+            utoipa_swagger_ui::SwaggerUi::new("/docs")
+                .url("/openapi/v1.json", openapi::finish(spec)),
+        )
+        .fallback(not_found)
+        .with_state(state)
+}
+
+fn common_layers(router: Router) -> Router {
+    router
         .layer(SetSensitiveResponseHeadersLayer::new([header::SET_COOKIE]))
         .layer(TraceLayer::new_for_http()
             .make_span_with(|request: &Request<Body>| {
