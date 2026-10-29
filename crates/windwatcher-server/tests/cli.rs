@@ -445,6 +445,7 @@ fn message_config_defaults_toml_environment_and_unknown_fields() {
 fn migrations_are_explicit_and_user_provisioning_uses_current_schema() {
     let directory = TempDir::new().unwrap();
     let config = config(&directory);
+    fs::File::create(directory.path().join("windwatcher.db")).unwrap();
 
     command(&config)
         .args(["user", "create", "--username", "otavio", "--password-stdin"])
@@ -538,6 +539,16 @@ fn worker_requires_queue_configuration_and_refuses_pending_schema() {
         format!("{}{}", fs::read_to_string(&config).unwrap(), queue_config),
     )
     .unwrap();
+    assert!(!directory.path().join("queue.db").exists());
+    command(&config)
+        .arg("worker")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "failed to connect to SQLite queue",
+        ));
+    assert!(!directory.path().join("queue.db").exists());
+    fs::File::create(directory.path().join("queue.db")).unwrap();
     command(&config)
         .arg("worker")
         .assert()
@@ -921,6 +932,7 @@ fn config_check_validates_sqlite_options_without_creating_a_database() {
 fn password_argument_warning_precedes_schema_validation() {
     let directory = TempDir::new().unwrap();
     let config = config(&directory);
+    fs::File::create(directory.path().join("windwatcher.db")).unwrap();
     command(&config)
         .args([
             "user",
