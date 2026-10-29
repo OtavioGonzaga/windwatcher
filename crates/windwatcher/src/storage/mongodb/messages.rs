@@ -6,7 +6,7 @@ use mongodb::{
 };
 use time::OffsetDateTime;
 
-use super::{MongoDbStorage, transactions};
+use super::{MongoDbStorage, conversations, transactions};
 use crate::{
     ConversationId, ConversationReadState, DeleteMessageStoreOutcome as Delete,
     EditMessageStoreOutcome as Edit, GetMessageStoreOutcome as Get,
@@ -112,7 +112,7 @@ fn stored_message(doc: &Document) -> Result<Message, MessageStoreError> {
     )
     .map_err(|_| bad("incoherent persisted message"))
 }
-fn write_message(message: &Message) -> Result<Document, MessageStoreError> {
+pub(super) fn write_message(message: &Message) -> Result<Document, MessageStoreError> {
     Ok(
         doc! { "_id": bin(message.id().as_uuid()), "conversation_id": bin(message.conversation_id().as_uuid()), "sender_id": bin(message.sender_id().as_uuid()), "content": message.content().map(|value| Bson::String(value.as_str().to_owned())).unwrap_or(Bson::Null), "reply_to_message_id": message.reply_to_message_id().map(|id| Bson::Binary(bin(id.as_uuid()))).unwrap_or(Bson::Null), "created_at": micros(message.created_at())?, "edited_at": message.edited_at().map(micros).transpose()?.map(Bson::Int64).unwrap_or(Bson::Null), "deleted_at": message.deleted_at().map(micros).transpose()?.map(Bson::Int64).unwrap_or(Bson::Null) },
     )
@@ -120,55 +120,104 @@ fn write_message(message: &Message) -> Result<Document, MessageStoreError> {
 fn mongo_bad(error: &'static str) -> mongodb::error::Error {
     mongodb::error::Error::custom(error)
 }
+pub(super) async fn views(
+    db: &mongodb::Database,
+    session: &mut mongodb::ClientSession,
+    records: Vec<Document>,
+) -> mongodb::error::Result<Vec<MessageView>> {
+    use std::collections::HashMap;
+    let messages = records
+        .iter()
+        .map(stored_message)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| mongo_bad("invalid persisted message"))?;
+    if messages.is_empty() {
+        return Ok(Vec::new());
+    }
+    let reply_ids: Vec<_> = messages
+        .iter()
+        .filter_map(|m| m.reply_to_message_id())
+        .map(|id| bin(id.as_uuid()))
+        .collect();
+    let mut replies = HashMap::new();
+    if !reply_ids.is_empty() {
+        let mut cursor = db
+            .collection::<Document>("messages")
+            .find(doc! { "_id": { "$in": reply_ids } })
+            .session(&mut *session)
+            .await?;
+        while let Some(record) = cursor.next(&mut *session).await.transpose()? {
+            let reply = stored_message(&record).map_err(|_| mongo_bad("invalid reply message"))?;
+            replies.insert(reply.id(), reply);
+        }
+    }
+    let senders: Vec<_> = messages
+        .iter()
+        .chain(replies.values())
+        .map(|m| bin(m.sender_id().as_uuid()))
+        .collect();
+    let mut users = HashMap::new();
+    let mut cursor = db
+        .collection::<Document>("users")
+        .find(doc! { "_id": { "$in": senders } })
+        .session(&mut *session)
+        .await?;
+    while let Some(user) = cursor.next(&mut *session).await.transpose()? {
+        let id = UserId::try_from(uuid(&user, "_id").map_err(|_| mongo_bad("invalid sender ID"))?)
+            .map_err(|_| mongo_bad("invalid sender ID"))?;
+        let username = user
+            .get_str("username")
+            .map_err(|_| mongo_bad("invalid sender username"))?
+            .parse::<Username>()
+            .map_err(|_| mongo_bad("invalid sender username"))?;
+        users.insert(id, username);
+    }
+    messages
+        .into_iter()
+        .map(|message| {
+            let sender_username = users
+                .get(&message.sender_id())
+                .ok_or_else(|| mongo_bad("message sender missing"))?
+                .clone();
+            let reply_to = message
+                .reply_to_message_id()
+                .map(|id| {
+                    let reply = replies
+                        .get(&id)
+                        .filter(|reply| reply.conversation_id() == message.conversation_id())
+                        .ok_or_else(|| mongo_bad("message reply missing"))?;
+                    Ok::<_, mongodb::error::Error>(Box::new(ReplyPreview {
+                        id,
+                        sender: UserSummary {
+                            id: reply.sender_id(),
+                            username: users
+                                .get(&reply.sender_id())
+                                .ok_or_else(|| mongo_bad("reply sender missing"))?
+                                .clone(),
+                        },
+                        content: reply.content().cloned(),
+                        deleted_at: reply.deleted_at(),
+                    }))
+                })
+                .transpose()?;
+            Ok(MessageView {
+                message,
+                sender_username,
+                reply_to,
+            })
+        })
+        .collect()
+}
+
 pub(super) async fn view(
     db: &mongodb::Database,
     session: &mut mongodb::ClientSession,
     record: Document,
 ) -> mongodb::error::Result<MessageView> {
-    let m = stored_message(&record).map_err(|_| mongo_bad("invalid persisted message"))?;
-    let sender = db
-        .collection::<Document>("users")
-        .find_one(doc! { "_id": bin(m.sender_id().as_uuid()) })
-        .session(&mut *session)
+    views(db, session, vec![record])
         .await?
-        .ok_or_else(|| mongo_bad("message sender missing"))?;
-    let username = sender
-        .get_str("username")
-        .map_err(|_| mongo_bad("invalid sender username"))?
-        .parse::<Username>()
-        .map_err(|_| mongo_bad("invalid sender username"))?;
-    let reply_to = if let Some(reply_id) = m.reply_to_message_id() {
-        let reply = db.collection::<Document>("messages").find_one(doc! { "_id": bin(reply_id.as_uuid()), "conversation_id": bin(m.conversation_id().as_uuid()) }).session(&mut *session).await?.ok_or_else(|| mongo_bad("message reply missing"))?;
-        let reply_message =
-            stored_message(&reply).map_err(|_| mongo_bad("invalid reply message"))?;
-        let user = db
-            .collection::<Document>("users")
-            .find_one(doc! { "_id": bin(reply_message.sender_id().as_uuid()) })
-            .session(&mut *session)
-            .await?
-            .ok_or_else(|| mongo_bad("reply sender missing"))?;
-        let username = user
-            .get_str("username")
-            .map_err(|_| mongo_bad("invalid reply username"))?
-            .parse::<Username>()
-            .map_err(|_| mongo_bad("invalid reply username"))?;
-        Some(Box::new(ReplyPreview {
-            id: reply_id,
-            sender: UserSummary {
-                id: reply_message.sender_id(),
-                username,
-            },
-            content: reply_message.content().cloned(),
-            deleted_at: reply_message.deleted_at(),
-        }))
-    } else {
-        None
-    };
-    Ok(MessageView {
-        message: m,
-        sender_username: username,
-        reply_to,
-    })
+        .pop()
+        .ok_or_else(|| mongo_bad("message view missing"))
 }
 async fn access(
     db: &mongodb::Database,
@@ -258,10 +307,7 @@ impl MessageStore for MongoDbStorage {
             while let Some(doc) = cursor.next(&mut *session).await {
                 docs.push(doc?);
             }
-            let mut items = Vec::new();
-            for doc in docs {
-                items.push(view(&db, session, doc).await?);
-            }
+            let items = views(&db, session, docs).await?;
             Ok((2, items))
         })
         .await
@@ -287,13 +333,7 @@ impl MessageStore for MongoDbStorage {
         let reply = message.reply_to_message_id();
         let result = transactions::run(&self.client, false, async move |session| {
             let key = bin(conv.as_uuid());
-            if db
-                .collection::<Document>("conversations")
-                .find_one(doc! { "_id": &key })
-                .session(&mut *session)
-                .await?
-                .is_none()
-            {
+            if !conversations::touch(&db, session, conv).await? {
                 return Ok((0_u8, None));
             }
             if db
@@ -389,6 +429,7 @@ impl MessageStore for MongoDbStorage {
         let result = transactions::run(&self.client, false, async move |session| {
             let Some(record) = db.collection::<Document>("messages").find_one(doc! { "_id": bin(message_id.as_uuid()) }).session(&mut *session).await? else { return Ok((0_u8, None)); };
             let conv = ConversationId::try_from(uuid(&record, "conversation_id").map_err(|_| mongo_bad("invalid message conversation"))?).map_err(|_| mongo_bad("invalid conversation id"))?;
+            if !conversations::touch(&db, session, conv).await? { return Ok((1, None)); }
             let member = db.collection::<Document>("conversation_members").find_one(doc! { "conversation_id": bin(conv.as_uuid()), "user_id": bin(actor.as_uuid()) }).session(&mut *session).await?;
             if member.is_none() { return Ok((1, None)); }
             if uuid(&record, "sender_id").map_err(|_| mongo_bad("invalid message author"))? != actor.as_uuid() { return Ok((2, None)); }
@@ -422,6 +463,7 @@ impl MessageStore for MongoDbStorage {
         let result = transactions::run(&self.client, false, async move |session| {
             let Some(record) = db.collection::<Document>("messages").find_one(doc! { "_id": bin(message_id.as_uuid()) }).session(&mut *session).await? else { return Ok((0_u8, None)); };
             let conv = ConversationId::try_from(uuid(&record, "conversation_id").map_err(|_| mongo_bad("invalid message conversation"))?).map_err(|_| mongo_bad("invalid conversation id"))?;
+            if !conversations::touch(&db, session, conv).await? { return Ok((1, None)); }
             let member = db.collection::<Document>("conversation_members").find_one(doc! { "conversation_id": bin(conv.as_uuid()), "user_id": bin(actor.as_uuid()) }).session(&mut *session).await?;
             let Some(member) = member else { return Ok((1, None)); };
             let author = uuid(&record, "sender_id").map_err(|_| mongo_bad("invalid message author"))? == actor.as_uuid();
@@ -453,6 +495,9 @@ impl MessageStore for MongoDbStorage {
     ) -> Result<Read, MessageStoreError> {
         let db = self.database();
         let result = transactions::run(&self.client, false, async move |session| {
+            if !conversations::touch(&db, session, conversation).await? {
+                return Ok((0_u8, None));
+            }
             match access(&db, session, actor, conversation).await? {
                 None => return Ok((0_u8, None)),
                 Some(None) => return Ok((4_u8, None)),

@@ -13,6 +13,8 @@ mod identity;
 mod messages;
 mod migrations;
 mod queries;
+#[cfg(test)]
+mod regression_tests;
 mod transactions;
 #[cfg(test)]
 use mongodb::bson::{Binary, Bson, spec::BinarySubtype};
@@ -84,7 +86,7 @@ pub enum MongoDbStorageError {
     /// Connection or topology inspection failed.
     #[error("MongoDB storage connection failure")]
     Connection(#[source] Box<dyn Error + Send + Sync>),
-    /// The server topology cannot provide the required transaction guarantees.
+    /// The topology is outside this adapter's supported operational scope.
     #[error("unsupported MongoDB topology: {0}")]
     UnsupportedTopology(&'static str),
     /// Migration application failed.

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Serialize MongoDB message authorization with membership/role changes, converge
+  concurrent Direct commands, and preserve replay outcomes after resource deletion.
+- Execute MongoDB migrations as checksummed forward steps with a unique version
+  ledger, and bound paginated query results with server-side cursor/order/limit
+  and batched hydration.
+
 - Add the optional MongoDB primary-storage adapter implementing all six storage
   ports, with explicit migrations and replica-set transaction requirements.
 

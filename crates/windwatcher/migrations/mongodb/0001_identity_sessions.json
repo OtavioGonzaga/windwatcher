@@ -1,0 +1,12 @@
+[
+  {"create": "users"},
+  {"create": "local_credentials"},
+  {"create": "sessions"},
+  {"createIndexes": "users", "indexes": [
+    {"key": {"username": 1}, "name": "users_username_unique", "unique": true, "collation": {"locale": "simple"}}
+  ]},
+  {"createIndexes": "sessions", "indexes": [
+    {"key": {"refresh_token_hash": 1}, "name": "sessions_refresh_hash_unique", "unique": true},
+    {"key": {"user_id": 1}, "name": "sessions_user_id"}
+  ]}
+]

@@ -1,0 +1,13 @@
+[
+  {"create": "conversations"},
+  {"create": "conversation_members"},
+  {"createIndexes": "conversations", "indexes": [
+    {"key": {"direct_key": 1}, "name": "conversations_direct_key_unique", "unique": true, "partialFilterExpression": {"kind": "direct"}}
+  ]},
+  {"createIndexes": "conversation_members", "indexes": [
+    {"key": {"conversation_id": 1, "user_id": 1}, "name": "members_identity_unique", "unique": true},
+    {"key": {"user_id": 1, "conversation_id": 1}, "name": "members_user_conversation"},
+    {"key": {"conversation_id": 1, "joined_at": 1, "user_id": 1}, "name": "members_conversation_joined_user"},
+    {"key": {"conversation_id": 1}, "name": "members_one_owner", "unique": true, "partialFilterExpression": {"role": "owner"}}
+  ]}
+]

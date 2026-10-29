@@ -1,7 +1,5 @@
-use std::{error::Error, fmt};
-
 use mongodb::{
-    bson::{Bson, Document, doc, spec::BinarySubtype},
+    bson::{Binary, Bson, Document, doc, spec::BinarySubtype},
     error::ErrorKind,
 };
 use time::OffsetDateTime;
@@ -9,20 +7,13 @@ use time::OffsetDateTime;
 use super::{MongoDbStorage, conversations, messages, transactions};
 use crate::{
     ConversationBoundary, ConversationId, ConversationMemberSummary,
-    ConversationQueryOutcome as Outcome, ConversationSummary, MemberBoundary, MessageId,
-    MessagingQueryStore, PageLimit, QuerySlice, QueryStoreError, UserId, UserSummary, Username,
+    ConversationQueryOutcome as Outcome, ConversationSummary, MemberBoundary, MessagingQueryStore,
+    PageLimit, QuerySlice, QueryStoreError, UserId, UserSummary, Username,
 };
 
-#[derive(Debug)]
-struct Invalid(&'static str);
-impl fmt::Display for Invalid {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.0)
-    }
-}
-impl Error for Invalid {}
-fn bad(message: &'static str) -> QueryStoreError {
-    QueryStoreError::Unexpected(Box::new(Invalid(message)))
+type Result<T> = mongodb::error::Result<T>;
+fn invalid(message: &'static str) -> mongodb::error::Error {
+    mongodb::error::Error::custom(message)
 }
 fn db_error(error: mongodb::error::Error) -> QueryStoreError {
     if error.contains_label("TransientTransactionError")
@@ -39,54 +30,71 @@ fn db_error(error: mongodb::error::Error) -> QueryStoreError {
         QueryStoreError::Unexpected(Box::new(error))
     }
 }
-fn bin(id: uuid::Uuid) -> mongodb::bson::Binary {
-    mongodb::bson::Binary {
+fn bin(id: uuid::Uuid) -> Binary {
+    Binary {
         subtype: BinarySubtype::Uuid,
         bytes: id.as_bytes().to_vec(),
     }
 }
-fn uuid(document: &Document, key: &str) -> Result<uuid::Uuid, QueryStoreError> {
-    let Some(Bson::Binary(value)) = document.get(key) else {
-        return Err(bad("persisted query identifier is not BSON binary"));
+fn uuid(document: &Document, field: &str) -> Result<uuid::Uuid> {
+    let Some(Bson::Binary(value)) = document.get(field) else {
+        return Err(invalid("persisted identifier is not BSON binary"));
     };
     if value.subtype != BinarySubtype::Uuid || value.bytes.len() != 16 {
-        return Err(bad("invalid persisted query identifier"));
+        return Err(invalid("invalid persisted identifier"));
     }
-    uuid::Uuid::from_slice(&value.bytes).map_err(|_| bad("invalid persisted query identifier"))
+    uuid::Uuid::from_slice(&value.bytes).map_err(|_| invalid("invalid persisted identifier"))
 }
-fn username(document: &Document, key: &str) -> Result<Username, QueryStoreError> {
-    document
-        .get_str(key)
-        .map_err(|_| bad("persisted username is not a string"))?
-        .parse()
-        .map_err(|_| bad("invalid persisted username"))
+fn user(document: &Document) -> Result<UserSummary> {
+    Ok(UserSummary {
+        id: UserId::try_from(uuid(document, "_id")?).map_err(|_| invalid("invalid user ID"))?,
+        username: document
+            .get_str("username")
+            .map_err(|_| invalid("invalid username"))?
+            .parse::<Username>()
+            .map_err(|_| invalid("invalid username"))?,
+    })
 }
-fn marker(member: &Document) -> Result<Option<MessageId>, QueryStoreError> {
-    match member.get("last_read_message_id") {
-        Some(Bson::Null) => Ok(None),
-        Some(Bson::Binary(value))
-            if value.subtype == BinarySubtype::Uuid && value.bytes.len() == 16 =>
-        {
-            Ok(Some(
-                MessageId::try_from(
-                    uuid::Uuid::from_slice(&value.bytes).map_err(|_| bad("invalid read marker"))?,
-                )
-                .map_err(|_| bad("invalid read marker"))?,
-            ))
-        }
-        _ => Err(bad("invalid persisted read marker")),
-    }
-}
-fn micros(value: OffsetDateTime) -> Result<i64, QueryStoreError> {
+fn micros(value: OffsetDateTime) -> Result<i64> {
     i64::try_from(value.unix_timestamp_nanos().div_euclid(1_000))
-        .map_err(|_| bad("timestamp out of range"))
+        .map_err(|_| invalid("timestamp out of range"))
 }
+fn embedded<'a>(document: &'a Document, field: &str) -> Result<&'a Document> {
+    document
+        .get_document(field)
+        .map_err(|_| invalid("missing projection document"))
+}
+fn first<'a>(document: &'a Document, field: &str) -> Result<Option<&'a Document>> {
+    document
+        .get_array(field)
+        .map_err(|_| invalid("missing projection array"))?
+        .first()
+        .map(|value| {
+            value
+                .as_document()
+                .ok_or_else(|| invalid("invalid projection document"))
+        })
+        .transpose()
+}
+fn member_summary(document: &Document) -> Result<ConversationMemberSummary> {
+    let member = conversations::read_member(document).map_err(|_| invalid("invalid membership"))?;
+    let user = user(first(document, "user")?.ok_or_else(|| invalid("member user missing"))?)?;
+    if user.id != member.user_id() {
+        return Err(invalid("incompatible member user"));
+    }
+    Ok(ConversationMemberSummary {
+        user,
+        role: member.role(),
+        joined_at: member.joined_at(),
+    })
+}
+
 async fn authorized(
     db: &mongodb::Database,
     session: &mut mongodb::ClientSession,
     actor: UserId,
     conversation: ConversationId,
-) -> mongodb::error::Result<Option<Option<Document>>> {
+) -> Result<Outcome<()>> {
     let key = bin(conversation.as_uuid());
     if db
         .collection::<Document>("conversations")
@@ -95,129 +103,150 @@ async fn authorized(
         .await?
         .is_none()
     {
-        return Ok(None);
+        return Ok(Outcome::ConversationNotFound);
     }
-    let member = db
+    if db
         .collection::<Document>("conversation_members")
         .find_one(doc! { "conversation_id": &key, "user_id": bin(actor.as_uuid()) })
         .session(session)
-        .await?;
-    Ok(Some(member))
-}
-async fn summary(
-    db: &mongodb::Database,
-    session: &mut mongodb::ClientSession,
-    actor: UserId,
-    conversation: Document,
-    membership: Document,
-) -> mongodb::error::Result<ConversationSummary> {
-    let conv = conversations::read_conversation(&conversation)
-        .map_err(|_| mongodb::error::Error::custom("invalid conversation"))?;
-    let member = conversations::read_member(&membership)
-        .map_err(|_| mongodb::error::Error::custom("invalid membership"))?;
-    let key = bin(conv.id().as_uuid());
-    let mut cursor = db
-        .collection::<Document>("messages")
-        .find(doc! { "conversation_id": &key })
-        .sort(doc! { "_id": -1 })
-        .limit(1)
-        .session(&mut *session)
-        .await?;
-    let last_record = cursor.next(&mut *session).await.transpose()?;
-    let last_message = match last_record {
-        Some(record) => Some(messages::view(db, session, record).await?),
-        None => None,
-    };
-    let unread_filter = {
-        let mut filter = doc! { "conversation_id": &key, "sender_id": { "$ne": bin(actor.as_uuid()) }, "deleted_at": Bson::Null };
-        if let Some(marker) =
-            marker(&membership).map_err(|_| mongodb::error::Error::custom("invalid read marker"))?
-        {
-            filter.insert("_id", doc! { "$gt": bin(marker.as_uuid()) });
-        }
-        filter
-    };
-    let unread_count = db
-        .collection::<Document>("messages")
-        .count_documents(unread_filter)
-        .session(&mut *session)
-        .await?;
-    let title = match conv.title() {
-        Some(title) => title.as_str().to_owned(),
-        None => {
-            let peer = db
-                .collection::<Document>("conversation_members")
-                .find_one(
-                    doc! { "conversation_id": &key, "user_id": { "$ne": bin(actor.as_uuid()) } },
-                )
-                .session(&mut *session)
-                .await?;
-            let peer = match peer {
-                Some(peer) => peer,
-                None => db
-                    .collection::<Document>("conversation_members")
-                    .find_one(doc! { "conversation_id": &key, "user_id": bin(actor.as_uuid()) })
-                    .session(&mut *session)
-                    .await?
-                    .ok_or_else(|| mongodb::error::Error::custom("direct participant missing"))?,
-            };
-            let peer_id = UserId::try_from(
-                uuid(&peer, "user_id")
-                    .map_err(|_| mongodb::error::Error::custom("invalid peer ID"))?,
-            )
-            .map_err(|_| mongodb::error::Error::custom("invalid peer ID"))?;
-            let user = db
-                .collection::<Document>("users")
-                .find_one(doc! { "_id": bin(peer_id.as_uuid()) })
-                .session(session)
-                .await?
-                .ok_or_else(|| mongodb::error::Error::custom("direct peer user missing"))?;
-            username(&user, "username")
-                .map_err(|_| mongodb::error::Error::custom("invalid peer username"))?
-                .to_string()
-        }
-    };
-    let activity = last_message
-        .as_ref()
-        .map(|m| m.created_at())
-        .unwrap_or(conv.updated_at())
-        .max(conv.updated_at());
-    Ok(ConversationSummary {
-        conversation: conv,
-        title,
-        membership: member,
-        unread_count,
-        last_message,
-        activity_at: activity,
-    })
-}
-async fn authorized_member_summary(
-    db: &mongodb::Database,
-    session: &mut mongodb::ClientSession,
-    conversation: ConversationId,
-    target: UserId,
-) -> mongodb::error::Result<Option<ConversationMemberSummary>> {
-    let member = db.collection::<Document>("conversation_members").find_one(doc! { "conversation_id": bin(conversation.as_uuid()), "user_id": bin(target.as_uuid()) }).session(&mut *session).await?;
-    let Some(member) = member else {
-        return Ok(None);
-    };
-    let user = db
-        .collection::<Document>("users")
-        .find_one(doc! { "_id": bin(target.as_uuid()) })
-        .session(&mut *session)
         .await?
-        .ok_or_else(|| mongodb::error::Error::custom("member user missing"))?;
-    let member = conversations::read_member(&member)
-        .map_err(|_| mongodb::error::Error::custom("invalid membership"))?;
-    Ok(Some(ConversationMemberSummary {
-        user: UserSummary {
-            id: target,
-            username: username(&user, "username")
-                .map_err(|_| mongodb::error::Error::custom("invalid username"))?,
-        },
-        role: member.role(),
-        joined_at: member.joined_at(),
-    }))
+        .is_none()
+    {
+        return Ok(Outcome::NotMember);
+    }
+    Ok(Outcome::Found(()))
+}
+
+fn user_lookup(local_field: &str, output: &str) -> Document {
+    doc! { "$lookup": { "from": "users", "localField": local_field, "foreignField": "_id", "as": output } }
+}
+fn lookahead(limit: PageLimit) -> i64 {
+    limit.get() as i64 + 1
+}
+
+// Activity is derived, so the server must inspect each matching conversation's
+// latest indexed message. Cursor/order/limit still execute before enrichment;
+// only a page plus lookahead crosses the wire, with no per-row round trips.
+fn inbox_pipeline(
+    actor: UserId,
+    before: Option<(i64, ConversationId)>,
+    limit: i64,
+    conversation: Option<ConversationId>,
+) -> Vec<Document> {
+    let mut filter = doc! { "user_id": bin(actor.as_uuid()) };
+    if let Some(conversation) = conversation {
+        filter.insert("conversation_id", bin(conversation.as_uuid()));
+    }
+    let mut pipeline = vec![
+        doc! { "$match": filter },
+        doc! { "$lookup": { "from": "conversations", "localField": "conversation_id", "foreignField": "_id", "as": "conversation" } },
+        doc! { "$set": { "conversation": { "$first": "$conversation" } } },
+        doc! { "$lookup": { "from": "messages", "let": { "conversation": "$conversation_id" }, "pipeline": [
+            { "$match": { "$expr": { "$eq": ["$conversation_id", "$$conversation"] } } },
+            { "$sort": { "_id": -1 } }, { "$limit": 1 }
+        ], "as": "last" } },
+        doc! { "$set": { "activity_at": { "$max": ["$conversation.updated_at", { "$first": "$last.created_at" }] } } },
+    ];
+    if let Some((at, id)) = before {
+        pipeline.push(doc! { "$match": { "$or": [
+            { "activity_at": { "$lt": at } },
+            { "activity_at": at, "conversation_id": { "$lt": bin(id.as_uuid()) } }
+        ] } });
+    }
+    pipeline.extend([
+        doc! { "$sort": { "activity_at": -1, "conversation_id": -1 } },
+        doc! { "$limit": limit },
+        doc! { "$lookup": { "from": "messages", "let": { "conversation": "$conversation_id", "marker": "$last_read_message_id" }, "pipeline": [
+            { "$match": { "sender_id": { "$ne": bin(actor.as_uuid()) }, "deleted_at": Bson::Null, "$expr": { "$and": [
+                { "$eq": ["$conversation_id", "$$conversation"] },
+                { "$or": [{ "$eq": ["$$marker", Bson::Null] }, { "$gt": ["$_id", "$$marker"] }] }
+            ] } } }, { "$count": "count" }
+        ], "as": "unread" } },
+        // Prefer the other participant; a self-Direct falls back to the actor.
+        doc! { "$lookup": { "from": "conversation_members", "let": { "conversation": "$conversation_id", "kind": "$conversation.kind" }, "pipeline": [
+            { "$match": { "$expr": { "$and": [{ "$eq": ["$conversation_id", "$$conversation"] }, { "$eq": ["$$kind", "direct"] }] } } },
+            { "$set": { "is_actor": { "$eq": ["$user_id", bin(actor.as_uuid())] } } },
+            { "$sort": { "is_actor": 1, "user_id": 1 } }, { "$limit": 1 }
+        ], "as": "peer" } },
+        user_lookup("peer.user_id", "peer_user"),
+    ]);
+    pipeline
+}
+
+async fn summaries(
+    db: &mongodb::Database,
+    session: &mut mongodb::ClientSession,
+    pipeline: Vec<Document>,
+) -> Result<Vec<ConversationSummary>> {
+    let mut cursor = db
+        .collection::<Document>("conversation_members")
+        .aggregate(pipeline)
+        .session(&mut *session)
+        .await?;
+    let mut records = Vec::new();
+    while let Some(record) = cursor.next(&mut *session).await.transpose()? {
+        records.push(record);
+    }
+    let last_records = records
+        .iter()
+        .map(|record| first(record, "last").map(|last| last.cloned()))
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .flatten()
+        .collect();
+    let mut last_messages = messages::views(db, session, last_records)
+        .await?
+        .into_iter();
+    records
+        .into_iter()
+        .map(|record| {
+            let conversation = conversations::read_conversation(embedded(&record, "conversation")?)
+                .map_err(|_| invalid("invalid conversation"))?;
+            let membership =
+                conversations::read_member(&record).map_err(|_| invalid("invalid membership"))?;
+            let last_message = if first(&record, "last")?.is_some() {
+                Some(
+                    last_messages
+                        .next()
+                        .ok_or_else(|| invalid("last message missing"))?,
+                )
+            } else {
+                None
+            };
+            let title = match conversation.title() {
+                Some(title) => title.as_str().to_owned(),
+                None => user(
+                    first(&record, "peer_user")?.ok_or_else(|| invalid("direct peer missing"))?,
+                )?
+                .username
+                .to_string(),
+            };
+            let unread_count = first(&record, "unread")?
+                .map(|count| {
+                    match count.get("count") {
+                        Some(Bson::Int32(n)) => u64::try_from(*n),
+                        Some(Bson::Int64(n)) => u64::try_from(*n),
+                        _ => return Err(invalid("invalid unread count")),
+                    }
+                    .map_err(|_| invalid("invalid unread count"))
+                })
+                .transpose()?
+                .unwrap_or(0);
+            let activity_at = last_message
+                .as_ref()
+                .map(|m| m.created_at())
+                .unwrap_or(conversation.updated_at())
+                .max(conversation.updated_at());
+            Ok(ConversationSummary {
+                conversation,
+                title,
+                membership,
+                unread_count,
+                last_message,
+                activity_at,
+            })
+        })
+        .collect()
 }
 
 impl MessagingQueryStore for MongoDbStorage {
@@ -226,88 +255,57 @@ impl MessagingQueryStore for MongoDbStorage {
         actor: UserId,
         conversation: ConversationId,
         target: UserId,
-    ) -> Result<Outcome<Option<ConversationMemberSummary>>, QueryStoreError> {
+    ) -> std::result::Result<Outcome<Option<ConversationMemberSummary>>, QueryStoreError> {
         let db = self.database();
-        let result = transactions::run(&self.client, true, async move |session| {
+        transactions::run(&self.client, true, async move |session| {
             match authorized(&db, session, actor, conversation).await? {
-                None => return Ok((0_u8, None)),
-                Some(None) => return Ok((1, None)),
-                Some(Some(_)) => (),
+                Outcome::ConversationNotFound => return Ok(Outcome::ConversationNotFound),
+                Outcome::NotMember => return Ok(Outcome::NotMember),
+                Outcome::Found(()) => (),
             }
-            Ok((
-                2,
-                authorized_member_summary(&db, session, conversation, target).await?,
-            ))
-        })
-        .await
-        .map_err(db_error)?;
-        Ok(match result {
-            (0, _) => Outcome::ConversationNotFound,
-            (1, _) => Outcome::NotMember,
-            (_, member) => Outcome::Found(member),
-        })
+            let mut cursor = db.collection::<Document>("conversation_members").aggregate(vec![
+                doc! { "$match": { "conversation_id": bin(conversation.as_uuid()), "user_id": bin(target.as_uuid()) } },
+                user_lookup("user_id", "user"),
+            ]).session(&mut *session).await?;
+            Ok(Outcome::Found(cursor.next(&mut *session).await.transpose()?.as_ref().map(member_summary).transpose()?))
+        }).await.map_err(db_error)
     }
-    async fn find_users(&self, name: &Username) -> Result<Vec<UserSummary>, QueryStoreError> {
-        let doc = self
-            .database()
+    async fn find_users(
+        &self,
+        name: &Username,
+    ) -> std::result::Result<Vec<UserSummary>, QueryStoreError> {
+        self.database()
             .collection::<Document>("users")
             .find_one(doc! { "username": name.as_str(), "disabled_at": Bson::Null })
             .await
-            .map_err(db_error)?;
-        let Some(doc) = doc else {
-            return Ok(Vec::new());
-        };
-        Ok(vec![UserSummary {
-            id: UserId::try_from(uuid(&doc, "_id")?).map_err(|_| bad("invalid user ID"))?,
-            username: username(&doc, "username")?,
-        }])
+            .map_err(db_error)?
+            .as_ref()
+            .map(user)
+            .transpose()
+            .map(|user| user.into_iter().collect())
+            .map_err(db_error)
     }
     async fn list_conversations(
         &self,
         actor: UserId,
         before: Option<ConversationBoundary>,
         limit: PageLimit,
-    ) -> Result<QuerySlice<ConversationSummary>, QueryStoreError> {
+    ) -> std::result::Result<QuerySlice<ConversationSummary>, QueryStoreError> {
         let db = self.database();
-        let result = transactions::run(&self.client, true, async move |session| {
-            let mut cursor = db
-                .collection::<Document>("conversation_members")
-                .find(doc! { "user_id": bin(actor.as_uuid()) })
-                .session(&mut *session)
-                .await?;
-            let mut summaries = Vec::new();
-            while let Some(member) = cursor.next(&mut *session).await.transpose()? {
-                let conversation_id = uuid(&member, "conversation_id")
-                    .map_err(|_| mongodb::error::Error::custom("invalid conversation ID"))?;
-                let conv = db
-                    .collection::<Document>("conversations")
-                    .find_one(doc! { "_id": bin(conversation_id) })
-                    .session(&mut *session)
-                    .await?
-                    .ok_or_else(|| {
-                        mongodb::error::Error::custom("membership conversation missing")
-                    })?;
-                summaries.push(summary(&db, session, actor, conv, member).await?);
-            }
-            Ok(summaries)
+        let before = before
+            .map(|b| micros(b.activity_at).map(|at| (at, b.conversation_id)))
+            .transpose()
+            .map_err(db_error)?;
+        let mut items = transactions::run(&self.client, true, async move |session| {
+            summaries(
+                &db,
+                session,
+                inbox_pipeline(actor, before, lookahead(limit), None),
+            )
+            .await
         })
         .await
         .map_err(db_error)?;
-        let mut items: Vec<_> = result
-            .into_iter()
-            .filter(|summary| {
-                before.is_none_or(|b| {
-                    summary.activity_at < b.activity_at
-                        || (summary.activity_at == b.activity_at
-                            && summary.conversation.id() < b.conversation_id)
-                })
-            })
-            .collect();
-        items.sort_by(|a, b| {
-            b.activity_at
-                .cmp(&a.activity_at)
-                .then_with(|| b.conversation.id().cmp(&a.conversation.id()))
-        });
         let has_more = items.len() > limit.get();
         items.truncate(limit.get());
         Ok(QuerySlice { items, has_more })
@@ -316,20 +314,27 @@ impl MessagingQueryStore for MongoDbStorage {
         &self,
         actor: UserId,
         conversation: ConversationId,
-    ) -> Result<Outcome<ConversationSummary>, QueryStoreError> {
+    ) -> std::result::Result<Outcome<ConversationSummary>, QueryStoreError> {
         let db = self.database();
-        let result = transactions::run(&self.client, true, async move |session| {
-            let Some(conv) = db.collection::<Document>("conversations").find_one(doc! { "_id": bin(conversation.as_uuid()) }).session(&mut *session).await? else { return Ok((0_u8, None)); };
-            let member = db.collection::<Document>("conversation_members").find_one(doc! { "conversation_id": bin(conversation.as_uuid()), "user_id": bin(actor.as_uuid()) }).session(&mut *session).await?;
-            let Some(member) = member else { return Ok((1, None)); };
-            Ok((2, Some(summary(&db, session, actor, conv, member).await?)))
-        }).await.map_err(db_error)?;
-        Ok(match result {
-            (0, _) => Outcome::ConversationNotFound,
-            (1, _) => Outcome::NotMember,
-            (_, Some(value)) => Outcome::Found(value),
-            _ => return Err(bad("summary result missing")),
+        transactions::run(&self.client, true, async move |session| {
+            match authorized(&db, session, actor, conversation).await? {
+                Outcome::ConversationNotFound => return Ok(Outcome::ConversationNotFound),
+                Outcome::NotMember => return Ok(Outcome::NotMember),
+                Outcome::Found(()) => (),
+            }
+            Ok(Outcome::Found(
+                summaries(
+                    &db,
+                    session,
+                    inbox_pipeline(actor, None, 1, Some(conversation)),
+                )
+                .await?
+                .pop()
+                .ok_or_else(|| invalid("summary missing"))?,
+            ))
         })
+        .await
+        .map_err(db_error)
     }
     async fn list_conversation_members(
         &self,
@@ -337,78 +342,44 @@ impl MessagingQueryStore for MongoDbStorage {
         conversation: ConversationId,
         after: Option<MemberBoundary>,
         limit: PageLimit,
-    ) -> Result<Outcome<QuerySlice<ConversationMemberSummary>>, QueryStoreError> {
+    ) -> std::result::Result<Outcome<QuerySlice<ConversationMemberSummary>>, QueryStoreError> {
         let db = self.database();
-        let result = transactions::run(&self.client, true, async move |session| {
-            let key = bin(conversation.as_uuid());
-            if db
-                .collection::<Document>("conversations")
-                .find_one(doc! { "_id": &key })
-                .session(&mut *session)
-                .await?
-                .is_none()
-            {
-                return Ok((0_u8, Vec::new()));
-            }
-            if db
-                .collection::<Document>("conversation_members")
-                .find_one(doc! { "conversation_id": &key, "user_id": bin(actor.as_uuid()) })
-                .session(&mut *session)
-                .await?
-                .is_none()
-            {
-                return Ok((1, Vec::new()));
+        let mut filter = doc! { "conversation_id": bin(conversation.as_uuid()) };
+        if let Some(boundary) = after {
+            let at = micros(boundary.joined_at).map_err(db_error)?;
+            filter.insert(
+                "$or",
+                vec![
+                    doc! { "joined_at": { "$gt": at } },
+                    doc! { "joined_at": at, "user_id": { "$gt": bin(boundary.user_id.as_uuid()) } },
+                ],
+            );
+        }
+        transactions::run(&self.client, true, async move |session| {
+            match authorized(&db, session, actor, conversation).await? {
+                Outcome::ConversationNotFound => return Ok(Outcome::ConversationNotFound),
+                Outcome::NotMember => return Ok(Outcome::NotMember),
+                Outcome::Found(()) => (),
             }
             let mut cursor = db
                 .collection::<Document>("conversation_members")
-                .find(doc! { "conversation_id": &key })
+                .aggregate(vec![
+                    doc! { "$match": filter.clone() },
+                    doc! { "$sort": { "joined_at": 1, "user_id": 1 } },
+                    doc! { "$limit": lookahead(limit) },
+                    user_lookup("user_id", "user"),
+                ])
                 .session(&mut *session)
                 .await?;
-            let mut values = Vec::new();
-            while let Some(member) = cursor.next(&mut *session).await.transpose()? {
-                let user = UserId::try_from(
-                    uuid(&member, "user_id")
-                        .map_err(|_| mongodb::error::Error::custom("invalid user ID"))?,
-                )
-                .map_err(|_| mongodb::error::Error::custom("invalid user ID"))?;
-                if let Some(summary) =
-                    authorized_member_summary(&db, session, conversation, user).await?
-                {
-                    values.push(summary);
-                }
+            let mut items = Vec::new();
+            while let Some(record) = cursor.next(&mut *session).await.transpose()? {
+                items.push(member_summary(&record)?);
             }
-            Ok((2, values))
+            let has_more = items.len() > limit.get();
+            items.truncate(limit.get());
+            Ok(Outcome::Found(QuerySlice { items, has_more }))
         })
         .await
-        .map_err(db_error)?;
-        if result.0 == 0 {
-            return Ok(Outcome::ConversationNotFound);
-        }
-        if result.0 == 1 {
-            return Ok(Outcome::NotMember);
-        }
-        let boundary = after
-            .map(|b| micros(b.joined_at).map(|t| (t, b.user_id)))
-            .transpose()?;
-        let mut items = result
-            .1
-            .into_iter()
-            .filter(|item| {
-                boundary.is_none_or(|(at, user)| {
-                    item.joined_at.unix_timestamp_nanos().div_euclid(1000) > i128::from(at)
-                        || (item.joined_at.unix_timestamp_nanos().div_euclid(1000)
-                            == i128::from(at)
-                            && item.user.id > user)
-                })
-            })
-            .collect::<Vec<_>>();
-        items.sort_by(|a, b| {
-            a.joined_at
-                .cmp(&b.joined_at)
-                .then_with(|| a.user.id.cmp(&b.user.id))
-        });
-        let has_more = items.len() > limit.get();
-        items.truncate(limit.get());
-        Ok(Outcome::Found(QuerySlice { items, has_more }))
+        .map_err(db_error)
     }
 }

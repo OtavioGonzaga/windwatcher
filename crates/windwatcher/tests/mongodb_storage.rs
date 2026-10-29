@@ -36,7 +36,23 @@ async fn identity_and_session_contracts_on_disposable_database() {
             storage.migration_status().await.unwrap().current_version(),
             None
         );
-        storage.migrate().await.unwrap();
+        let second = MongoDbStorage::connect(MongoDbStorageOptions::new(&url, &database))
+            .await
+            .unwrap();
+        let (first_result, second_result) = tokio::join!(storage.migrate(), second.migrate());
+        first_result.unwrap();
+        second_result.unwrap();
+        assert!(storage.migration_status().await.unwrap().is_current());
+        assert!(second.migration_status().await.unwrap().is_current());
+        assert_eq!(
+            client
+                .database(&database)
+                .collection::<mongodb::bson::Document>("_windwatcher_migrations")
+                .count_documents(mongodb::bson::doc! {})
+                .await
+                .unwrap(),
+            4
+        );
         storage.migrate().await.unwrap();
         assert!(storage.check_schema().await.unwrap().is_current());
 
@@ -129,6 +145,20 @@ async fn identity_and_session_contracts_on_disposable_database() {
             | windwatcher::StartDirectStoreOutcome::Existing(value) => value.id(),
         };
         assert_eq!(left_id, right_id);
+        let command_left = User::new(UserId::new(), "command_direct_left".parse().unwrap(), now);
+        let command_right = User::new(UserId::new(), "command_direct_right".parse().unwrap(), now);
+        for user in [&command_left, &command_right] {
+            storage.create_local_user(user, &hash).await.unwrap();
+        }
+        direct_command_race(
+            &storage,
+            &second,
+            command_left.id(),
+            command_right.id(),
+            now,
+        )
+        .await;
+        replay_after_conversation_deletion(&storage, command_owner.id(), now).await;
 
         let left = User::new(UserId::new(), "race_username".parse().unwrap(), now);
         let right = User::new(UserId::new(), "race_username".parse().unwrap(), now);
@@ -148,4 +178,103 @@ async fn identity_and_session_contracts_on_disposable_database() {
     drop(storage);
     client.database(&database).drop().await.unwrap();
     result.unwrap();
+}
+
+async fn direct_command_race(
+    first: &MongoDbStorage,
+    second: &MongoDbStorage,
+    actor: UserId,
+    peer: UserId,
+    now: time::OffsetDateTime,
+) {
+    use windwatcher::*;
+    for keyed in [false, true] {
+        // A fresh pair for each case, including self-Direct, cannot already
+        // have an Existing result from another contract.
+        let peer = if keyed { actor } else { peer };
+        let command = || ConversationCreateCommand {
+            conversation: Conversation::new_direct(ConversationId::new(), now),
+            actor,
+            participants: vec![peer],
+        };
+        let (a, b) = (command(), command());
+        let key = keyed.then(|| IdempotencyKey::new("direct-race").unwrap());
+        let (a, b) = tokio::join!(
+            first.create_conversation_command(&a, key.as_ref(), now),
+            second.create_conversation_command(&b, key.as_ref(), now),
+        );
+        let (a, b) = (a.unwrap(), b.unwrap());
+        assert_eq!(a.value, b.value);
+        let expected = if keyed {
+            CreateDisposition::Replayed
+        } else {
+            CreateDisposition::Existing
+        };
+        assert!(
+            matches!((a.disposition, b.disposition), (CreateDisposition::Created, other) | (other, CreateDisposition::Created) if other == expected)
+        );
+    }
+}
+
+async fn replay_after_conversation_deletion(
+    storage: &MongoDbStorage,
+    actor: UserId,
+    now: time::OffsetDateTime,
+) {
+    use windwatcher::*;
+    let conversation = Conversation::new_group(
+        ConversationId::new(),
+        GroupTitle::new("replay deletion").unwrap(),
+        now,
+    );
+    storage
+        .create_group(&conversation, actor, &[])
+        .await
+        .unwrap();
+    let message = Message::new(
+        MessageId::new(),
+        conversation.id(),
+        actor,
+        MessageContent::new("persisted").unwrap(),
+        None,
+        now,
+    )
+    .unwrap();
+    let key = IdempotencyKey::new("deleted-conversation-message").unwrap();
+    storage
+        .send_message_command(&message, Some(&key), now)
+        .await
+        .unwrap();
+    assert!(matches!(
+        storage
+            .leave_group(conversation.id(), actor, now)
+            .await
+            .unwrap(),
+        LeaveStoreOutcome::ConversationDeleted
+    ));
+    assert!(matches!(
+        storage
+            .send_message_command(&message, Some(&key), now)
+            .await,
+        Err(CreateCommandError::ResultUnavailable)
+    ));
+    assert!(matches!(
+        storage.send_message_command(&message, None, now).await,
+        Err(CreateCommandError::ConversationNotFound)
+    ));
+    let changed = Message::new(
+        MessageId::new(),
+        conversation.id(),
+        actor,
+        MessageContent::new("changed input").unwrap(),
+        None,
+        now,
+    )
+    .unwrap();
+    assert!(matches!(
+        storage
+            .send_message_command(&changed, Some(&key), now)
+            .await,
+        Err(CreateCommandError::KeyReused)
+    ));
 }

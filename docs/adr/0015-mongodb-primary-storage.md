@@ -6,9 +6,10 @@
 ## Context
 
 Windwatcher exposes six primary-storage ports and already offers relational
-adapters. MongoDB can support these semantics only when transactions are
-available; standalone deployments and `mongos` cannot provide the required
-atomic cross-collection updates and consistent read snapshots.
+adapters. These semantics require transactions, so standalone MongoDB deployments
+are unsuitable. MongoDB supports multi-document transactions and cross-shard
+snapshot reads on sharded clusters. Supporting those deployments also requires
+additional operational validation beyond the scope of this first adapter.
 
 ## Decision
 
@@ -17,6 +18,17 @@ server `storage.provider`. Require a replica set and reject unsupported topology
 during connection. Keep migrations explicit. Store identifiers as BSON UUID
 binary subtype 4 and timestamps as signed Unix microseconds. Perform multi-record
 mutations in transactions, using snapshot reads and majority writes.
+Sharded clusters (`mongos`) are deliberately unsupported in this version, not
+inherently incapable of providing these guarantees.
+
+Membership/role changes and message mutations write the same private conversation
+revision before authorizing. Snapshot reads alone do not serialize authorization
+against removal or demotion; write conflicts retry against a new snapshot.
+
+Each migration executes its own ordered commands before recording its version.
+Checksums cover those executable command files, and a unique version index
+protects the ledger against concurrent migrators. DDL steps are restartable
+because MongoDB DDL cannot be included in these application transactions.
 
 The MongoDB adapter is primary storage only. Queue selection and queue
 transactions remain independent; this decision does not add a MongoDB queue.

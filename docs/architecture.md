@@ -56,9 +56,8 @@ HS256 JWT adapter implements the access-token port, but JWT is not required by
 embedding applications. The optional `sqlite`, `postgres`, `mysql`, and
 `mongodb` features provide official persistence adapters; `MongoDbStorage`
 implements all six persistence ports and requires a transaction-capable replica
-set. Primary persistence remains independent of queue selection.
-while keeping SQLx and its Tokio runtime requirement at the infrastructure
-boundary.
+set. Primary persistence remains independent of queue selection. SQLx, MongoDB's
+driver, and their Tokio requirements stay at the infrastructure boundary.
 
 The reusable crate also owns the portable durable-job envelope, enqueue use case
 and `QueueStore` port. Optional `queue-sqlite`, `queue-postgres`, `queue-mysql` and

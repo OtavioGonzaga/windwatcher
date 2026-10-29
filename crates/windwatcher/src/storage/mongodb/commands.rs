@@ -1,4 +1,5 @@
 use mongodb::{
+    ClientSession, Database,
     bson::{Binary, Bson, Document, doc, spec::BinarySubtype},
     error::ErrorKind,
 };
@@ -7,11 +8,62 @@ use uuid::Uuid;
 
 use super::{MongoDbStorage, conversations, messages, transactions};
 use crate::{
-    ConversationCreateCommand, ConversationKind, CreateCommandError as Error, CreateCommandStore,
-    CreateDisposition as Disposition, CreateResult, IdempotencyKey, Message, MessageId,
-    MessageView, QueryStoreError, UserId, message_request_fingerprint,
+    ConversationCreateCommand, ConversationId, ConversationKind, CreateCommandError as Error,
+    CreateCommandStore, CreateDisposition as Disposition, CreateResult, IdempotencyKey, Message,
+    MessageId, MessageView, QueryStoreError, UserId, message_request_fingerprint,
 };
 
+type Result<T> = mongodb::error::Result<T>;
+
+#[derive(Clone, Copy)]
+enum Rejected {
+    KeyReused,
+    ResultUnavailable,
+    NotMember,
+    ConversationNotFound,
+    ParticipantUnavailable,
+    ReplyTargetUnavailable,
+}
+impl From<Rejected> for mongodb::error::Error {
+    fn from(value: Rejected) -> Self {
+        Self::custom(value)
+    }
+}
+fn invalid(message: &'static str) -> mongodb::error::Error {
+    mongodb::error::Error::custom(message)
+}
+fn command_error(error: mongodb::error::Error) -> Error {
+    if let ErrorKind::Custom(value) = error.kind.as_ref() {
+        if let Some(rejected) = value.downcast_ref::<Rejected>() {
+            return match rejected {
+                Rejected::KeyReused => Error::KeyReused,
+                Rejected::ResultUnavailable => Error::ResultUnavailable,
+                Rejected::NotMember => Error::NotMember,
+                Rejected::ConversationNotFound => Error::ConversationNotFound,
+                Rejected::ParticipantUnavailable => Error::ParticipantUnavailable,
+                Rejected::ReplyTargetUnavailable => Error::ReplyTargetUnavailable,
+            };
+        }
+        if value.is::<UserId>() {
+            return Error::ParticipantUnavailable;
+        }
+    }
+    Error::Storage(
+        if error.contains_label("TransientTransactionError")
+            || error.contains_label("UnknownTransactionCommitResult")
+            || matches!(
+                error.kind.as_ref(),
+                ErrorKind::Io(_)
+                    | ErrorKind::ConnectionPoolCleared { .. }
+                    | ErrorKind::ServerSelection { .. }
+            )
+        {
+            QueryStoreError::Unavailable(Box::new(error))
+        } else {
+            QueryStoreError::Unexpected(Box::new(error))
+        },
+    )
+}
 fn bin(id: Uuid) -> Binary {
     Binary {
         subtype: BinarySubtype::Uuid,
@@ -24,90 +76,246 @@ fn hash(bytes: [u8; 32]) -> Binary {
         bytes: bytes.to_vec(),
     }
 }
-fn micros(value: OffsetDateTime) -> Result<i64, Error> {
-    i64::try_from(value.unix_timestamp_nanos().div_euclid(1_000)).map_err(|_| {
-        Error::Storage(QueryStoreError::Unexpected(Box::new(
-            std::io::Error::other("timestamp out of range"),
-        )))
-    })
+fn micros(value: OffsetDateTime) -> Result<i64> {
+    i64::try_from(value.unix_timestamp_nanos().div_euclid(1_000))
+        .map_err(|_| invalid("timestamp out of range"))
 }
-fn db_error(error: mongodb::error::Error) -> Error {
-    if error.contains_label("TransientTransactionError")
-        || error.contains_label("UnknownTransactionCommitResult")
-        || matches!(
-            error.kind.as_ref(),
-            ErrorKind::Io(_)
-                | ErrorKind::ConnectionPoolCleared { .. }
-                | ErrorKind::ServerSelection { .. }
-        )
-    {
-        Error::Storage(QueryStoreError::Unavailable(Box::new(error)))
-    } else {
-        Error::Storage(QueryStoreError::Unexpected(Box::new(error)))
-    }
-}
-fn bad(s: &'static str) -> Error {
-    Error::Storage(QueryStoreError::Unexpected(Box::new(
-        std::io::Error::other(s),
-    )))
-}
-fn key_filter(actor: UserId, operation: &str, scope: Uuid, key: &IdempotencyKey) -> Document {
-    doc! { "actor_id": bin(actor.as_uuid()), "operation": operation, "scope_id": bin(scope), "key_hash": hash(key.hash()) }
-}
-#[allow(clippy::too_many_arguments)] // Parameters encode the compound idempotency key and candidate.
-async fn replay_record(
-    db: &mongodb::Database,
-    session: &mut mongodb::ClientSession,
-    actor: UserId,
-    operation: &str,
-    scope: Uuid,
-    key: &IdempotencyKey,
-    request_hash: [u8; 32],
+
+// Keeps reservation and final resource mapping in the caller's transaction.
+struct Record {
+    filter: Document,
+    fingerprint: [u8; 32],
     candidate: Uuid,
     now: i64,
-) -> mongodb::error::Result<Option<Uuid>> {
-    let filter = key_filter(actor, operation, scope, key);
-    if let Some(record) = db
-        .collection::<Document>("idempotency_records")
-        .find_one(filter.clone())
-        .session(&mut *session)
-        .await?
-    {
-        if record
-            .get_i64("expires_at")
-            .map_err(|_| mongodb::error::Error::custom("invalid idempotency expiry"))?
-            > now
-        {
-            let stored = record
-                .get_binary_generic("request_hash")
-                .map_err(|_| mongodb::error::Error::custom("invalid request hash"))?;
-            if stored.as_slice() != request_hash {
-                return Err(mongodb::error::Error::custom("IDEMPOTENCY_KEY_REUSED"));
-            }
-            let Some(Bson::Binary(resource)) = record.get("resource_id") else {
-                return Err(mongodb::error::Error::custom("invalid resource ID"));
-            };
-            if resource.subtype != BinarySubtype::Uuid || resource.bytes.len() != 16 {
-                return Err(mongodb::error::Error::custom("invalid resource UUID"));
-            }
-            return Ok(Some(Uuid::from_slice(&resource.bytes).map_err(|_| {
-                mongodb::error::Error::custom("invalid resource UUID")
-            })?));
-        }
-        db.collection::<Document>("idempotency_records")
-            .delete_one(filter.clone())
-            .session(&mut *session)
-            .await?;
+}
+impl Record {
+    fn conversation(
+        command: &ConversationCreateCommand,
+        key: Option<&IdempotencyKey>,
+        now: i64,
+    ) -> Option<Self> {
+        key.map(|key| Self {
+            filter: doc! { "actor_id": bin(command.actor.as_uuid()), "operation": "create_conversation_v1", "scope_id": bin(command.actor.as_uuid()), "key_hash": hash(key.hash()) },
+            fingerprint: command.fingerprint(), candidate: command.conversation.id().as_uuid(), now,
+        })
     }
-    db.collection::<Document>("idempotency_records").insert_one(doc! { "actor_id": bin(actor.as_uuid()), "operation": operation, "scope_id": bin(scope), "key_hash": hash(key.hash()), "request_hash": hash(request_hash), "resource_id": bin(candidate), "created_at": now, "expires_at": now.saturating_add(86_400_000_000_i64) }).session(session).await?;
-    Ok(None)
+    fn message(message: &Message, key: Option<&IdempotencyKey>, now: i64) -> Option<Self> {
+        key.map(|key| Self {
+            filter: doc! { "actor_id": bin(message.sender_id().as_uuid()), "operation": "send_message_v1", "scope_id": bin(message.conversation_id().as_uuid()), "key_hash": hash(key.hash()) },
+            fingerprint: message_request_fingerprint(message), candidate: message.id().as_uuid(), now,
+        })
+    }
+    async fn reserve(&self, db: &Database, session: &mut ClientSession) -> Result<Option<Uuid>> {
+        let collection = db.collection::<Document>("idempotency_records");
+        if let Some(record) = collection
+            .find_one(self.filter.clone())
+            .session(&mut *session)
+            .await?
+        {
+            let expires = record
+                .get_i64("expires_at")
+                .map_err(|_| invalid("invalid idempotency expiry"))?;
+            if expires > self.now {
+                let fingerprint = record
+                    .get_binary_generic("request_hash")
+                    .map_err(|_| invalid("invalid request hash"))?;
+                if fingerprint.len() != 32 {
+                    return Err(invalid("invalid request hash length"));
+                }
+                if fingerprint.as_slice() != self.fingerprint {
+                    return Err(Rejected::KeyReused.into());
+                }
+                let Some(Bson::Binary(resource)) = record.get("resource_id") else {
+                    return Err(invalid("invalid resource ID"));
+                };
+                if resource.subtype != BinarySubtype::Uuid || resource.bytes.len() != 16 {
+                    return Err(invalid("invalid resource UUID"));
+                }
+                return Ok(Some(
+                    Uuid::from_slice(&resource.bytes)
+                        .map_err(|_| invalid("invalid resource UUID"))?,
+                ));
+            }
+            collection
+                .delete_one(self.filter.clone())
+                .session(&mut *session)
+                .await?;
+        }
+        let mut record = self.filter.clone();
+        record.extend(doc! { "request_hash": hash(self.fingerprint), "resource_id": bin(self.candidate), "created_at": self.now, "expires_at": self.now.saturating_add(86_400_000_000_i64) });
+        collection.insert_one(record).session(session).await?;
+        Ok(None)
+    }
+    async fn finish(
+        &self,
+        db: &Database,
+        session: &mut ClientSession,
+        resource: Uuid,
+    ) -> Result<()> {
+        db.collection::<Document>("idempotency_records")
+            .update_one(
+                self.filter.clone(),
+                doc! { "$set": { "resource_id": bin(resource) } },
+            )
+            .session(session)
+            .await?;
+        Ok(())
+    }
 }
-fn duplicate_key(error: &mongodb::error::Error) -> bool {
-    matches!(error.kind.as_ref(), ErrorKind::Write(mongodb::error::WriteFailure::WriteError(write)) if write.code == 11000)
-        || matches!(error.kind.as_ref(), ErrorKind::Command(command) if command.code == 11000)
+
+async fn is_member(
+    db: &Database,
+    session: &mut ClientSession,
+    actor: UserId,
+    conversation: ConversationId,
+) -> Result<bool> {
+    Ok(db.collection::<Document>("conversation_members")
+        .find_one(doc! { "conversation_id": bin(conversation.as_uuid()), "user_id": bin(actor.as_uuid()) })
+        .session(session).await?.is_some())
 }
-fn is_marker(error: &mongodb::error::Error, marker: &str) -> bool {
-    matches!(error.kind.as_ref(), ErrorKind::Custom(value) if value.downcast_ref::<&str>() == Some(&marker))
+
+async fn create_in(
+    db: &Database,
+    session: &mut ClientSession,
+    command: &ConversationCreateCommand,
+    record: Option<&Record>,
+) -> Result<CreateResult<ConversationId>> {
+    if let Some(record) = record
+        && let Some(resource) = record.reserve(db, session).await?
+    {
+        let id = ConversationId::try_from(resource)
+            .map_err(|_| invalid("invalid conversation result"))?;
+        if !conversations::touch(db, session, id).await? {
+            return Err(Rejected::ResultUnavailable.into());
+        }
+        if !is_member(db, session, command.actor, id).await? {
+            return Err(Rejected::NotMember.into());
+        }
+        return Ok(CreateResult {
+            value: id,
+            disposition: Disposition::Replayed,
+        });
+    }
+    let (value, disposition) = match command.conversation.kind() {
+        ConversationKind::Direct => {
+            let [peer] = command.participants.as_slice() else {
+                return Err(invalid("Direct command requires exactly one peer"));
+            };
+            let (document, created) =
+                conversations::direct(db, session, &command.conversation, command.actor, *peer)
+                    .await?;
+            let conversation = conversations::read_conversation(&document)
+                .map_err(|_| invalid("invalid direct conversation"))?;
+            (
+                conversation.id(),
+                if created {
+                    Disposition::Created
+                } else {
+                    Disposition::Existing
+                },
+            )
+        }
+        ConversationKind::Group => {
+            let mut users = command.participants.clone();
+            users.push(command.actor);
+            users.sort();
+            users.dedup();
+            for user in &users {
+                if !conversations::enabled(db, session, *user).await? {
+                    return Err(Rejected::ParticipantUnavailable.into());
+                }
+            }
+            let conversation = conversations::conv_doc(&command.conversation, None)
+                .map_err(|_| invalid("invalid conversation"))?;
+            let members = users
+                .into_iter()
+                .map(|user| {
+                    conversations::member_doc(
+                        command.conversation.id(),
+                        user,
+                        if user == command.actor {
+                            "owner"
+                        } else {
+                            "member"
+                        },
+                        command.conversation.created_at(),
+                        None,
+                    )
+                    .map_err(|_| invalid("invalid membership"))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            db.collection::<Document>("conversations")
+                .insert_one(conversation)
+                .session(&mut *session)
+                .await?;
+            db.collection::<Document>("conversation_members")
+                .insert_many(members)
+                .session(&mut *session)
+                .await?;
+            (command.conversation.id(), Disposition::Created)
+        }
+    };
+    if let Some(record) = record {
+        record.finish(db, session, value.as_uuid()).await?;
+    }
+    Ok(CreateResult { value, disposition })
+}
+
+async fn send_in(
+    db: &Database,
+    session: &mut ClientSession,
+    message: &Message,
+    document: &Document,
+    record: Option<&Record>,
+) -> Result<CreateResult<MessageView>> {
+    let replay = match record {
+        Some(record) => record.reserve(db, session).await?,
+        None => None,
+    };
+    if !conversations::touch(db, session, message.conversation_id()).await? {
+        return Err(if replay.is_some() {
+            Rejected::ResultUnavailable
+        } else {
+            Rejected::ConversationNotFound
+        }
+        .into());
+    }
+    // Resolve replay before authorization, as in SQL: missing results are not
+    // re-created and are distinct from never-existing conversation requests.
+    let replay_document = if let Some(resource) = replay {
+        MessageId::try_from(resource).map_err(|_| invalid("invalid message result"))?;
+        Some(db.collection::<Document>("messages").find_one(doc! { "_id": bin(resource), "conversation_id": bin(message.conversation_id().as_uuid()) })
+            .session(&mut *session).await?.ok_or(Rejected::ResultUnavailable)?)
+    } else {
+        None
+    };
+    if !is_member(db, session, message.sender_id(), message.conversation_id()).await? {
+        return Err(Rejected::NotMember.into());
+    }
+    if let Some(document) = replay_document {
+        return Ok(CreateResult {
+            value: messages::view(db, session, document).await?,
+            disposition: Disposition::Replayed,
+        });
+    }
+    if let Some(reply) = message.reply_to_message_id() {
+        let target = db.collection::<Document>("messages").find_one(doc! { "_id": bin(reply.as_uuid()), "conversation_id": bin(message.conversation_id().as_uuid()), "deleted_at": Bson::Null })
+            .session(&mut *session).await?;
+        if target.is_none() {
+            return Err(Rejected::ReplyTargetUnavailable.into());
+        }
+    }
+    db.collection::<Document>("messages")
+        .insert_one(document.clone())
+        .session(&mut *session)
+        .await?;
+    if let Some(record) = record {
+        record.finish(db, session, message.id().as_uuid()).await?;
+    }
+    Ok(CreateResult {
+        value: messages::view(db, session, document.clone()).await?,
+        disposition: Disposition::Created,
+    })
 }
 
 impl CreateCommandStore for MongoDbStorage {
@@ -116,121 +324,52 @@ impl CreateCommandStore for MongoDbStorage {
         command: &ConversationCreateCommand,
         key: Option<&IdempotencyKey>,
         now: OffsetDateTime,
-    ) -> Result<CreateResult<crate::ConversationId>, Error> {
+    ) -> std::result::Result<CreateResult<ConversationId>, Error> {
         let db = self.database();
-        let now = micros(now)?;
-        let cmd = command.clone();
-        let key = key.cloned();
-        let candidate = cmd.conversation.id();
-        let fingerprint = cmd.fingerprint();
-        let result = transactions::run(&self.client, false, async move |session| {
-            if let Some(key) = &key
-                && let Some(existing) = replay_record(&db, session, cmd.actor, "create_conversation_v1", cmd.actor.as_uuid(), key, fingerprint, candidate.as_uuid(), now).await? {
-                    let record = db.collection::<Document>("conversations").find_one(doc! { "_id": bin(existing) }).session(&mut *session).await?;
-                    if record.is_none() { return Err(mongodb::error::Error::custom("IDEMPOTENT_RESULT_UNAVAILABLE")); }
-                    if db.collection::<Document>("conversation_members").find_one(doc! { "conversation_id": bin(existing), "user_id": bin(cmd.actor.as_uuid()) }).session(&mut *session).await?.is_none() { return Err(mongodb::error::Error::custom("ACTOR_NOT_MEMBER")); }
-                    return Ok((existing, Disposition::Replayed));
+        let now = micros(now).map_err(command_error)?;
+        // A uniqueness loser must restart the entire reservation/create with a
+        // fresh snapshot. MongoDB does not always label 11000 as transient.
+        for attempt in 0..4 {
+            let (db, command) = (db.clone(), command.clone());
+            let record = Record::conversation(&command, key, now);
+            let result = transactions::run(&self.client, false, async move |session| {
+                create_in(&db, session, &command, record.as_ref()).await
+            })
+            .await;
+            if let Err(error) = &result
+                && attempt < 3
+                && transactions::duplicate_key(error)
+            {
+                continue;
             }
-            let (id, disposition) = match cmd.conversation.kind() {
-                ConversationKind::Direct => {
-                    let [peer] = cmd.participants.as_slice() else { return Err(mongodb::error::Error::custom("invalid direct participants")); };
-                    let dkey = conversations::direct_key(cmd.actor, *peer);
-                    if let Some(existing) = db.collection::<Document>("conversations").find_one(doc! { "direct_key": dkey.clone() }).session(&mut *session).await? {
-                        let Some(Bson::Binary(stored_id)) = existing.get("_id") else { return Err(mongodb::error::Error::custom("invalid direct ID")); };
-                        if stored_id.subtype != BinarySubtype::Uuid || stored_id.bytes.len() != 16 { return Err(mongodb::error::Error::custom("invalid direct ID")); }
-                        let id = crate::ConversationId::try_from(Uuid::from_slice(&stored_id.bytes).map_err(|_| mongodb::error::Error::custom("invalid direct ID"))?).map_err(|_| mongodb::error::Error::custom("invalid direct ID"))?;
-                        (id, Disposition::Existing)
-                    } else {
-                        let mut participants = vec![cmd.actor, *peer]; participants.sort(); participants.dedup();
-                        for user in participants { if !conversations::enabled(&db, session, user).await? { return Err(mongodb::error::Error::custom("PARTICIPANT_UNAVAILABLE")); } }
-                        let conversation = conversations::conv_doc(&cmd.conversation, Some(dkey)).map_err(|_| mongodb::error::Error::custom("invalid conversation"))?;
-                        let mut members = Vec::new();
-                        for user in [cmd.actor, *peer] { if !members.iter().any(|m: &Document| m.get("user_id") == Some(&Bson::Binary(bin(user.as_uuid())))) { members.push(conversations::member_doc(candidate, user, "direct", cmd.conversation.created_at(), None).map_err(|_| mongodb::error::Error::custom("invalid membership"))?); } }
-                        db.collection::<Document>("conversations").insert_one(conversation).session(&mut *session).await?;
-                        db.collection::<Document>("conversation_members").insert_many(members).session(&mut *session).await?;
-                        (candidate, Disposition::Created)
-                    }
-                }
-                ConversationKind::Group => {
-                    let mut users = cmd.participants.clone(); users.push(cmd.actor); users.sort(); users.dedup();
-                    for user in &users { if !conversations::enabled(&db, session, *user).await? { return Err(mongodb::error::Error::custom("PARTICIPANT_UNAVAILABLE")); } }
-                    let conversation = conversations::conv_doc(&cmd.conversation, None).map_err(|_| mongodb::error::Error::custom("invalid conversation"))?;
-                    let mut members = Vec::new(); for user in users { members.push(conversations::member_doc(candidate, user, if user == cmd.actor { "owner" } else { "member" }, cmd.conversation.created_at(), None).map_err(|_| mongodb::error::Error::custom("invalid membership"))?); }
-                    db.collection::<Document>("conversations").insert_one(conversation).session(&mut *session).await?;
-                    db.collection::<Document>("conversation_members").insert_many(members).session(&mut *session).await?;
-                    (candidate, Disposition::Created)
-                }
-            };
-            if let Some(key) = &key { db.collection::<Document>("idempotency_records").update_one(key_filter(cmd.actor, "create_conversation_v1", cmd.actor.as_uuid(), key), doc! { "$set": { "resource_id": bin(id.as_uuid()) } }).session(session).await?; }
-            Ok((id.as_uuid(), disposition))
-        }).await;
-        match result {
-            Ok((id, disposition)) => Ok(CreateResult {
-                value: crate::ConversationId::try_from(id)
-                    .map_err(|_| bad("invalid conversation result"))?,
-                disposition,
-            }),
-            Err(error) if is_marker(&error, "IDEMPOTENCY_KEY_REUSED") => Err(Error::KeyReused),
-            Err(error) if is_marker(&error, "IDEMPOTENT_RESULT_UNAVAILABLE") => {
-                Err(Error::ResultUnavailable)
-            }
-            Err(error) if is_marker(&error, "ACTOR_NOT_MEMBER") => Err(Error::NotMember),
-            Err(error) if is_marker(&error, "PARTICIPANT_UNAVAILABLE") => {
-                Err(Error::ParticipantUnavailable)
-            }
-            Err(error) if duplicate_key(&error) => {
-                Err(Error::Storage(QueryStoreError::Unexpected(Box::new(error))))
-            }
-            Err(error) => Err(db_error(error)),
+            return result.map_err(command_error);
         }
+        unreachable!()
     }
     async fn send_message_command(
         &self,
         message: &Message,
         key: Option<&IdempotencyKey>,
         now: OffsetDateTime,
-    ) -> Result<CreateResult<MessageView>, Error> {
+    ) -> std::result::Result<CreateResult<MessageView>, Error> {
         let db = self.database();
-        let now = micros(now)?;
-        let m = message.clone();
-        let key = key.cloned();
-        let candidate = m.id();
-        let fingerprint = message_request_fingerprint(&m);
-        let result = transactions::run(&self.client, false, async move |session| {
-            if db.collection::<Document>("conversations").find_one(doc! { "_id": bin(m.conversation_id().as_uuid()) }).session(&mut *session).await?.is_none() { return Err(mongodb::error::Error::custom("CONVERSATION_NOT_FOUND")); }
-            if db.collection::<Document>("conversation_members").find_one(doc! { "conversation_id": bin(m.conversation_id().as_uuid()), "user_id": bin(m.sender_id().as_uuid()) }).session(&mut *session).await?.is_none() { return Err(mongodb::error::Error::custom("NOT_MEMBER")); }
-            if let Some(key) = &key
-                && let Some(existing) = replay_record(&db, session, m.sender_id(), "send_message_v1", m.conversation_id().as_uuid(), key, fingerprint, candidate.as_uuid(), now).await? {
-                    let id = MessageId::try_from(existing).map_err(|_| mongodb::error::Error::custom("invalid message ID"))?;
-                    let record = db.collection::<Document>("messages").find_one(doc! { "_id": bin(existing), "conversation_id": bin(m.conversation_id().as_uuid()) }).session(&mut *session).await?.ok_or_else(|| mongodb::error::Error::custom("IDEMPOTENT_RESULT_UNAVAILABLE"))?;
-                    let view = messages::view(&db, session, record).await?;
-                    let _ = id;
-                    return Ok((view, Disposition::Replayed));
+        let now = micros(now).map_err(command_error)?;
+        let document = messages::write_message(message).map_err(Error::Message)?;
+        for attempt in 0..4 {
+            let (db, message, document) = (db.clone(), message.clone(), document.clone());
+            let record = Record::message(&message, key, now);
+            let result = transactions::run(&self.client, false, async move |session| {
+                send_in(&db, session, &message, &document, record.as_ref()).await
+            })
+            .await;
+            if let Err(error) = &result
+                && attempt < 3
+                && transactions::duplicate_key(error)
+            {
+                continue;
             }
-            if let Some(reply) = m.reply_to_message_id() {
-                let target = db.collection::<Document>("messages").find_one(doc! { "_id": bin(reply.as_uuid()), "conversation_id": bin(m.conversation_id().as_uuid()), "deleted_at": Bson::Null }).session(&mut *session).await?;
-                if target.is_none() { return Err(mongodb::error::Error::custom("REPLY_UNAVAILABLE")); }
-            }
-            let mut record = doc! { "_id": bin(m.id().as_uuid()), "conversation_id": bin(m.conversation_id().as_uuid()), "sender_id": bin(m.sender_id().as_uuid()), "content": m.content().map(|c| Bson::String(c.as_str().to_owned())).unwrap_or(Bson::Null), "reply_to_message_id": m.reply_to_message_id().map(|id| Bson::Binary(bin(id.as_uuid()))).unwrap_or(Bson::Null), "created_at": micros(m.created_at()).map_err(|_| mongodb::error::Error::custom("invalid time"))?, "edited_at": Bson::Null, "deleted_at": Bson::Null };
-            db.collection::<Document>("messages").insert_one(record.clone()).session(&mut *session).await?;
-            if let Some(key) = &key { db.collection::<Document>("idempotency_records").update_one(key_filter(m.sender_id(), "send_message_v1", m.conversation_id().as_uuid(), key), doc! { "$set": { "resource_id": bin(m.id().as_uuid()) } }).session(&mut *session).await?; }
-            let view = messages::view(&db, session, std::mem::take(&mut record)).await?;
-            Ok((view, Disposition::Created))
-        }).await;
-        match result {
-            Ok((value, disposition)) => Ok(CreateResult { value, disposition }),
-            Err(error) if is_marker(&error, "IDEMPOTENCY_KEY_REUSED") => Err(Error::KeyReused),
-            Err(error) if is_marker(&error, "IDEMPOTENT_RESULT_UNAVAILABLE") => {
-                Err(Error::ResultUnavailable)
-            }
-            Err(error) if is_marker(&error, "CONVERSATION_NOT_FOUND") => {
-                Err(Error::ConversationNotFound)
-            }
-            Err(error) if is_marker(&error, "NOT_MEMBER") => Err(Error::NotMember),
-            Err(error) if is_marker(&error, "REPLY_UNAVAILABLE") => {
-                Err(Error::ReplyTargetUnavailable)
-            }
-            Err(error) => Err(db_error(error)),
+            return result.map_err(command_error);
         }
+        unreachable!()
     }
 }

@@ -3,6 +3,12 @@ use mongodb::{
     options::{ReadConcern, ReadPreference, SelectionCriteria, TransactionOptions, WriteConcern},
 };
 
+pub(super) fn duplicate_key(error: &mongodb::error::Error) -> bool {
+    use mongodb::error::{ErrorKind, WriteFailure};
+    matches!(error.kind.as_ref(), ErrorKind::Write(WriteFailure::WriteError(write)) if write.code == 11000)
+        || matches!(error.kind.as_ref(), ErrorKind::Command(command) if command.code == 11000)
+}
+
 pub(super) async fn run<R, F>(
     client: &Client,
     read_only: bool,

@@ -203,7 +203,9 @@ pub(super) async fn enabled(
         .await?;
     Ok(result.matched_count == 1)
 }
-async fn conversation_exists(
+// All membership/role and message mutations serialize on this private write.
+// A snapshot read alone cannot protect authorization against concurrent changes.
+pub(super) async fn touch(
     db: &mongodb::Database,
     session: &mut mongodb::ClientSession,
     conversation: ConversationId,
@@ -238,6 +240,56 @@ async fn auth_role(
         .session(session)
         .await?
         .is_some())
+}
+
+pub(super) async fn direct(
+    db: &mongodb::Database,
+    session: &mut mongodb::ClientSession,
+    conversation: &Conversation,
+    first: UserId,
+    second: UserId,
+) -> mongodb::error::Result<(Document, bool)> {
+    let key = direct_key(first, second);
+    if let Some(existing) = db
+        .collection::<Document>("conversations")
+        .find_one(doc! { "direct_key": &key })
+        .session(&mut *session)
+        .await?
+    {
+        return Ok((existing, false));
+    }
+    let mut users = vec![first, second];
+    users.sort();
+    users.dedup();
+    for user in &users {
+        if !enabled(db, session, *user).await? {
+            return Err(mongodb::error::Error::custom(*user));
+        }
+    }
+    let document = conv_doc(conversation, Some(key))
+        .map_err(|_| mongodb::error::Error::custom("invalid direct conversation"))?;
+    let members = users
+        .into_iter()
+        .map(|user| {
+            member_doc(
+                conversation.id(),
+                user,
+                "direct",
+                conversation.created_at(),
+                None,
+            )
+            .map_err(|_| mongodb::error::Error::custom("invalid direct membership"))
+        })
+        .collect::<mongodb::error::Result<Vec<_>>>()?;
+    db.collection::<Document>("conversations")
+        .insert_one(document.clone())
+        .session(&mut *session)
+        .await?;
+    db.collection::<Document>("conversation_members")
+        .insert_many(members)
+        .session(session)
+        .await?;
+    Ok((document, true))
 }
 
 impl ConversationStore for MongoDbStorage {
@@ -275,56 +327,25 @@ impl ConversationStore for MongoDbStorage {
             });
         }
         let db = self.database();
-        let key = direct_key(first, second);
-        let new_conversation = conv_doc(conversation, Some(key.clone()))?;
-        let first_member = member_doc(
-            conversation.id(),
-            first,
-            "direct",
-            conversation.created_at(),
-            None,
-        )?;
-        let mut direct_members = vec![first_member];
-        if second != first {
-            direct_members.push(member_doc(
-                conversation.id(),
-                second,
-                "direct",
-                conversation.created_at(),
-                None,
-            )?);
-        }
-        let lookup_db = db.clone();
-        let result = transactions::run(&self.client, false, async move |session| {
-            if let Some(existing) = db
-                .collection::<Document>("conversations")
-                .find_one(doc! { "direct_key": key.clone() })
-                .session(&mut *session)
-                .await?
+        let mut attempt = 0;
+        let result = loop {
+            let db = db.clone();
+            let conversation = conversation.clone();
+            let result = transactions::run(&self.client, false, async move |session| {
+                direct(&db, session, &conversation, first, second).await
+            })
+            .await;
+            if let Err(error) = &result
+                && attempt < 3
+                && transactions::duplicate_key(error)
             {
-                return Ok((Some(existing), false, None));
+                attempt += 1;
+                continue;
             }
-            let mut users = vec![first, second];
-            users.sort();
-            users.dedup();
-            for user in users {
-                if !enabled(&db, session, user).await? {
-                    return Ok((None, false, Some(user)));
-                }
-            }
-            db.collection::<Document>("conversations")
-                .insert_one(new_conversation.clone())
-                .session(&mut *session)
-                .await?;
-            db.collection::<Document>("conversation_members")
-                .insert_many(direct_members.clone())
-                .session(session)
-                .await?;
-            Ok((Some(new_conversation.clone()), true, None))
-        })
-        .await;
+            break result;
+        };
         match result {
-            Ok((Some(document), created, None)) => {
+            Ok((document, created)) => {
                 let persisted = read_conversation(&document)?;
                 Ok(if created {
                     StartDirectStoreOutcome::Created(persisted)
@@ -332,21 +353,14 @@ impl ConversationStore for MongoDbStorage {
                     StartDirectStoreOutcome::Existing(persisted)
                 })
             }
-            Ok((None, false, Some(user))) => {
-                Err(ConversationStoreError::ParticipantUnavailable(user))
-            }
-            Ok(_) => Err(bad("inconsistent direct-conversation transaction result")),
-            Err(error) if matches!(error.kind.as_ref(), ErrorKind::Write(mongodb::error::WriteFailure::WriteError(write)) if write.code == 11000) =>
+            Err(error) if matches!(error.kind.as_ref(), ErrorKind::Custom(value) if value.is::<UserId>()) =>
             {
-                let document = lookup_db
-                    .collection::<Document>("conversations")
-                    .find_one(doc! { "direct_key": direct_key(first, second) })
-                    .await
-                    .map_err(db_error)?
-                    .ok_or_else(|| bad("direct uniqueness race lost without winner"))?;
-                Ok(StartDirectStoreOutcome::Existing(read_conversation(
-                    &document,
-                )?))
+                let ErrorKind::Custom(value) = error.kind.as_ref() else {
+                    unreachable!()
+                };
+                Err(ConversationStoreError::ParticipantUnavailable(
+                    *value.downcast_ref::<UserId>().expect("checked user ID"),
+                ))
             }
             Err(error) => Err(db_error(error)),
         }
@@ -464,7 +478,7 @@ impl ConversationStore for MongoDbStorage {
         let timestamp = micros(now)?;
         let db = self.database();
         let result = transactions::run(&self.client, false, async move |session| {
-            if !conversation_exists(&db, session, conversation).await?
+            if !touch(&db, session, conversation).await?
                 || !auth_role(&db, session, conversation, actor, false).await?
             {
                 return Ok(0_u8);
@@ -526,7 +540,7 @@ impl ConversationStore for MongoDbStorage {
         let timestamp = micros(now)?;
         let db = self.database();
         let changed = transactions::run(&self.client, false, async move |session| {
-            if !conversation_exists(&db, session, conversation).await? || !auth_role(&db, session, conversation, actor, false).await? { return Ok(0_u8); }
+            if !touch(&db, session, conversation).await? || !auth_role(&db, session, conversation, actor, false).await? { return Ok(0_u8); }
             let result = db.collection::<Document>("conversation_members").delete_one(doc! { "conversation_id": id(conversation.as_uuid()), "user_id": id(member.as_uuid()), "role": { "$in": ["admin", "member"] } }).session(&mut *session).await?;
             if result.deleted_count > 0 { db.collection::<Document>("conversations").update_one(doc! { "_id": id(conversation.as_uuid()) }, doc! { "$set": { "updated_at": timestamp } }).session(session).await?; }
             Ok(if result.deleted_count > 0 { 1 } else { 2 })
@@ -557,7 +571,7 @@ impl ConversationStore for MongoDbStorage {
         let changed = transactions::run(&self.client, false, async move |session| {
             let db = db_for_transaction.clone();
             let value = value.clone();
-            if !conversation_exists(&db, session, conversation).await? || !auth_role(&db, session, conversation, actor, false).await? { return Ok(0_u8); }
+            if !touch(&db, session, conversation).await? || !auth_role(&db, session, conversation, actor, false).await? { return Ok(0_u8); }
             let filter = doc! { "conversation_id": id(conversation.as_uuid()), "user_id": id(member.as_uuid()), "role": { "$in": ["admin", "member"] } };
             let current = db.collection::<Document>("conversation_members").find_one(filter.clone()).session(&mut *session).await?;
             if current.as_ref().and_then(|doc| doc.get_str("role").ok()) == Some(value.as_str()) { return Ok(2); }
@@ -582,7 +596,7 @@ impl ConversationStore for MongoDbStorage {
         let timestamp = micros(now)?;
         let db = self.database();
         let changed = transactions::run(&self.client, false, async move |session| {
-            if !conversation_exists(&db, session, conversation).await? || !auth_role(&db, session, conversation, actor, true).await? { return Ok(0_u8); }
+            if !touch(&db, session, conversation).await? || !auth_role(&db, session, conversation, actor, true).await? { return Ok(0_u8); }
             if actor == target { return Ok(2); }
             let target_filter = doc! { "conversation_id": id(conversation.as_uuid()), "user_id": id(target.as_uuid()), "role": { "$in": ["admin", "member"] } };
             if db.collection::<Document>("conversation_members").find_one(target_filter.clone()).session(&mut *session).await?.is_none() { return Ok(2); }
@@ -607,7 +621,7 @@ impl ConversationStore for MongoDbStorage {
         let timestamp = micros(now)?;
         let db = self.database();
         let result = transactions::run(&self.client, false, async move |session| {
-            if !conversation_exists(&db, session, conversation).await? {
+            if !touch(&db, session, conversation).await? {
                 return Ok(0_u8);
             }
             let key = id(conversation.as_uuid());
@@ -686,7 +700,7 @@ impl ConversationStore for MongoDbStorage {
         let title = title.as_str().to_owned();
         let db = self.database();
         let result = transactions::run(&self.client, false, async move |session| {
-            if !conversation_exists(&db, session, conversation).await?
+            if !touch(&db, session, conversation).await?
                 || !auth_role(&db, session, conversation, actor, false).await?
             {
                 return Ok(0_u8);
