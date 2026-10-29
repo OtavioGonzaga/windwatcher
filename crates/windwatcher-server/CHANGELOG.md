@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Validate MongoDB URL syntax during `config check` and expose safe, actionable
+  unsupported-topology and invalid-migration-history diagnostics.
+
+- Add MongoDB as an independently selected primary-storage provider.
+
 - Report selected storage backends and invalid network migration histories
   accurately; ignore inactive SQLite storage paths when validating queue files.
 

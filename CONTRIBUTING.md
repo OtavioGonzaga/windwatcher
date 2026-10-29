@@ -87,6 +87,18 @@ adapter tests are explicitly ignored by default; execute them against disposable
 services using the commands in [durable jobs](docs/jobs.md#real-adapter-tests)
 before completing queue-adapter changes.
 
+MongoDB primary migrations live under `crates/windwatcher/migrations/mongodb` as
+ordered command arrays. Each version owns its executable commands and checksum;
+never edit released migrations. DDL steps must be restartable after interruption
+or concurrent execution. Changes to this adapter must also run the ignored real
+replica-set contracts and concurrency/query regressions against a disposable
+service:
+
+```bash
+WINDWATCHER_TEST_MONGODB_URL='mongodb://127.0.0.1:27018/?replicaSet=rs0' \
+  cargo test -p windwatcher --no-default-features --features mongodb -- --ignored
+```
+
 ## Documentation
 
 Keep the README concise. Put conceptual and operational documentation under

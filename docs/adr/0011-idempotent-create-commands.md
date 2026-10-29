@@ -23,7 +23,10 @@ commands: resource and record commit together under `BEGIN IMMEDIATE`. Only
 successful commands reserve keys. Existing Directs can establish a new mapping
 without being classified as replayed.
 
-Records are active while `expires_at > now`, with 24-hour retention. Matching
+Records are active while `expires_at > now`, with 24-hour retention. All
+keyed commands require `now + 24h` to fit the portable datetime domain, including
+replays; overflow is a storage error and leaves no effects. Unkeyed commands do
+not require a retention interval. Matching
 commands return the original identity and current authorized representation, not
 historical response bytes. Changed input conflicts. Physically deleted results
 remain unavailable until expiry instead of silently creating replacements.

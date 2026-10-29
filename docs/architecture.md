@@ -27,7 +27,7 @@ configuration, secret resolution, tracing, adapter selection, and operator
 workflows belong there rather than in the reusable crate.
 
 Primary persistence is selected independently from the durable job queue.
-The library provides SQLite, PostgreSQL, and MySQL adapters for its persistence
+The library provides SQLite, PostgreSQL, MySQL, and MongoDB adapters for its persistence
 ports; the official server resolves `storage.provider` and dispatches through a
 single storage facade. Migrations remain explicit operator actions.
 
@@ -53,11 +53,11 @@ Registration, authentication, and user state depend on `IdentityStore` and
 `PasswordHasher`; session creation, refresh, and revocation depend on
 `SessionStore`, `RefreshTokenProvider`, and `AccessTokenCodec`. The optional
 HS256 JWT adapter implements the access-token port, but JWT is not required by
-embedding applications. The optional `sqlite` feature provides the first
-official persistence adapter: `SqliteStorage` implements identity, session, and
-conversation and message storage ports
-while keeping SQLx and its Tokio runtime requirement at the infrastructure
-boundary.
+embedding applications. The optional `sqlite`, `postgres`, `mysql`, and
+`mongodb` features provide official persistence adapters; `MongoDbStorage`
+implements all six persistence ports and requires a transaction-capable replica
+set. Primary persistence remains independent of queue selection. SQLx, MongoDB's
+driver, and their Tokio requirements stay at the infrastructure boundary.
 
 The reusable crate also owns the portable durable-job envelope, enqueue use case
 and `QueueStore` port. Optional `queue-sqlite`, `queue-postgres`, `queue-mysql` and

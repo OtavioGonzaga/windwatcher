@@ -31,7 +31,12 @@ mod queue;
 mod queue_store;
 mod read_models;
 mod session;
-#[cfg(any(feature = "sqlite", feature = "postgres", feature = "mysql"))]
+#[cfg(any(
+    feature = "sqlite",
+    feature = "postgres",
+    feature = "mysql",
+    feature = "mongodb"
+))]
 mod storage;
 mod users;
 
@@ -129,8 +134,15 @@ pub use queue_store::{
     LeaseMutationOutcome, QueueListOptions, QueueListOptionsError, QueueMaintenanceReport,
     QueueStore, QueueStoreError, RetryFailedOutcome, RetryOutcome,
 };
-#[cfg(any(feature = "sqlite", feature = "postgres", feature = "mysql"))]
+#[cfg(any(
+    feature = "sqlite",
+    feature = "postgres",
+    feature = "mysql",
+    feature = "mongodb"
+))]
 pub use storage::MigrationStatus;
+#[cfg(feature = "mongodb")]
+pub use storage::{MongoDbStorage, MongoDbStorageError, MongoDbStorageOptions};
 #[cfg(feature = "mysql")]
 pub use storage::{MySqlStorage, MySqlStorageError, MySqlStorageOptions};
 #[cfg(feature = "postgres")]

@@ -28,28 +28,64 @@ Official adapters may use different physical representations, but must preserve
 their atomic creation, uniqueness, refresh-token rotation, and revocation
 semantics. The ports remain independent of SQLx and of any async runtime.
 
-## Official SQL adapters
+## Official persistence adapters
 
-The library provides SQLite, PostgreSQL, and MySQL implementations of all six
+The library provides SQLite, PostgreSQL, MySQL, and MongoDB implementations of all six
 ports: identity, sessions, conversations, messages, messaging queries, and
-atomic create commands. Enable `sqlite`, `postgres`, or `mysql` independently
-on the `windwatcher` crate; the official server enables all three. Selecting a
+atomic create commands. Enable `sqlite`, `postgres`, `mysql`, or `mongodb` independently
+on the `windwatcher` crate; the official server enables all four. Selecting a
 primary storage provider is independent of queue provider selection.
 
 Connections never apply migrations implicitly. Each adapter embeds its own
 forward-only migration set and exposes `migrate`, `check_schema`, and
 `migration_status` operations. The server selects its primary adapter with
-`storage.provider` (`sqlite` by default, or `postgres` / `mysql`) and the
+`storage.provider` (`sqlite` by default, or `postgres` / `mysql` / `mongodb`) and the
 explicit `windwatcher storage migrate` and `storage status` CLI commands apply
 to the selected database. PostgreSQL and MySQL URLs must target dedicated,
 pre-created databases. See [server configuration](server-configuration.md).
 
-The three adapters preserve the same application ports and shared contracts;
+The adapters preserve the same application ports and shared contracts;
 physical representations and locking strategies remain adapter-specific.
 PostgreSQL uses native UUID and bytea values; MySQL uses binary UUID/hash
 columns. Both network adapters store timestamps as signed Unix microseconds.
 
-Network message mutations lock the conversation before checking current
+MongoDB stores UUIDs as BSON binary subtype 4 and timestamps as signed Int64 Unix
+microseconds. It uses explicit versioned migrations and validates topology on
+connect: transaction-capable replica sets are required. Standalones cannot supply
+transactions; sharded clusters (`mongos`) support transactions but are deliberately
+outside this version's operational scope. Reads use snapshot transactions and primary read
+preference; writes use transactions with majority write concern. MongoDB remains
+independent from queue selection; no MongoDB queue adapter is implied.
+
+MongoDB message mutations and membership/role changes serialize through a private
+conversation revision write before authorization. A write conflict retries the
+transaction with a fresh snapshot; this does not change conversation metadata.
+Direct creation retries uniqueness races within a fresh transaction, including
+any idempotency reservation. Replay resolves the saved mapping first, so a
+physically deleted conversation/message returns `ResultUnavailable` until expiry.
+
+MongoDB membership authorization and projections validate conversation kind and
+role together: Direct permits only Direct, Group only Owner/Admin/Member.
+Incompatible persisted combinations fail as unexpected storage corruption, not
+business authorization failures. Enabled users require an explicit BSON Null
+`disabled_at`; missing, incorrectly typed or out-of-domain timestamps fail closed
+in discovery, new-session and new-membership authorization.
+
+MongoDB migrations embed ordered command files from `migrations/mongodb`; each
+step runs before its version is recorded, and checksums cover the command bytes.
+The ledger has a unique version index. The initial DDL steps can be re-run safely
+after interruption or concurrent execution. These pre-release migration checksums
+replace PR #16's original descriptive checksums; recreate disposable databases
+created by the earlier PR implementation rather than rewriting their ledger.
+
+MongoDB inbox pagination derives activity with indexed latest-message lookups,
+then applies cursor, sort, and lookahead limit in the aggregation before enriching
+the selected page. Member pagination likewise applies the boundary and limit on
+the server. Related users and reply previews are joined/batched in the same
+snapshot; round trips do not grow with page size. Derived inbox activity still
+requires server-side work proportional to the actor's conversations.
+
+SQL network message mutations lock the conversation before checking current
 membership/role and then lock the message. Membership changes use the same
 conversation lock, so committed removal or demotion cannot be bypassed by stale
 authorization. Consumer projections and multi-statement message reads use explicit

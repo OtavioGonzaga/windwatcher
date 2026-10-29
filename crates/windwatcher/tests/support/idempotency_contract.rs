@@ -409,4 +409,161 @@ pub async fn run<S: CreateCommandStore + ConversationStore + MessageStore>(
             .await
             .is_ok()
     );
+    expiry_bounds(store, actor, first.value().value, now).await;
+}
+
+// Expiration belongs to the portable datetime domain, not the (usually much
+// wider) physical integer representation. Overflow must not reserve a key or
+// leave a resource behind, and only keyed commands require an expiry.
+async fn expiry_bounds<S: CreateCommandStore + ConversationStore + MessageStore>(
+    store: &S,
+    actor: UserId,
+    conversation: ConversationId,
+    now: OffsetDateTime,
+) {
+    let max = time::Date::MAX.with_hms(23, 59, 59).unwrap().assume_utc();
+    let last_valid = max - Duration::days(1);
+    let overflow = last_valid + Duration::seconds(1);
+    for keyed_now in [overflow, max] {
+        let key =
+            IdempotencyKey::new(format!("expiry-bounds-{}", keyed_now.unix_timestamp())).unwrap();
+        let command = ConversationCreateCommand {
+            conversation: Conversation::new_group(
+                ConversationId::new(),
+                GroupTitle::new("expiry bounds").unwrap(),
+                now,
+            ),
+            actor,
+            participants: vec![],
+        };
+        assert!(matches!(
+            store
+                .create_conversation_command(&command, Some(&key), keyed_now)
+                .await,
+            Err(CreateCommandError::Storage(QueryStoreError::Unexpected(_)))
+        ));
+        assert!(
+            store
+                .find_conversation(command.conversation.id())
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            store
+                .create_conversation_command(&command, Some(&key), now)
+                .await
+                .unwrap()
+                .disposition,
+            CreateDisposition::Created
+        );
+
+        let message = Message::new(
+            MessageId::new(),
+            conversation,
+            actor,
+            MessageContent::new("expiry bounds").unwrap(),
+            None,
+            now,
+        )
+        .unwrap();
+        assert!(matches!(
+            store
+                .send_message_command(&message, Some(&key), keyed_now)
+                .await,
+            Err(CreateCommandError::Storage(QueryStoreError::Unexpected(_)))
+        ));
+        assert!(matches!(
+            store.get_message(actor, message.id()).await.unwrap(),
+            GetMessageStoreOutcome::MessageNotFound
+        ));
+        assert_eq!(
+            store
+                .send_message_command(&message, Some(&key), now)
+                .await
+                .unwrap()
+                .disposition,
+            CreateDisposition::Created
+        );
+    }
+    let message = || {
+        Message::new(
+            MessageId::new(),
+            conversation,
+            actor,
+            MessageContent::new("valid expiry").unwrap(),
+            None,
+            now,
+        )
+        .unwrap()
+    };
+    let key = IdempotencyKey::new("last-representable-expiry").unwrap();
+    let sent = store
+        .send_message_command(&message(), Some(&key), last_valid)
+        .await
+        .unwrap();
+    let replay = store
+        .send_message_command(&message(), Some(&key), max - Duration::seconds(1))
+        .await
+        .unwrap_err();
+    // Like SQL, even a replay rejects a now whose new retention interval cannot
+    // be represented; it must not silently extend the key beyond the domain.
+    assert!(matches!(
+        replay,
+        CreateCommandError::Storage(QueryStoreError::Unexpected(_))
+    ));
+    assert_eq!(sent.disposition, CreateDisposition::Created);
+    let replay = store
+        .send_message_command(&message(), Some(&key), last_valid)
+        .await
+        .unwrap();
+    assert_eq!(replay.disposition, CreateDisposition::Replayed);
+    assert_eq!(replay.value.id(), sent.value.id());
+    assert_eq!(
+        store
+            .send_message_command(&message(), None, max)
+            .await
+            .unwrap()
+            .disposition,
+        CreateDisposition::Created
+    );
+    let command = ConversationCreateCommand {
+        conversation: Conversation::new_group(
+            ConversationId::new(),
+            GroupTitle::new("last expiry").unwrap(),
+            now,
+        ),
+        actor,
+        participants: vec![],
+    };
+    assert_eq!(
+        store
+            .create_conversation_command(&command, Some(&key), last_valid)
+            .await
+            .unwrap()
+            .disposition,
+        CreateDisposition::Created
+    );
+    assert!(matches!(
+        store
+            .create_conversation_command(&command, Some(&key), max)
+            .await,
+        Err(CreateCommandError::Storage(QueryStoreError::Unexpected(_)))
+    ));
+    let unkeyed = ConversationCreateCommand {
+        conversation: Conversation::new_group(
+            ConversationId::new(),
+            GroupTitle::new("unkeyed maximum now").unwrap(),
+            now,
+        ),
+        ..command
+    };
+    assert_eq!(
+        store
+            .create_conversation_command(&unkeyed, None, max)
+            .await
+            .unwrap()
+            .disposition,
+        CreateDisposition::Created
+    );
 }

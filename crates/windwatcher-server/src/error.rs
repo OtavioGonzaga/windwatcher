@@ -63,7 +63,19 @@ impl AppError {
                     path.display()
                 )
             }
-            Self::MigrationStatus(source) => source
+            Self::Storage { source, .. } => source
+                .downcast_ref::<windwatcher::MongoDbStorageError>()
+                .and_then(|error| match error {
+                    windwatcher::MongoDbStorageError::UnsupportedTopology(message) => {
+                        Some(format!("unsupported MongoDB topology: {message}"))
+                    }
+                    windwatcher::MongoDbStorageError::Configuration(message) => {
+                        Some(format!("invalid MongoDB storage configuration: {message}"))
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| self.to_string()),
+            Self::MigrationStatus(source) | Self::Migration(source) => source
                 .downcast_ref::<windwatcher::SqliteStorageError>()
                 .and_then(|error| match error {
                     windwatcher::SqliteStorageError::InvalidMigrationHistory(message) => {
@@ -86,6 +98,16 @@ impl AppError {
                         .downcast_ref::<windwatcher::MySqlStorageError>()
                         .and_then(|error| match error {
                             windwatcher::MySqlStorageError::InvalidMigrationHistory(message) => {
+                                Some(format!("invalid database migration history: {message}"))
+                            }
+                            _ => None,
+                        })
+                })
+                .or_else(|| {
+                    source
+                        .downcast_ref::<windwatcher::MongoDbStorageError>()
+                        .and_then(|error| match error {
+                            windwatcher::MongoDbStorageError::InvalidMigrationHistory(message) => {
                                 Some(format!("invalid database migration history: {message}"))
                             }
                             _ => None,
@@ -133,6 +155,9 @@ mod tests {
             Box::new(windwatcher::MySqlStorageError::InvalidMigrationHistory(
                 "migration 1 checksum differs".into(),
             )),
+            Box::new(windwatcher::MongoDbStorageError::InvalidMigrationHistory(
+                "migration 1 checksum differs".into(),
+            )),
         ] {
             assert_eq!(
                 AppError::MigrationStatus(source).operator_message(),
@@ -146,6 +171,32 @@ mod tests {
         assert_eq!(
             connection.operator_message(),
             "failed to open PostgreSQL database"
+        );
+        let topology = AppError::Storage {
+            backend: "MongoDB",
+            source: Box::new(windwatcher::MongoDbStorageError::UnsupportedTopology(
+                "a transaction-capable replica set is required",
+            )),
+        };
+        assert_eq!(
+            topology.operator_message(),
+            "unsupported MongoDB topology: a transaction-capable replica set is required"
+        );
+        let secret = AppError::Storage {
+            backend: "MongoDB",
+            source: Box::new(windwatcher::MongoDbStorageError::Connection(Box::new(
+                std::io::Error::other("private://user:secret@host"),
+            ))),
+        };
+        assert_eq!(secret.operator_message(), "failed to open MongoDB database");
+        let invalid = AppError::Migration(Box::new(
+            windwatcher::MongoDbStorageError::InvalidMigrationHistory(
+                "duplicate migration version 1".into(),
+            ),
+        ));
+        assert_eq!(
+            invalid.operator_message(),
+            "invalid database migration history: duplicate migration version 1"
         );
     }
 }
