@@ -111,6 +111,155 @@ async fn group_limits_apply_before_ids_and_do_not_reserve_idempotency_keys() {
     );
 }
 
+#[tokio::test]
+async fn authorization_matrix_rechecks_membership_and_never_grants_moderator_editing() {
+    let f = Fixture::open().await;
+    let (owner, owner_token) = participant(&f, "matrix_owner").await;
+    let (member, member_token) = participant(&f, "matrix_member").await;
+    let (_, outsider_token) = participant(&f, "matrix_outsider").await;
+    let group = send(
+        &f.router,
+        authorized(
+            "POST",
+            "/v1/conversations",
+            &owner_token,
+            json!({"kind":"group", "title":"matrix", "participant_ids":[member.id().to_string()]}),
+        ),
+    )
+    .await;
+    assert_eq!(group.0, StatusCode::CREATED);
+    let base = format!("/v1/conversations/{}", group.2["id"].as_str().unwrap());
+    let content = json!({"content":"member message"});
+    let message = send(
+        &f.router,
+        keyed(
+            authorized(
+                "POST",
+                &format!("{base}/messages"),
+                &member_token,
+                content.clone(),
+            ),
+            "matrix-message",
+        ),
+    )
+    .await;
+    assert_eq!(message.0, StatusCode::CREATED);
+    let message_id = message.2["id"].as_str().unwrap();
+    let message_path = format!("/v1/messages/{message_id}");
+    // Owner moderation does not confer authorship.
+    problem(
+        &send(
+            &f.router,
+            authorized(
+                "PATCH",
+                &message_path,
+                &owner_token,
+                json!({"content":"owner edit"}),
+            ),
+        )
+        .await,
+        403,
+        "message.not_author",
+    );
+    let role = send(
+        &f.router,
+        authorized(
+            "PATCH",
+            &format!("{base}/members/{}", member.id()),
+            &owner_token,
+            json!({"role":"admin"}),
+        ),
+    )
+    .await;
+    assert_eq!(role.0, StatusCode::OK);
+    let owned = send(
+        &f.router,
+        authorized(
+            "POST",
+            &format!("{base}/messages"),
+            &owner_token,
+            json!({"content":"owner message"}),
+        ),
+    )
+    .await;
+    problem(
+        &send(
+            &f.router,
+            authorized(
+                "PATCH",
+                &format!("/v1/messages/{}", owned.2["id"].as_str().unwrap()),
+                &member_token,
+                json!({"content":"admin edit"}),
+            ),
+        )
+        .await,
+        403,
+        "message.not_author",
+    );
+    assert_eq!(
+        send(
+            &f.router,
+            bearer(
+                "DELETE",
+                &format!("{base}/members/{}", member.id()),
+                &owner_token
+            )
+        )
+        .await
+        .0,
+        StatusCode::NO_CONTENT
+    );
+    for token in [&outsider_token, &member_token] {
+        for (method, path, body) in [
+            ("GET", base.clone(), Value::Null),
+            ("GET", format!("{base}/members"), Value::Null),
+            ("GET", format!("{base}/messages"), Value::Null),
+            ("GET", message_path.clone(), Value::Null),
+            ("POST", format!("{base}/messages"), content.clone()),
+            (
+                "POST",
+                format!("{base}/messages"),
+                json!({"content":"reply", "reply_to_message_id":message_id}),
+            ),
+            (
+                "PUT",
+                format!("{base}/read-state"),
+                json!({"last_read_message_id":message_id}),
+            ),
+            ("PATCH", base.clone(), json!({"title":"denied"})),
+            ("PUT", format!("{base}/members/{}", owner.id()), Value::Null),
+            (
+                "PUT",
+                format!("{base}/owner"),
+                json!({"user_id":owner.id().to_string()}),
+            ),
+        ] {
+            let response = send(&f.router, authorized(method, &path, token, body)).await;
+            assert_eq!(
+                response.0,
+                StatusCode::NOT_FOUND,
+                "{method} {path}: {}",
+                response.2
+            );
+        }
+    }
+    // A previously successful key must not bypass current membership.
+    problem(
+        &send(
+            &f.router,
+            keyed(
+                authorized("POST", &format!("{base}/messages"), &member_token, content),
+                "matrix-message",
+            ),
+        )
+        .await,
+        404,
+        "conversation.not_found",
+    );
+    let unchanged = send(&f.router, bearer("GET", &message_path, &owner_token)).await;
+    assert_eq!(unchanged.2["content"], "member message");
+}
+
 #[test]
 fn openapi_messaging_surface_has_explicit_security_pages_discriminator_and_headers() {
     let doc = serde_json::to_value(windwatcher_server::http::openapi()).unwrap();
