@@ -178,6 +178,7 @@ pub struct RawStorage {
     pub sqlite: Option<RawSqlite>,
     pub postgres: RawQueueSqlNetwork,
     pub mysql: RawQueueSqlNetwork,
+    pub mongodb: RawMongoStorage,
 }
 impl Default for RawStorage {
     fn default() -> Self {
@@ -186,6 +187,7 @@ impl Default for RawStorage {
             sqlite: None,
             postgres: RawQueueSqlNetwork::default(),
             mysql: RawQueueSqlNetwork::default(),
+            mongodb: RawMongoStorage::default(),
         }
     }
 }
@@ -199,6 +201,21 @@ pub enum ResolvedStorageProvider {
     },
     Postgres(PostgresStorageOptions),
     MySql(MySqlStorageOptions),
+    MongoDb(windwatcher::MongoDbStorageOptions),
+}
+#[derive(Clone, Default, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct RawMongoStorage {
+    pub url: Option<String>,
+    pub database: Option<String>,
+}
+impl fmt::Debug for RawMongoStorage {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RawMongoStorage")
+            .field("url", &self.url.as_ref().map(|_| "[REDACTED]"))
+            .field("database", &self.database)
+            .finish()
+    }
 }
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
@@ -432,6 +449,26 @@ pub fn resolve_storage(
                 create_if_missing,
             })
         }
+        "mongodb" => {
+            let url = raw
+                .storage
+                .mongodb
+                .url
+                .as_deref()
+                .ok_or_else(|| AppError::Config("storage.mongodb.url is required".into()))?;
+            let database =
+                raw.storage.mongodb.database.as_deref().ok_or_else(|| {
+                    AppError::Config("storage.mongodb.database is required".into())
+                })?;
+            let options = windwatcher::MongoDbStorageOptions::new(url, database);
+            // MongoDB URL parsing is async; configuration resolution stays synchronous.
+            if url.trim().is_empty() || database.trim().is_empty() {
+                return Err(AppError::Config(
+                    "storage.mongodb.url and database must be non-empty".into(),
+                ));
+            }
+            Ok(ResolvedStorageProvider::MongoDb(options))
+        }
         "postgres" | "mysql" => {
             let (url, max_connections, timeout) = if raw.storage.provider == "postgres" {
                 (
@@ -498,7 +535,7 @@ pub fn resolve_storage(
             }
         }
         _ => Err(AppError::Config(
-            "storage.provider must be `sqlite`, `postgres` or `mysql`".into(),
+            "storage.provider must be `sqlite`, `postgres`, `mysql` or `mongodb`".into(),
         )),
     }
 }
@@ -1066,6 +1103,21 @@ mod tests {
             }
             assert!(resolve_storage(&raw, &paths).is_err());
         }
+        let mut raw = RawConfig::default();
+        raw.storage.provider = "mongodb".into();
+        assert!(
+            resolve_storage(&raw, &paths)
+                .unwrap_err()
+                .to_string()
+                .contains("storage.mongodb.url")
+        );
+        let secret = "mongo_fake_password";
+        raw.storage.mongodb.url =
+            Some(format!("mongodb://user:{secret}@localhost/?replicaSet=rs0"));
+        raw.storage.mongodb.database = Some("windwatcher".into());
+        let resolved = resolve_storage(&raw, &paths).unwrap();
+        assert!(!format!("{raw:?} {resolved:?}").contains(secret));
+        assert!(matches!(resolved, ResolvedStorageProvider::MongoDb(_)));
         let mut raw = RawConfig::default();
         raw.storage.provider = "unknown".into();
         assert!(resolve_storage(&raw, &paths).is_err());

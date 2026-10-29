@@ -120,7 +120,7 @@ fn write_message(message: &Message) -> Result<Document, MessageStoreError> {
 fn mongo_bad(error: &'static str) -> mongodb::error::Error {
     mongodb::error::Error::custom(error)
 }
-async fn view(
+pub(super) async fn view(
     db: &mongodb::Database,
     session: &mut mongodb::ClientSession,
     record: Document,

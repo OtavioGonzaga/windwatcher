@@ -8,10 +8,14 @@ use windwatcher::{
 
 #[path = "support/conversation_store_contract.rs"]
 mod conversation_contract;
+#[path = "support/idempotency_contract.rs"]
+mod idempotency_contract;
 #[path = "support/identity_store_contract.rs"]
 mod identity_contract;
 #[path = "support/message_store_contract.rs"]
 mod message_contract;
+#[path = "support/query_store_contract.rs"]
+mod query_contract;
 #[path = "support/session_store_contract.rs"]
 mod session_contract;
 
@@ -68,6 +72,23 @@ async fn identity_and_session_contracts_on_disposable_database() {
         for user in [&owner, &admin, &member, &outsider] {
             storage.create_local_user(user, &hash).await.unwrap();
         }
+        let (query_owner, query_peer, query_outsider) = (
+            User::new(UserId::new(), "query_owner".parse().unwrap(), now),
+            User::new(UserId::new(), "query_peer".parse().unwrap(), now),
+            User::new(UserId::new(), "query_outsider".parse().unwrap(), now),
+        );
+        for user in [&query_owner, &query_peer, &query_outsider] {
+            storage.create_local_user(user, &hash).await.unwrap();
+        }
+        query_contract::run(&storage, query_owner, query_peer, query_outsider).await;
+        let (command_owner, command_peer) = (
+            User::new(UserId::new(), "command_owner".parse().unwrap(), now),
+            User::new(UserId::new(), "command_peer".parse().unwrap(), now),
+        );
+        for user in [&command_owner, &command_peer] {
+            storage.create_local_user(user, &hash).await.unwrap();
+        }
+        idempotency_contract::run(&storage, command_owner.id(), command_peer.id()).await;
         conversation_contract::run(&storage, owner.id(), admin.id(), member.id(), outsider.id())
             .await;
         message_contract::run(&storage, owner.id(), admin.id(), member.id(), outsider.id()).await;
@@ -82,6 +103,8 @@ async fn identity_and_session_contracts_on_disposable_database() {
         let second = MongoDbStorage::connect(MongoDbStorageOptions::new(&url, &database))
             .await
             .unwrap();
+        idempotency_contract::concurrent(&storage, &second, command_owner.id(), command_peer.id())
+            .await;
         let direct_left = User::new(UserId::new(), "direct_race_left".parse().unwrap(), now);
         let direct_right = User::new(UserId::new(), "direct_race_right".parse().unwrap(), now);
         for user in [&direct_left, &direct_right] {

@@ -30,24 +30,31 @@ semantics. The ports remain independent of SQLx and of any async runtime.
 
 ## Official SQL adapters
 
-The library provides SQLite, PostgreSQL, and MySQL implementations of all six
+The library provides SQLite, PostgreSQL, MySQL, and MongoDB implementations of all six
 ports: identity, sessions, conversations, messages, messaging queries, and
 atomic create commands. Enable `sqlite`, `postgres`, or `mysql` independently
-on the `windwatcher` crate; the official server enables all three. Selecting a
+on the `windwatcher` crate; the official server enables all four. Selecting a
 primary storage provider is independent of queue provider selection.
 
 Connections never apply migrations implicitly. Each adapter embeds its own
 forward-only migration set and exposes `migrate`, `check_schema`, and
 `migration_status` operations. The server selects its primary adapter with
-`storage.provider` (`sqlite` by default, or `postgres` / `mysql`) and the
+`storage.provider` (`sqlite` by default, or `postgres` / `mysql` / `mongodb`) and the
 explicit `windwatcher storage migrate` and `storage status` CLI commands apply
 to the selected database. PostgreSQL and MySQL URLs must target dedicated,
 pre-created databases. See [server configuration](server-configuration.md).
 
-The three adapters preserve the same application ports and shared contracts;
+The adapters preserve the same application ports and shared contracts;
 physical representations and locking strategies remain adapter-specific.
 PostgreSQL uses native UUID and bytea values; MySQL uses binary UUID/hash
 columns. Both network adapters store timestamps as signed Unix microseconds.
+
+MongoDB stores UUIDs as BSON binary subtype 4 and timestamps as signed Int64 Unix
+microseconds. It uses explicit versioned migrations and validates topology on
+connect: transaction-capable replica sets are required, while standalones and
+`mongos` are rejected. Reads use snapshot transactions and primary read
+preference; writes use transactions with majority write concern. MongoDB remains
+independent from queue selection; no MongoDB queue adapter is implied.
 
 Network message mutations lock the conversation before checking current
 membership/role and then lock the message. Membership changes use the same

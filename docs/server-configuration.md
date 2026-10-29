@@ -34,6 +34,9 @@ the selected network block requires a URL and accepts `max_connections` and
 pre-created databases. Keep credentials in secret management, not committed
 configuration. Migrations are explicit and apply only to the selected primary
 provider. Queue provider configuration remains separate; see [jobs](jobs.md).
+Select `mongodb` with `[storage.mongodb]`, which requires `url` and `database`.
+MongoDB primary storage requires a transaction-capable replica set; standalone
+servers and `mongos` are unsupported.
 
 The durable queue is optional. When `[queue]` is configured, SQLite is currently
 the supported provider and the default file is `queue.db`, separate from

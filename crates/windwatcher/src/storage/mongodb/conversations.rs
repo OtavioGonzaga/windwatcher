@@ -77,7 +77,9 @@ fn normalized(value: OffsetDateTime) -> Result<OffsetDateTime, ConversationStore
     OffsetDateTime::from_unix_timestamp_nanos(i128::from(micros) * 1_000)
         .map_err(|_| bad("invalid timestamp"))
 }
-fn read_conversation(document: &Document) -> Result<Conversation, ConversationStoreError> {
+pub(super) fn read_conversation(
+    document: &Document,
+) -> Result<Conversation, ConversationStoreError> {
     let id = ConversationId::try_from(uuid(document, "_id")?)
         .map_err(|_| bad("invalid conversation ID"))?;
     let kind = match document
@@ -113,7 +115,9 @@ fn role(value: &str) -> Result<MembershipRole, ConversationStoreError> {
         _ => Err(bad("invalid persisted membership role")),
     }
 }
-fn read_member(document: &Document) -> Result<ConversationMember, ConversationStoreError> {
+pub(super) fn read_member(
+    document: &Document,
+) -> Result<ConversationMember, ConversationStoreError> {
     let conversation = ConversationId::try_from(uuid(document, "conversation_id")?)
         .map_err(|_| bad("invalid conversation ID"))?;
     let user = UserId::try_from(uuid(document, "user_id")?).map_err(|_| bad("invalid user ID"))?;
@@ -144,7 +148,7 @@ fn read_member(document: &Document) -> Result<ConversationMember, ConversationSt
         marker,
     ))
 }
-fn direct_key(a: UserId, b: UserId) -> Binary {
+pub(super) fn direct_key(a: UserId, b: UserId) -> Binary {
     let (mut left, mut right) = (*a.as_uuid().as_bytes(), *b.as_uuid().as_bytes());
     if left > right {
         std::mem::swap(&mut left, &mut right);
@@ -154,7 +158,7 @@ fn direct_key(a: UserId, b: UserId) -> Binary {
         bytes: [left.as_slice(), right.as_slice()].concat(),
     }
 }
-fn conv_doc(
+pub(super) fn conv_doc(
     conversation: &Conversation,
     direct: Option<Binary>,
 ) -> Result<Document, ConversationStoreError> {
@@ -168,7 +172,7 @@ fn conv_doc(
         "_ww_revision": 0_i64,
     })
 }
-fn member_doc(
+pub(super) fn member_doc(
     conversation: ConversationId,
     user: UserId,
     role: &str,
@@ -183,7 +187,7 @@ fn member_doc(
         "last_read_message_id": marker.map(|value| Bson::Binary(id(value.as_uuid()))).unwrap_or(Bson::Null),
     })
 }
-async fn enabled(
+pub(super) async fn enabled(
     db: &mongodb::Database,
     session: &mut mongodb::ClientSession,
     user: UserId,

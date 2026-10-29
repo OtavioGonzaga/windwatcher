@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Add the optional MongoDB primary-storage adapter implementing all six storage
+  ports, with explicit migrations and replica-set transaction requirements.
+
 - Reject persisted MySQL memberships whose role is incompatible with the
   conversation kind.
 

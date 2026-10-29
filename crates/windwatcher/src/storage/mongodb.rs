@@ -7,10 +7,12 @@ use mongodb::{
 };
 
 use super::MigrationStatus;
+mod commands;
 mod conversations;
 mod identity;
 mod messages;
 mod migrations;
+mod queries;
 mod transactions;
 #[cfg(test)]
 use mongodb::bson::{Binary, Bson, spec::BinarySubtype};

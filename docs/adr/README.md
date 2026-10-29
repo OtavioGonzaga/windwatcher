@@ -19,3 +19,4 @@ rather than silently rewriting history.
 Use [the template](0000-template.md) as a starting point.
 
 The durable queue contract is recorded in [ADR 0014](0014-durable-job-queue-semantics.md).
+MongoDB primary storage is recorded in [ADR 0015](0015-mongodb-primary-storage.md).

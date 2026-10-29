@@ -68,6 +68,7 @@ async fn run() -> Result<(), AppError> {
                     config::ResolvedStorageProvider::Sqlite { .. } => "SQLite",
                     config::ResolvedStorageProvider::Postgres(_) => "PostgreSQL",
                     config::ResolvedStorageProvider::MySql(_) => "MySQL",
+                    config::ResolvedStorageProvider::MongoDb(_) => "MongoDB",
                 },
                 if raw.queue.is_some() {
                     config::resolve_queue(&raw, &paths)?.provider.backend_name()
@@ -226,9 +227,11 @@ async fn connect_storage(
                 })?
         }
         provider @ config::ResolvedStorageProvider::Postgres(_)
-        | provider @ config::ResolvedStorageProvider::MySql(_) => {
+        | provider @ config::ResolvedStorageProvider::MySql(_)
+        | provider @ config::ResolvedStorageProvider::MongoDb(_) => {
             let backend = match &provider {
                 config::ResolvedStorageProvider::Postgres(_) => "PostgreSQL",
+                config::ResolvedStorageProvider::MongoDb(_) => "MongoDB",
                 _ => "MySQL",
             };
             Storage::connect_provider(provider)

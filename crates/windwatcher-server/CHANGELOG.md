@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add MongoDB as an independently selected primary-storage provider.
+
 - Report selected storage backends and invalid network migration histories
   accurately; ignore inactive SQLite storage paths when validating queue files.
 

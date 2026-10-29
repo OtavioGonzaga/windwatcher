@@ -2,10 +2,10 @@ use time::OffsetDateTime;
 use windwatcher::{
     AddMemberStoreOutcome, ChangeStoreOutcome, Conversation, ConversationId, ConversationMember,
     ConversationStore, ConversationStoreError, GroupRole, GroupTitle, IdentityStore,
-    IdentityStoreError, LeaveStoreOutcome, LocalAuthentication, MigrationStatus, MySqlStorage,
-    PasswordHash, PostgresStorage, RefreshRotationResult, RefreshTokenHash, Session, SessionId,
-    SessionStore, SessionStoreError, SqliteStorage, SqliteStorageOptions, StartDirectStoreOutcome,
-    User, UserId, Username,
+    IdentityStoreError, LeaveStoreOutcome, LocalAuthentication, MigrationStatus, MongoDbStorage,
+    MySqlStorage, PasswordHash, PostgresStorage, RefreshRotationResult, RefreshTokenHash, Session,
+    SessionId, SessionStore, SessionStoreError, SqliteStorage, SqliteStorageOptions,
+    StartDirectStoreOutcome, User, UserId, Username,
 };
 use windwatcher::{
     DeleteMessageStoreOutcome, EditMessageStoreOutcome, GetMessageStoreOutcome,
@@ -22,6 +22,8 @@ pub enum Storage {
     Postgres(PostgresStorage),
     /// Official MySQL persistence adapter.
     MySql(MySqlStorage),
+    /// Official MongoDB primary persistence adapter.
+    MongoDb(MongoDbStorage),
 }
 
 impl windwatcher::CreateCommandStore for Storage {
@@ -35,6 +37,7 @@ impl windwatcher::CreateCommandStore for Storage {
             Self::Sqlite(s) => s.create_conversation_command(command, key, now).await,
             Self::Postgres(s) => s.create_conversation_command(command, key, now).await,
             Self::MySql(s) => s.create_conversation_command(command, key, now).await,
+            Self::MongoDb(s) => s.create_conversation_command(command, key, now).await,
         }
     }
     async fn send_message_command(
@@ -48,6 +51,7 @@ impl windwatcher::CreateCommandStore for Storage {
             Self::Sqlite(s) => s.send_message_command(message, key, now).await,
             Self::Postgres(s) => s.send_message_command(message, key, now).await,
             Self::MySql(s) => s.send_message_command(message, key, now).await,
+            Self::MongoDb(s) => s.send_message_command(message, key, now).await,
         }
     }
 }
@@ -66,6 +70,7 @@ impl windwatcher::MessagingQueryStore for Storage {
             Self::Sqlite(s) => s.get_conversation_member(actor, conversation, target).await,
             Self::Postgres(s) => s.get_conversation_member(actor, conversation, target).await,
             Self::MySql(s) => s.get_conversation_member(actor, conversation, target).await,
+            Self::MongoDb(s) => s.get_conversation_member(actor, conversation, target).await,
         }
     }
     async fn find_users(
@@ -76,6 +81,7 @@ impl windwatcher::MessagingQueryStore for Storage {
             Self::Sqlite(s) => s.find_users(username).await,
             Self::Postgres(s) => s.find_users(username).await,
             Self::MySql(s) => s.find_users(username).await,
+            Self::MongoDb(s) => s.find_users(username).await,
         }
     }
     async fn list_conversations(
@@ -91,6 +97,7 @@ impl windwatcher::MessagingQueryStore for Storage {
             Self::Sqlite(s) => s.list_conversations(actor, before, limit).await,
             Self::Postgres(s) => s.list_conversations(actor, before, limit).await,
             Self::MySql(s) => s.list_conversations(actor, before, limit).await,
+            Self::MongoDb(s) => s.list_conversations(actor, before, limit).await,
         }
     }
     async fn get_conversation_summary(
@@ -105,6 +112,7 @@ impl windwatcher::MessagingQueryStore for Storage {
             Self::Sqlite(s) => s.get_conversation_summary(actor, conversation).await,
             Self::Postgres(s) => s.get_conversation_summary(actor, conversation).await,
             Self::MySql(s) => s.get_conversation_summary(actor, conversation).await,
+            Self::MongoDb(s) => s.get_conversation_summary(actor, conversation).await,
         }
     }
     async fn list_conversation_members(
@@ -129,6 +137,10 @@ impl windwatcher::MessagingQueryStore for Storage {
                     .await
             }
             Self::MySql(s) => {
+                s.list_conversation_members(actor, conversation, after, limit)
+                    .await
+            }
+            Self::MongoDb(s) => {
                 s.list_conversation_members(actor, conversation, after, limit)
                     .await
             }
@@ -159,6 +171,12 @@ impl Storage {
                     .map(Self::MySql)
                     .map_err(|e| Box::new(e) as _)
             }
+            crate::config::ResolvedStorageProvider::MongoDb(options) => {
+                MongoDbStorage::connect(options)
+                    .await
+                    .map(Self::MongoDb)
+                    .map_err(|e| Box::new(e) as _)
+            }
         }
     }
     /// Opens SQLite storage without applying migrations implicitly.
@@ -173,6 +191,7 @@ impl Storage {
             Self::Sqlite(storage) => storage.migrate().await.map_err(|e| Box::new(e) as _),
             Self::Postgres(storage) => storage.migrate().await.map_err(|e| Box::new(e) as _),
             Self::MySql(storage) => storage.migrate().await.map_err(|e| Box::new(e) as _),
+            Self::MongoDb(storage) => storage.migrate().await.map_err(|e| Box::new(e) as _),
         }
     }
     /// Inspects schema status without mutating it.
@@ -192,6 +211,10 @@ impl Storage {
                 .migration_status()
                 .await
                 .map_err(|e| Box::new(e) as _),
+            Self::MongoDb(storage) => storage
+                .migration_status()
+                .await
+                .map_err(|e| Box::new(e) as _),
         }
     }
     /// Returns the non-sensitive backend label for operator output.
@@ -200,6 +223,7 @@ impl Storage {
             Self::Sqlite(_) => "SQLite",
             Self::Postgres(_) => "PostgreSQL",
             Self::MySql(_) => "MySQL",
+            Self::MongoDb(_) => "MongoDB",
         }
     }
 }
@@ -209,6 +233,7 @@ impl ConversationStore for Storage {
             Self::Sqlite(s) => s.member_ids(id).await,
             Self::Postgres(s) => s.member_ids(id).await,
             Self::MySql(s) => s.member_ids(id).await,
+            Self::MongoDb(s) => s.member_ids(id).await,
         }
     }
     async fn get_or_create_direct(
@@ -221,6 +246,7 @@ impl ConversationStore for Storage {
             Self::Sqlite(s) => s.get_or_create_direct(c, a, b).await,
             Self::Postgres(s) => s.get_or_create_direct(c, a, b).await,
             Self::MySql(s) => s.get_or_create_direct(c, a, b).await,
+            Self::MongoDb(s) => s.get_or_create_direct(c, a, b).await,
         }
     }
     async fn create_group(
@@ -233,6 +259,7 @@ impl ConversationStore for Storage {
             Self::Sqlite(s) => s.create_group(c, owner, members).await,
             Self::Postgres(s) => s.create_group(c, owner, members).await,
             Self::MySql(s) => s.create_group(c, owner, members).await,
+            Self::MongoDb(s) => s.create_group(c, owner, members).await,
         }
     }
     async fn find_conversation(
@@ -243,6 +270,7 @@ impl ConversationStore for Storage {
             Self::Sqlite(s) => s.find_conversation(id).await,
             Self::Postgres(s) => s.find_conversation(id).await,
             Self::MySql(s) => s.find_conversation(id).await,
+            Self::MongoDb(s) => s.find_conversation(id).await,
         }
     }
     async fn find_member(
@@ -254,6 +282,7 @@ impl ConversationStore for Storage {
             Self::Sqlite(s) => s.find_member(c, u).await,
             Self::Postgres(s) => s.find_member(c, u).await,
             Self::MySql(s) => s.find_member(c, u).await,
+            Self::MongoDb(s) => s.find_member(c, u).await,
         }
     }
     async fn add_group_member(
@@ -267,6 +296,7 @@ impl ConversationStore for Storage {
             Self::Sqlite(s) => s.add_group_member(c, a, m, n).await,
             Self::Postgres(s) => s.add_group_member(c, a, m, n).await,
             Self::MySql(s) => s.add_group_member(c, a, m, n).await,
+            Self::MongoDb(s) => s.add_group_member(c, a, m, n).await,
         }
     }
     async fn remove_group_member(
@@ -280,6 +310,7 @@ impl ConversationStore for Storage {
             Self::Sqlite(s) => s.remove_group_member(c, a, m, n).await,
             Self::Postgres(s) => s.remove_group_member(c, a, m, n).await,
             Self::MySql(s) => s.remove_group_member(c, a, m, n).await,
+            Self::MongoDb(s) => s.remove_group_member(c, a, m, n).await,
         }
     }
     async fn set_group_member_role(
@@ -294,6 +325,7 @@ impl ConversationStore for Storage {
             Self::Sqlite(s) => s.set_group_member_role(c, a, m, r, n).await,
             Self::Postgres(s) => s.set_group_member_role(c, a, m, r, n).await,
             Self::MySql(s) => s.set_group_member_role(c, a, m, r, n).await,
+            Self::MongoDb(s) => s.set_group_member_role(c, a, m, r, n).await,
         }
     }
     async fn transfer_group_ownership(
@@ -307,6 +339,7 @@ impl ConversationStore for Storage {
             Self::Sqlite(s) => s.transfer_group_ownership(c, a, t, n).await,
             Self::Postgres(s) => s.transfer_group_ownership(c, a, t, n).await,
             Self::MySql(s) => s.transfer_group_ownership(c, a, t, n).await,
+            Self::MongoDb(s) => s.transfer_group_ownership(c, a, t, n).await,
         }
     }
     async fn leave_group(
@@ -319,6 +352,7 @@ impl ConversationStore for Storage {
             Self::Sqlite(s) => s.leave_group(c, a, n).await,
             Self::Postgres(s) => s.leave_group(c, a, n).await,
             Self::MySql(s) => s.leave_group(c, a, n).await,
+            Self::MongoDb(s) => s.leave_group(c, a, n).await,
         }
     }
     async fn rename_group(
@@ -332,6 +366,7 @@ impl ConversationStore for Storage {
             Self::Sqlite(s) => s.rename_group(c, a, t, n).await,
             Self::Postgres(s) => s.rename_group(c, a, t, n).await,
             Self::MySql(s) => s.rename_group(c, a, t, n).await,
+            Self::MongoDb(s) => s.rename_group(c, a, t, n).await,
         }
     }
 }
@@ -347,6 +382,7 @@ impl MessageStore for Storage {
             Self::Sqlite(s) => s.list_messages(actor, conversation, before, limit).await,
             Self::Postgres(s) => s.list_messages(actor, conversation, before, limit).await,
             Self::MySql(s) => s.list_messages(actor, conversation, before, limit).await,
+            Self::MongoDb(s) => s.list_messages(actor, conversation, before, limit).await,
         }
     }
     async fn send_message(
@@ -357,6 +393,7 @@ impl MessageStore for Storage {
             Self::Sqlite(s) => s.send_message(message).await,
             Self::Postgres(s) => s.send_message(message).await,
             Self::MySql(s) => s.send_message(message).await,
+            Self::MongoDb(s) => s.send_message(message).await,
         }
     }
     async fn get_message(
@@ -368,6 +405,7 @@ impl MessageStore for Storage {
             Self::Sqlite(s) => s.get_message(actor, message).await,
             Self::Postgres(s) => s.get_message(actor, message).await,
             Self::MySql(s) => s.get_message(actor, message).await,
+            Self::MongoDb(s) => s.get_message(actor, message).await,
         }
     }
     async fn edit_message(
@@ -381,6 +419,7 @@ impl MessageStore for Storage {
             Self::Sqlite(s) => s.edit_message(actor, message, content, now).await,
             Self::Postgres(s) => s.edit_message(actor, message, content, now).await,
             Self::MySql(s) => s.edit_message(actor, message, content, now).await,
+            Self::MongoDb(s) => s.edit_message(actor, message, content, now).await,
         }
     }
     async fn delete_message(
@@ -393,6 +432,7 @@ impl MessageStore for Storage {
             Self::Sqlite(s) => s.delete_message(actor, message, now).await,
             Self::Postgres(s) => s.delete_message(actor, message, now).await,
             Self::MySql(s) => s.delete_message(actor, message, now).await,
+            Self::MongoDb(s) => s.delete_message(actor, message, now).await,
         }
     }
     async fn mark_read_through(
@@ -405,6 +445,7 @@ impl MessageStore for Storage {
             Self::Sqlite(s) => s.mark_read_through(actor, conversation, message).await,
             Self::Postgres(s) => s.mark_read_through(actor, conversation, message).await,
             Self::MySql(s) => s.mark_read_through(actor, conversation, message).await,
+            Self::MongoDb(s) => s.mark_read_through(actor, conversation, message).await,
         }
     }
     async fn unread_count(
@@ -416,6 +457,7 @@ impl MessageStore for Storage {
             Self::Sqlite(s) => s.unread_count(actor, conversation).await,
             Self::Postgres(s) => s.unread_count(actor, conversation).await,
             Self::MySql(s) => s.unread_count(actor, conversation).await,
+            Self::MongoDb(s) => s.unread_count(actor, conversation).await,
         }
     }
 }
@@ -429,6 +471,7 @@ impl IdentityStore for Storage {
             Self::Sqlite(storage) => storage.create_local_user(user, hash).await,
             Self::Postgres(storage) => storage.create_local_user(user, hash).await,
             Self::MySql(storage) => storage.create_local_user(user, hash).await,
+            Self::MongoDb(storage) => storage.create_local_user(user, hash).await,
         }
     }
     async fn find_local_auth_by_username(
@@ -439,6 +482,7 @@ impl IdentityStore for Storage {
             Self::Sqlite(storage) => storage.find_local_auth_by_username(username).await,
             Self::Postgres(storage) => storage.find_local_auth_by_username(username).await,
             Self::MySql(storage) => storage.find_local_auth_by_username(username).await,
+            Self::MongoDb(storage) => storage.find_local_auth_by_username(username).await,
         }
     }
     async fn find_user(&self, id: UserId) -> Result<Option<User>, IdentityStoreError> {
@@ -446,6 +490,7 @@ impl IdentityStore for Storage {
             Self::Sqlite(storage) => storage.find_user(id).await,
             Self::Postgres(storage) => storage.find_user(id).await,
             Self::MySql(storage) => storage.find_user(id).await,
+            Self::MongoDb(storage) => storage.find_user(id).await,
         }
     }
     async fn update_user(&self, user: &User) -> Result<(), IdentityStoreError> {
@@ -453,6 +498,7 @@ impl IdentityStore for Storage {
             Self::Sqlite(storage) => storage.update_user(user).await,
             Self::Postgres(storage) => storage.update_user(user).await,
             Self::MySql(storage) => storage.update_user(user).await,
+            Self::MongoDb(storage) => storage.update_user(user).await,
         }
     }
 }
@@ -462,6 +508,7 @@ impl SessionStore for Storage {
             Self::Sqlite(s) => s.find_session(id).await,
             Self::Postgres(s) => s.find_session(id).await,
             Self::MySql(s) => s.find_session(id).await,
+            Self::MongoDb(s) => s.find_session(id).await,
         }
     }
     async fn create_session(
@@ -473,6 +520,7 @@ impl SessionStore for Storage {
             Self::Sqlite(storage) => storage.create_session(session, hash).await,
             Self::Postgres(storage) => storage.create_session(session, hash).await,
             Self::MySql(storage) => storage.create_session(session, hash).await,
+            Self::MongoDb(storage) => storage.create_session(session, hash).await,
         }
     }
     async fn find_by_refresh_token_hash(
@@ -483,6 +531,7 @@ impl SessionStore for Storage {
             Self::Sqlite(storage) => storage.find_by_refresh_token_hash(hash).await,
             Self::Postgres(storage) => storage.find_by_refresh_token_hash(hash).await,
             Self::MySql(storage) => storage.find_by_refresh_token_hash(hash).await,
+            Self::MongoDb(storage) => storage.find_by_refresh_token_hash(hash).await,
         }
     }
     async fn rotate_refresh_token(
@@ -504,6 +553,11 @@ impl SessionStore for Storage {
                     .await
             }
             Self::MySql(storage) => {
+                storage
+                    .rotate_refresh_token(id, old, replacement, now)
+                    .await
+            }
+            Self::MongoDb(storage) => {
                 storage
                     .rotate_refresh_token(id, old, replacement, now)
                     .await
@@ -532,6 +586,11 @@ impl SessionStore for Storage {
                     .revoke_session_for_user(user_id, session_id, revoked_at)
                     .await
             }
+            Self::MongoDb(storage) => {
+                storage
+                    .revoke_session_for_user(user_id, session_id, revoked_at)
+                    .await
+            }
         }
     }
     async fn revoke_all_for_user(
@@ -543,6 +602,7 @@ impl SessionStore for Storage {
             Self::Sqlite(storage) => storage.revoke_all_for_user(user_id, revoked_at).await,
             Self::Postgres(storage) => storage.revoke_all_for_user(user_id, revoked_at).await,
             Self::MySql(storage) => storage.revoke_all_for_user(user_id, revoked_at).await,
+            Self::MongoDb(storage) => storage.revoke_all_for_user(user_id, revoked_at).await,
         }
     }
 }
