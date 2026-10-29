@@ -103,8 +103,10 @@ mod tests {
             config_file: temp.path().join("config.toml"),
             data_dir: temp.path().join("missing"),
         };
-        let mut raw = config::RawConfig::default();
-        raw.queue = Some(config::RawQueue::default());
+        let raw = config::RawConfig {
+            queue: Some(config::RawQueue::default()),
+            ..Default::default()
+        };
         assert!(
             connect_storage(&raw, &paths, ConnectionPurpose::ExistingOnly)
                 .await

@@ -586,7 +586,7 @@ pub fn resolve_jwt(raw: &RawConfig) -> Result<Hs256JwtAccessTokenCodec, AppError
 }
 
 pub(crate) struct ResolvedServeConfig {
-    pub server: (std::net::SocketAddr, Duration, Duration),
+    pub server: server::ResolvedServerConfig,
     pub storage: ResolvedStorageProvider,
     pub registration: RegistrationPolicy,
     pub session: SessionPolicy,

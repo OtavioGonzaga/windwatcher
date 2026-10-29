@@ -199,6 +199,136 @@ fn doctor_reports_invalid_configuration_without_quoting_input() {
 }
 
 #[test]
+fn doctor_redacts_unavailable_network_dependencies() {
+    let directory = TempDir::new().unwrap();
+    let path = complete_config(&directory, "warn");
+    let base = fs::read_to_string(&path).unwrap();
+    for (provider, url) in [
+        ("postgres", "postgresql://user:TOP_SECRET@127.0.0.1:1/db"),
+        ("mysql", "mysql://user:TOP_SECRET@127.0.0.1:1/db"),
+        (
+            "mongodb",
+            "mongodb://user:TOP_SECRET@127.0.0.1:1/?serverSelectionTimeoutMS=10",
+        ),
+    ] {
+        fs::write(&path, format!("{base}\n[storage]\nprovider = '{provider}'\n[storage.{provider}]\nurl = '{url}'\n{}", if provider == "mongodb" { "database = 'doctor'" } else { "acquire_timeout = '10ms'" })).unwrap();
+        command(&path)
+            .arg("doctor")
+            .assert()
+            .failure()
+            .stdout(predicate::str::contains("[fail] storage:"))
+            .stdout(predicate::str::contains("TOP_SECRET").not())
+            .stderr(predicate::str::contains("TOP_SECRET").not());
+    }
+    for (provider, url) in [
+        ("postgres", "postgresql://user:TOP_SECRET@127.0.0.1:1/db"),
+        ("mysql", "mysql://user:TOP_SECRET@127.0.0.1:1/db"),
+        ("redis", "redis://:TOP_SECRET@127.0.0.1:1/0"),
+    ] {
+        fs::write(
+            &path,
+            format!(
+                "{base}\n[queue]\nprovider = '{provider}'\n[queue.{provider}]\nurl = '{url}'\n{}",
+                if provider == "redis" {
+                    ""
+                } else {
+                    "acquire_timeout = '10ms'"
+                }
+            ),
+        )
+        .unwrap();
+        command(&path)
+            .arg("doctor")
+            .assert()
+            .failure()
+            .stdout(predicate::str::contains("[fail] queue:"))
+            .stdout(predicate::str::contains("TOP_SECRET").not())
+            .stderr(predicate::str::contains("TOP_SECRET").not());
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL, MySQL and MongoDB replica set; set WINDWATCHER_TEST_*_URL"]
+async fn network_primary_doctor_composition() {
+    use sqlx::{ConnectOptions, Connection};
+    for (provider, variable) in [
+        ("postgres", "WINDWATCHER_TEST_POSTGRES_URL"),
+        ("mysql", "WINDWATCHER_TEST_MYSQL_URL"),
+        ("mongodb", "WINDWATCHER_TEST_MONGODB_URL"),
+    ] {
+        let base_url = std::env::var(variable).expect("set the disposable database URL");
+        let name = format!("windwatcher_test_{}", uuid::Uuid::now_v7().simple());
+        let mut postgres = None;
+        let mut mysql = None;
+        let url = match provider {
+            "postgres" => {
+                let mut connection = sqlx::PgConnection::connect(&base_url).await.unwrap();
+                sqlx::raw_sql(sqlx::AssertSqlSafe(format!("CREATE DATABASE {name}")))
+                    .execute(&mut connection)
+                    .await
+                    .unwrap();
+                postgres = Some(connection);
+                base_url
+                    .parse::<sqlx::postgres::PgConnectOptions>()
+                    .unwrap()
+                    .database(&name)
+                    .to_url_lossy()
+                    .to_string()
+            }
+            "mysql" => {
+                let mut connection = sqlx::MySqlConnection::connect(&base_url).await.unwrap();
+                sqlx::raw_sql(sqlx::AssertSqlSafe(format!("CREATE DATABASE {name}")))
+                    .execute(&mut connection)
+                    .await
+                    .unwrap();
+                mysql = Some(connection);
+                base_url
+                    .parse::<sqlx::mysql::MySqlConnectOptions>()
+                    .unwrap()
+                    .database(&name)
+                    .to_url_lossy()
+                    .to_string()
+            }
+            _ => base_url,
+        };
+        let directory = TempDir::new().unwrap();
+        let path = complete_config(&directory, "warn");
+        let base = fs::read_to_string(&path).unwrap();
+        fs::write(&path, format!("{base}\n[storage]\nprovider = '{provider}'\n[storage.{provider}]\nurl = {url:?}\n{}", if provider == "mongodb" { format!("database = '{name}'") } else { String::new() })).unwrap();
+        command(&path)
+            .arg("doctor")
+            .assert()
+            .failure()
+            .stdout(predicate::str::contains("storage migrations: pending"));
+        command(&path)
+            .args(["migrate", "--storage"])
+            .assert()
+            .success();
+        command(&path)
+            .arg("doctor")
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("storage migrations: current"));
+        if let Some(mut connection) = postgres {
+            sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+                "DROP DATABASE {name} WITH (FORCE)"
+            )))
+            .execute(&mut connection)
+            .await
+            .unwrap();
+        }
+        if let Some(mut connection) = mysql {
+            sqlx::raw_sql(sqlx::AssertSqlSafe(format!("DROP DATABASE {name}")))
+                .execute(&mut connection)
+                .await
+                .unwrap();
+        }
+        // MongoDB's UUID-named database lives only in the disposable replica set;
+        // discard that service after the run, as for the adapter contract suite.
+    }
+}
+
+#[test]
 fn network_queue_config_selection_and_safe_errors() {
     let directory = TempDir::new().unwrap();
     let path = complete_config(&directory, "warn");
@@ -340,7 +470,7 @@ async fn network_queue_migration_and_jobs_cli() {
             _ => base_url,
         };
         let directory = TempDir::new().unwrap();
-        let path = config(&directory);
+        let path = complete_config(&directory, "warn");
         let base = fs::read_to_string(&path).unwrap();
         fs::write(
             &path,
@@ -354,6 +484,20 @@ async fn network_queue_migration_and_jobs_cli() {
             ),
         )
         .unwrap();
+        command(&path)
+            .args(["migrate", "--storage"])
+            .assert()
+            .success();
+        let diagnosis = command(&path).arg("doctor").assert();
+        if provider == "redis" {
+            diagnosis
+                .success()
+                .stdout(predicate::str::contains("queue migrations: not applicable"));
+        } else {
+            diagnosis
+                .failure()
+                .stdout(predicate::str::contains("queue migrations: pending"));
+        }
         let initial = command(&path)
             .args(["migrate", "status", "--queue"])
             .assert()
@@ -389,6 +533,11 @@ async fn network_queue_migration_and_jobs_cli() {
             current.stdout(predicate::str::contains("Status: current"));
         }
         command(&path).args(["jobs", "list"]).assert().success();
+        command(&path)
+            .arg("doctor")
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("Doctor: healthy"));
         command(&path)
             .args(["jobs", "list", "--status", "failed"])
             .assert()

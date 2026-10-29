@@ -27,7 +27,7 @@ impl Default for RawServer {
 }
 
 impl RawServer {
-    pub(crate) fn resolve(&self) -> Result<(SocketAddr, Duration, Duration), AppError> {
+    pub(crate) fn resolve(&self) -> Result<ResolvedServerConfig, AppError> {
         let bind = self.bind.parse().map_err(|_| {
             AppError::Config("server.bind must be a numeric IP address and port".into())
         })?;
@@ -43,8 +43,19 @@ impl RawServer {
                 )));
             }
         }
-        Ok((bind, grace, readiness))
+        Ok(ResolvedServerConfig {
+            bind,
+            shutdown_grace_period: grace,
+            readiness_timeout: readiness,
+        })
     }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct ResolvedServerConfig {
+    pub bind: SocketAddr,
+    pub shutdown_grace_period: Duration,
+    pub readiness_timeout: Duration,
 }
 
 #[cfg(test)]
@@ -60,11 +71,11 @@ mod tests {
         let config = RawServer::default();
         assert_eq!(
             config.resolve().unwrap(),
-            (
-                "127.0.0.1:8080".parse().unwrap(),
-                Duration::from_secs(30),
-                Duration::from_secs(2)
-            )
+            ResolvedServerConfig {
+                bind: "127.0.0.1:8080".parse().unwrap(),
+                shutdown_grace_period: Duration::from_secs(30),
+                readiness_timeout: Duration::from_secs(2)
+            }
         );
         for bind in ["127.0.0.1:0", "0.0.0.0:8080", "[::1]:8080", "[::]:0"] {
             assert!(

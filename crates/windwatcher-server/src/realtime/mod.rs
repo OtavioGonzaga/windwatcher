@@ -307,6 +307,40 @@ pub(super) mod tests {
     }
 
     #[tokio::test]
+    async fn serve_drain_waits_for_dispatch_work() {
+        let (_directory, service, _) = fixture().await;
+        let (release, released) = tokio::sync::oneshot::channel();
+        assert!(service.0.dispatch.submit(
+            "existing",
+            async {
+                released.await.unwrap();
+            },
+            || {}
+        ));
+        let stop = tokio_util::sync::CancellationToken::new();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let task = tokio::spawn(crate::runtime::serve::serve_until(
+            listener,
+            axum::Router::new(),
+            service.clone(),
+            stop.clone(),
+            std::time::Duration::from_secs(2),
+            async { Ok(()) },
+        ));
+        stop.cancelled().await;
+        service.begin_shutdown().await;
+        assert!(
+            !service
+                .0
+                .dispatch
+                .submit("rejected", async { panic!("not admitted") }, || {})
+        );
+        assert!(!task.is_finished());
+        release.send(()).unwrap();
+        task.await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
     async fn revocation_at_pending_boundary_prevents_activation() {
         let (_directory, service, session) = fixture().await;
         let grant = Grant {
