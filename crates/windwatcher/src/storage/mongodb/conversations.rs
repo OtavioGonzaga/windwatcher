@@ -637,6 +637,10 @@ impl ConversationStore for MongoDbStorage {
                     .delete_many(doc! { "conversation_id": &key })
                     .session(&mut *session)
                     .await?;
+                db.collection::<Document>("messages")
+                    .delete_many(doc! { "conversation_id": &key })
+                    .session(&mut *session)
+                    .await?;
                 db.collection::<Document>("conversations")
                     .delete_one(doc! { "_id": &key })
                     .session(session)

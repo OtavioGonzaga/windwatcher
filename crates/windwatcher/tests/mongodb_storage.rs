@@ -10,6 +10,8 @@ use windwatcher::{
 mod conversation_contract;
 #[path = "support/identity_store_contract.rs"]
 mod identity_contract;
+#[path = "support/message_store_contract.rs"]
+mod message_contract;
 #[path = "support/session_store_contract.rs"]
 mod session_contract;
 
@@ -68,6 +70,7 @@ async fn identity_and_session_contracts_on_disposable_database() {
         }
         conversation_contract::run(&storage, owner.id(), admin.id(), member.id(), outsider.id())
             .await;
+        message_contract::run(&storage, owner.id(), admin.id(), member.id(), outsider.id()).await;
         conversation_contract::disabled_memberships(
             &storage,
             owner.clone(),

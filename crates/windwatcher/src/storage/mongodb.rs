@@ -9,6 +9,7 @@ use mongodb::{
 use super::MigrationStatus;
 mod conversations;
 mod identity;
+mod messages;
 mod migrations;
 mod transactions;
 #[cfg(test)]
