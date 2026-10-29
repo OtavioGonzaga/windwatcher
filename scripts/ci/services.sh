@@ -21,6 +21,7 @@ wait_for() {
   local description=$1
   shift
   local attempt
+  echo "Waiting for $description (at most 90 attempts)"
   for attempt in {1..90}; do
     if timeout 10s "$@" > /dev/null 2>&1; then
       return 0
@@ -80,7 +81,7 @@ start() {
       mongodb)
         wait_for 'MongoDB 8.2' docker exec "$container_prefix-mongodb" mongosh --quiet \
           --eval 'quit(db.adminCommand({ping: 1}).ok === 1 ? 0 : 1)'
-        docker exec "$container_prefix-mongodb" mongosh --quiet --eval \
+        timeout 30s docker exec "$container_prefix-mongodb" mongosh --quiet --eval \
           'const result = rs.initiate({_id: "rs0", members: [{_id: 0, host: "127.0.0.1:27017"}]}); if (result.ok !== 1) { throw new Error(JSON.stringify(result)); }'
         wait_for 'MongoDB writable primary' docker exec "$container_prefix-mongodb" mongosh --quiet \
           --eval 'quit(db.hello().isWritablePrimary === true ? 0 : 1)'

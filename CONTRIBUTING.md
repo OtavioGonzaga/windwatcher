@@ -99,6 +99,11 @@ before every unrelated change. See [storage testing](docs/persistence.md),
 [operations](docs/operations.md) for detailed commands and safety requirements.
 CI runs every official external adapter on every PR.
 
+To reproduce the dependency-policy checks, install the CI-pinned tool versions
+with `cargo install cargo-audit --version 0.22.2 --locked` and
+`cargo install cargo-deny --version 0.20.2 --locked`, then run the policy commands
+above. These tools are separate from the baseline compiler validation.
+
 The final `CI / required` gate succeeds only when every job succeeds. After the
 workflow is merged and has run, maintainers should configure that single check
 as required for `main` in repository branch protection/rulesets. Repository files
