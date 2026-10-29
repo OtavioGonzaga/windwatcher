@@ -2,6 +2,16 @@ use std::{error::Error, path::PathBuf};
 
 #[derive(Debug, thiserror::Error)]
 pub enum AppError {
+    #[error("failed to bind server listener at {bind}")]
+    ListenerBind {
+        bind: std::net::SocketAddr,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("server runtime failed")]
+    ServerRuntime(#[source] std::io::Error),
+    #[error("server terminated unexpectedly")]
+    ServerTerminated,
     #[error("configuration error: {0}")]
     Config(String),
     #[error("path resolution failed: {0}")]

@@ -19,11 +19,13 @@ pub struct Cli {
     #[arg(long)]
     pub log_format: Option<LogFormat>,
     #[command(subcommand)]
-    pub command: Command,
+    pub command: Option<Command>,
 }
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// Run the standalone HTTP and realtime service (the default command).
+    Serve,
     /// Apply pending database migrations.
     Migrate(MigrateArgs),
     /// Run the standalone background worker.
@@ -167,4 +169,37 @@ impl std::fmt::Display for LogFormat {
 pub enum ConfigCommand {
     /// Fully validate server configuration without changing state.
     Check,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn absent_and_explicit_serve_normalize_identically_with_existing_flags() {
+        for args in [vec!["windwatcher"], vec!["windwatcher", "serve"]] {
+            assert!(matches!(
+                Cli::try_parse_from(args)
+                    .unwrap()
+                    .command
+                    .unwrap_or(Command::Serve),
+                Command::Serve
+            ));
+        }
+        let cli = Cli::try_parse_from([
+            "windwatcher",
+            "--system",
+            "--config",
+            "config.toml",
+            "--log-filter",
+            "warn",
+            "--log-format",
+            "json",
+        ])
+        .unwrap();
+        assert!(cli.system);
+        assert_eq!(cli.config.unwrap(), PathBuf::from("config.toml"));
+        assert_eq!(cli.log_filter.as_deref(), Some("warn"));
+        assert!(matches!(cli.log_format, Some(LogFormat::Json)));
+    }
 }

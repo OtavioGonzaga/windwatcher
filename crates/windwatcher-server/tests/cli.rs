@@ -67,6 +67,44 @@ fn server_configuration_overrides_and_validation_are_static() {
 }
 
 #[test]
+fn serve_preflight_requires_existing_current_storage_before_binding() {
+    let directory = TempDir::new().unwrap();
+    let path = complete_config(&directory, "info");
+    let base = fs::read_to_string(&path).unwrap();
+    // An occupied address must not mask the earlier schema error.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    fs::write(
+        &path,
+        format!(
+            "{base}\n[server]\nbind = '{}'\n",
+            listener.local_addr().unwrap()
+        ),
+    )
+    .unwrap();
+    for args in [vec![], vec!["serve"]] {
+        command(&path)
+            .args(args)
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("failed to open SQLite database"));
+        assert!(!directory.path().join("windwatcher.db").exists());
+    }
+    fs::File::create(directory.path().join("windwatcher.db")).unwrap();
+    command(&path)
+        .arg("serve")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("windwatcher migrate --storage"))
+        .stderr(predicate::str::contains("server_listening").not());
+    command(&path).arg("migrate").assert().success();
+    command(&path)
+        .arg("serve")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("failed to bind server listener"));
+}
+
+#[test]
 fn network_queue_config_selection_and_safe_errors() {
     let directory = TempDir::new().unwrap();
     let path = complete_config(&directory, "warn");

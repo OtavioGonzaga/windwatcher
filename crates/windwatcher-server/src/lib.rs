@@ -39,7 +39,8 @@ pub async fn run_cli() {
 
 async fn run() -> Result<(), AppError> {
     let mut cli = Cli::parse();
-    let argument_password = match &mut cli.command {
+    let mut command = cli.command.take().unwrap_or(Command::Serve);
+    let argument_password = match &mut command {
         Command::User {
             command: cli::UserCommand::Create(args),
         } => args.password.take().map(cli::SensitiveString::new),
@@ -59,7 +60,8 @@ async fn run() -> Result<(), AppError> {
     let raw = config::load(&paths, cli.config)?;
     logging::initialize(&raw.logging, cli.log_filter.as_deref(), cli.log_format)?;
     tracing::info!(mode = ?mode, "configuration loaded");
-    match cli.command {
+    match command {
+        Command::Serve => runtime::serve::run(&raw, &paths).await,
         Command::Config {
             command: cli::ConfigCommand::Check,
         } => {

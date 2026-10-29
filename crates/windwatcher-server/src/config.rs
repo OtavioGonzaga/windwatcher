@@ -585,16 +585,31 @@ pub fn resolve_jwt(raw: &RawConfig) -> Result<Hs256JwtAccessTokenCodec, AppError
     ))
 }
 
-pub fn resolve_serve(raw: &RawConfig, paths: &ResolvedPaths) -> Result<(), AppError> {
-    raw.server.resolve()?;
-    resolve_storage(raw, paths)?;
-    resolve_registration(raw)?;
-    resolve_session(raw)?;
-    raw.http.resolve().map_err(AppError::Config)?;
-    raw.realtime.resolve().map_err(AppError::Config)?;
-    let _messages = resolve_messages(raw);
-    let _jwt = resolve_jwt(raw)?;
-    Ok(())
+pub(crate) struct ResolvedServeConfig {
+    pub server: (std::net::SocketAddr, Duration, Duration),
+    pub storage: ResolvedStorageProvider,
+    pub registration: RegistrationPolicy,
+    pub session: SessionPolicy,
+    pub http: http::ResolvedHttpConfig,
+    pub realtime: realtime::ResolvedRealtimeConfig,
+    pub messages: MessagePolicy,
+    pub jwt: Hs256JwtAccessTokenCodec,
+}
+
+pub fn resolve_serve(
+    raw: &RawConfig,
+    paths: &ResolvedPaths,
+) -> Result<ResolvedServeConfig, AppError> {
+    Ok(ResolvedServeConfig {
+        server: raw.server.resolve()?,
+        storage: resolve_storage(raw, paths)?,
+        registration: resolve_registration(raw)?,
+        session: resolve_session(raw)?,
+        http: raw.http.resolve().map_err(AppError::Config)?,
+        realtime: raw.realtime.resolve().map_err(AppError::Config)?,
+        messages: resolve_messages(raw),
+        jwt: resolve_jwt(raw)?,
+    })
 }
 
 pub fn resolve_full(raw: &RawConfig, paths: &ResolvedPaths) -> Result<(), AppError> {

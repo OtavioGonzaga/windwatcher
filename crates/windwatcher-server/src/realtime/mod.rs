@@ -213,7 +213,7 @@ pub(super) mod tests {
     use super::*;
     use windwatcher::{IdentityStore, RefreshTokenProvider, SessionStore};
 
-    pub(super) async fn fixture() -> (tempfile::TempDir, RealtimeService, Session) {
+    pub(crate) async fn fixture() -> (tempfile::TempDir, RealtimeService, Session) {
         let directory = tempfile::TempDir::new().unwrap();
         let storage = Storage::connect(windwatcher::SqliteStorageOptions::new(
             directory.path().join("race.db").display().to_string(),
