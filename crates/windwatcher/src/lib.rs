@@ -43,7 +43,7 @@ mod users;
 pub use authentication::{AuthenticateLocalUser, AuthenticateLocalUserError};
 pub use conversation::{
     Conversation, ConversationError, ConversationKind, ConversationMember, GroupRole, GroupTitle,
-    GroupTitleError, MembershipRole,
+    GroupTitleError, MAX_GROUP_TITLE_BYTES, MAX_INITIAL_GROUP_PARTICIPANTS, MembershipRole,
 };
 pub use conversation_store::{
     AddMemberStoreOutcome, ChangeStoreOutcome, ConversationStore, ConversationStoreError,

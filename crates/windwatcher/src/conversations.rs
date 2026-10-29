@@ -66,6 +66,7 @@ application_error!("Failures starting a Direct conversation.", StartDirectConver
     #[error("conversation storage failed")] Storage(#[source] ConversationStoreError),
 });
 application_error!("Failures creating a Group conversation.", CreateGroupConversationError {
+    #[error("initial group participants exceed 256 entries")] TooManyParticipants,
     #[error("conversation participant unavailable")] ParticipantUnavailable(UserId),
     #[error("invalid group title")] InvalidTitle(#[source] GroupTitleError),
     #[error("conversation storage failed")] Storage(#[source] ConversationStoreError),
@@ -181,6 +182,8 @@ impl<'a, S: ConversationStore> CreateGroupConversation<'a, S> {
         Self { store }
     }
     /// Creates the Group atomically; duplicate participant IDs are a set.
+    /// Accepts at most [`crate::MAX_INITIAL_GROUP_PARTICIPANTS`] input entries
+    /// before deduplication and at most [`crate::MAX_GROUP_TITLE_BYTES`] title bytes.
     pub async fn execute(
         &self,
         actor: UserId,
@@ -188,7 +191,11 @@ impl<'a, S: ConversationStore> CreateGroupConversation<'a, S> {
         participants: &[UserId],
         now: OffsetDateTime,
     ) -> Result<Outcome<Conversation>, CreateGroupConversationError> {
-        let title = GroupTitle::new(title).map_err(CreateGroupConversationError::InvalidTitle)?;
+        if participants.len() > crate::MAX_INITIAL_GROUP_PARTICIPANTS {
+            return Err(CreateGroupConversationError::TooManyParticipants);
+        }
+        let title =
+            GroupTitle::for_write(title).map_err(CreateGroupConversationError::InvalidTitle)?;
         let mut unique = Vec::new();
         for id in participants {
             if *id != actor && !unique.contains(id) {
@@ -579,6 +586,8 @@ impl<'a, S: ConversationStore> RenameGroupConversation<'a, S> {
         Self { store }
     }
     /// Applies an idempotent title rename.
+    /// New titles must fit [`crate::MAX_GROUP_TITLE_BYTES`] UTF-8 bytes;
+    /// loading an existing longer title does not invalidate the conversation.
     pub async fn execute(
         &self,
         actor: UserId,
@@ -593,7 +602,8 @@ impl<'a, S: ConversationStore> RenameGroupConversation<'a, S> {
         if !manager(&member) {
             return Err(RenameGroupConversationError::InsufficientPermissions);
         }
-        let title = GroupTitle::new(title).map_err(RenameGroupConversationError::InvalidTitle)?;
+        let title =
+            GroupTitle::for_write(title).map_err(RenameGroupConversationError::InvalidTitle)?;
         match self
             .store
             .rename_group(id, actor, &title, now)

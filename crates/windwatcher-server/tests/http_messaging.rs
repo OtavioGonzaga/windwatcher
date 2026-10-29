@@ -52,6 +52,65 @@ fn page(value: &Value) {
     assert_eq!(value["has_more"], !value["next_cursor"].is_null());
 }
 
+#[tokio::test]
+async fn group_limits_apply_before_ids_and_do_not_reserve_idempotency_keys() {
+    let f = Fixture::open().await;
+    let (actor, token) = participant(&f, "limits").await;
+    for (body, code) in [
+        (
+            json!({"kind":"group", "title":"valid", "participant_ids":vec!["not-a-uuid";257]}),
+            "conversation.too_many_participants",
+        ),
+        (
+            json!({"kind":"group", "title":"é".repeat(129), "participant_ids":[]}),
+            "conversation.invalid_title",
+        ),
+    ] {
+        problem(
+            &send(
+                &f.router,
+                keyed(
+                    authorized("POST", "/v1/conversations", &token, body),
+                    "limit-key",
+                ),
+            )
+            .await,
+            422,
+            code,
+        );
+    }
+    let title = "é".repeat(128);
+    let created = send(&f.router, keyed(authorized("POST", "/v1/conversations", &token, json!({"kind":"group", "title":title, "participant_ids":vec![actor.id().to_string();256]})), "limit-key")).await;
+    assert_eq!(created.0, StatusCode::CREATED, "{}", created.2);
+    assert_eq!(created.2["title"], title);
+    let id = created.2["id"].as_str().unwrap();
+    problem(
+        &send(
+            &f.router,
+            authorized(
+                "PATCH",
+                &format!("/v1/conversations/{id}"),
+                &token,
+                json!({"title":"a".repeat(257)}),
+            ),
+        )
+        .await,
+        422,
+        "conversation.invalid_title",
+    );
+    let unchanged = send(
+        &f.router,
+        bearer("GET", &format!("/v1/conversations/{id}"), &token),
+    )
+    .await;
+    assert_eq!(unchanged.2["title"], title);
+    let doc = serde_json::to_value(windwatcher_server::http::openapi()).unwrap();
+    assert_eq!(
+        doc["components"]["schemas"]["CreateGroupRequest"]["properties"]["participant_ids"]["maxItems"],
+        256
+    );
+}
+
 #[test]
 fn openapi_messaging_surface_has_explicit_security_pages_discriminator_and_headers() {
     let doc = serde_json::to_value(windwatcher_server::http::openapi()).unwrap();

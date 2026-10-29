@@ -98,6 +98,46 @@ pub async fn run<S: CreateCommandStore + ConversationStore + MessageStore>(
         participant_ids: vec![peer, actor, peer],
     };
     let create = CreateConversation::new(store);
+    // Rejected input must not reserve a key, independently of the adapter.
+    for request in [
+        ConversationCreateRequest::Group {
+            title: "valid".into(),
+            participant_ids: vec![actor; 257],
+        },
+        ConversationCreateRequest::Group {
+            title: "é".repeat(129),
+            participant_ids: vec![],
+        },
+    ] {
+        assert!(matches!(
+            create.execute(actor, request, Some(&key), now).await,
+            Err(CreateCommandError::TooManyParticipants | CreateCommandError::InvalidTitle(_))
+        ));
+    }
+    // Application limits must not prevent hydration of pre-existing long titles.
+    let historical = Conversation::new_group(
+        ConversationId::new(),
+        GroupTitle::new("é".repeat(129)).unwrap(),
+        now,
+    );
+    store.create_group(&historical, actor, &[]).await.unwrap();
+    assert_eq!(
+        store
+            .find_conversation(historical.id())
+            .await
+            .unwrap()
+            .unwrap()
+            .title()
+            .unwrap()
+            .as_str()
+            .len(),
+        258
+    );
+    let renamed = RenameGroupConversation::new(store)
+        .execute(actor, historical.id(), "short title", now)
+        .await
+        .unwrap();
+    assert_eq!(renamed.events().len(), 1);
     let first = create
         .execute(actor, group_request(), Some(&key), now)
         .await

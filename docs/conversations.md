@@ -1,5 +1,16 @@
 # Conversations
 
+## Fixed Group write limits
+
+Group creation and rename use cases accept nonblank titles of at most 256 UTF-8
+bytes, preserving exact text. `GroupTitle::new` validates structural readability,
+not write acceptance, so historical longer titles can still be loaded and renamed.
+Both ordinary and idempotent creation accept at most 256 initial participant
+entries before removing the actor or deduplicating. Group creation may contain
+only its Owner. There is no total membership cap; members can be added later.
+The library exposes `MAX_GROUP_TITLE_BYTES` and `MAX_INITIAL_GROUP_PARTICIPANTS`
+for transport preflights; application use cases enforce the rules independently.
+
 ## Domain outcomes and server realtime notifications
 
 Conversation mutations return library `Outcome<T>` values with explicit committed

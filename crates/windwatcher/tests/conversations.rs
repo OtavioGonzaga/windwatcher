@@ -114,3 +114,30 @@ async fn creation_validation_and_atomic_participant_rejections_are_mapped() {
         Err(windwatcher::CreateGroupConversationError::InvalidTitle(_))
     ));
 }
+
+#[tokio::test]
+async fn group_write_limits_reject_before_touching_persistence() {
+    use windwatcher::{CreateGroupConversationError as E, GroupTitleError};
+    let actor = UserId::new();
+    let now = OffsetDateTime::UNIX_EPOCH;
+    let store = ConversationDouble;
+    for title in ["a".repeat(257), "é".repeat(129)] {
+        assert!(matches!(
+            CreateGroupConversation::new(&store)
+                .execute(actor, title.clone(), &[], now)
+                .await,
+            Err(E::InvalidTitle(GroupTitleError::TooLong))
+        ));
+    }
+    assert!(matches!(
+        CreateGroupConversation::new(&store)
+            .execute(actor, "valid", &vec![actor; 257], now)
+            .await,
+        Err(E::TooManyParticipants)
+    ));
+    // Structural validation continues to accept historical titles.
+    assert_eq!(
+        GroupTitle::new("é".repeat(129)).unwrap().as_str().len(),
+        258
+    );
+}

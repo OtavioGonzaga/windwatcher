@@ -38,14 +38,17 @@ pub(in crate::http) struct CreateDirectRequest {
 #[serde(deny_unknown_fields)]
 pub(in crate::http) struct CreateGroupRequest {
     pub kind: GroupKind,
+    /// Nonblank exact title, at most 256 UTF-8 bytes (not characters).
     pub title: String,
-    #[schema(value_type = Vec<String>, format = Uuid)]
+    /// At most 256 entries, counted before removing duplicates or the creator.
+    #[schema(value_type = Vec<String>, format = Uuid, max_items = 256)]
     pub participant_ids: Vec<String>,
 }
 
 #[derive(Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(in crate::http) struct UpdateConversationRequest {
+    /// Nonblank exact title, at most 256 UTF-8 bytes (not characters).
     pub title: String,
 }
 

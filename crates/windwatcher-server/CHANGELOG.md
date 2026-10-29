@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Enforce fixed Group title and initial-participant write limits in HTTP/OpenAPI.
+
 - Add opt-in trusted proxy CIDRs for bounded, spoof-resistant X-Forwarded-For
   rate-limit addressing, with unchanged immediate-peer defaults.
 

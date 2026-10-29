@@ -277,6 +277,14 @@ and Idempotency-Key request headers and GET/POST/PUT/PATCH/DELETE methods are pe
 handled before authentication and quotas. Allowed-origin API errors retain CORS
 headers, and browsers can read `X-Request-Id`, `Retry-After` and `Idempotency-Replayed`.
 
+## Group write limits
+
+Creation and rename accept nonblank titles up to 256 UTF-8 bytes, not characters
+(`422 conversation.invalid_title`). Initial Group creation accepts at most 256
+`participant_ids` entries, counted before removing duplicates or the creator
+(`422 conversation.too_many_participants`). This does not limit total membership
+after subsequent additions. Historical longer titles remain readable.
+
 ## Rate limiting
 
 Governor token buckets are in-memory, per process and per resolved client IP.

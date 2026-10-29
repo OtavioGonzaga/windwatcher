@@ -2,6 +2,11 @@ use time::OffsetDateTime;
 
 use crate::{ConversationId, MessageId, UserId};
 
+/// Maximum UTF-8 title bytes accepted by Group creation and rename use cases.
+pub const MAX_GROUP_TITLE_BYTES: usize = 256;
+/// Maximum initial participant entries, before removing the actor or duplicates.
+pub const MAX_INITIAL_GROUP_PARTICIPANTS: usize = 256;
+
 /// The two supported conversation lifecycles.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ConversationKind {
@@ -22,16 +27,28 @@ pub enum GroupTitleError {
     /// Group titles cannot be empty or whitespace-only.
     #[error("group title must not be blank")]
     Blank,
+    /// A new title exceeds the fixed write limit; historical titles remain readable.
+    #[error("group title exceeds 256 UTF-8 bytes")]
+    TooLong,
 }
 
 impl GroupTitle {
-    /// Validates and preserves an exact group title.
+    /// Validates and preserves an exact structural title, including historical titles.
+    /// Application creation/rename use cases additionally enforce the write limit.
     pub fn new(value: impl Into<String>) -> Result<Self, GroupTitleError> {
         let value = value.into();
         if value.trim().is_empty() {
             return Err(GroupTitleError::Blank);
         }
         Ok(Self(value))
+    }
+
+    pub(crate) fn for_write(value: impl Into<String>) -> Result<Self, GroupTitleError> {
+        let value = value.into();
+        if value.len() > MAX_GROUP_TITLE_BYTES {
+            return Err(GroupTitleError::TooLong);
+        }
+        Self::new(value)
     }
 
     /// Returns the exact accepted title.
