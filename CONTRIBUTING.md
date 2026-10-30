@@ -231,6 +231,8 @@ follow Semantic Versioning, and packages are independently versioned.
 
 ## Pull requests
 
+Maintainers: [Release process](docs/releasing.md).
+
 Pull requests should describe the problem and change clearly, include validation
 performed, update relevant documentation, add an ADR for significant
 architectural decisions, and update the affected package changelog when

@@ -3,13 +3,29 @@
 For OCI/Podman deployment instead of host packages and systemd, see
 [container deployment](container.md).
 
-Install a locally built DEB or RPM package, or use the manual source installation
-below. Packaging definitions do not imply that published release artifacts are
-available. Both paths use the same account, directories and canonical systemd units.
+Install a DEB/RPM from the server's [GitHub Releases](https://github.com/OtavioGonzaga/windwatcher/releases),
+a locally built package, or use manual installation below. All paths use the
+same account, directories and canonical systemd units. Alternatively,
+`cargo install windwatcher-server --version X.Y.Z` installs only the binary,
+not accounts or units.
 
 ## Package installation
 
-Install a local package using your package manager, for example:
+Download assets from a `windwatcher-server-vX.Y.Z` release, not a library release.
+For example, for server 0.1.0 on x86_64:
+
+```bash
+base=https://github.com/OtavioGonzaga/windwatcher/releases/download/windwatcher-server-v0.1.0
+curl -fLO "$base/windwatcher-server_0.1.0-1_amd64.deb"
+curl -fLO "$base/windwatcher-server_0.1.0-1_amd64.deb.sha256"
+sha256sum -c windwatcher-server_0.1.0-1_amd64.deb.sha256
+sudo apt install ./windwatcher-server_0.1.0-1_amd64.deb
+```
+
+Use an actually published version. RPM users download
+`windwatcher-server-0.1.0-1.x86_64.rpm` and its sidecar. For aarch64 use
+DEB `arm64` or RPM `aarch64`. `SHA256SUMS` verifies all six primary assets
+if all are downloaded. Install a downloaded or local package using:
 
 ```bash
 sudo apt install ./windwatcher-server_<version>-1_amd64.deb
@@ -25,6 +41,13 @@ configuration or key, migrate databases, enable units or start services.
 
 The package validation baselines are Debian 13 and Fedora 44 on x86_64 and
 aarch64. These are validated environments, not an exhaustive compatibility list.
+
+For tarballs, download `windwatcher-server-0.1.0-linux-x86_64.tar.gz` (or
+`linux-aarch64`) and its `.sha256` sidecar from the same release. Verify before
+extracting. The archive contains one directory with the executable, license,
+README, example config and units. Install that executable instead of compiling
+below, using the included units; manually provision the same account and
+directories. Tarballs do not run package hooks or initialize active configuration.
 
 ### First-time initialization
 
