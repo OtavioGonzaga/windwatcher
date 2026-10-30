@@ -107,7 +107,7 @@ for your environment. `config show` redacts sensitive values and does not connec
 
 ## Health, shutdown and upgrades
 
-`/live` is liveness; `/ready` tests primary-storage readiness. The image contains
+`/health/live` is liveness; `/health/ready` tests primary-storage readiness. The image contains
 no embedded healthcheck or HTTP client; configure probes externally in Podman,
 your proxy, or an orchestrator. `podman stop` sends SIGTERM directly to Windwatcher
 for graceful shutdown. Allow the configured shutdown grace period.

@@ -30,7 +30,7 @@ start_server() {
   local port
   port=$(podman port "$server" 8080/tcp | head -n1 | sed 's/.*://')
   for _ in {1..60}; do
-    if curl -fsS "http://127.0.0.1:$port/live" >/dev/null && curl -fsS "http://127.0.0.1:$port/ready" >/dev/null; then return; fi
+    if curl -fsS "http://127.0.0.1:$port/health/live" >/dev/null && curl -fsS "http://127.0.0.1:$port/health/ready" >/dev/null; then return; fi
     sleep 1
   done
   echo 'server did not become ready' >&2; return 1
