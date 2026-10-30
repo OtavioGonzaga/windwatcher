@@ -17,6 +17,7 @@ EOF
 cat > "$tmp/systemd-tmpfiles" <<'EOF'
 #!/bin/sh
 echo tmpfiles >> "$LOG"
+exit "${FAIL_TMPFILES:-0}"
 EOF
 chmod +x "$tmp"/systemctl "$tmp"/systemd-sysusers "$tmp"/systemd-tmpfiles
 export PATH=$tmp:$PATH
@@ -39,4 +40,14 @@ grep -qx daemon-reload "$LOG"
 if FAIL_SYSUSERS=1 sh "$root/packaging/scripts/postinstall.sh" configure; then
     echo 'sysusers failure was ignored' >&2; exit 1
 fi
+: > "$LOG"
+if FAIL_TMPFILES=1 sh "$root/packaging/scripts/postinstall.sh" configure; then
+    echo 'tmpfiles failure was ignored' >&2; exit 1
+fi
+if grep -q daemon-reload "$LOG"; then
+    echo 'daemon-reload ran after provisioning failure' >&2; exit 1
+fi
+: > "$LOG"
+sh "$root/packaging/scripts/postinstall.sh" abort-upgrade
+[[ ! -s $LOG ]]
 echo 'Package hook tests passed.'
