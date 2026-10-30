@@ -40,7 +40,7 @@ diagnostics and graceful shutdown. The optional durable queue and separate
 [Durable jobs](docs/jobs.md); no production job handlers are shipped yet.
 
 For a Linux system service using `/etc/windwatcher` and `/var/lib/windwatcher`,
-see [installation](docs/installation.md).
+including the DEB and RPM packaging definitions, see [installation](docs/installation.md).
 
 ## Development
 

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Add Debian and RPM package definitions for x86_64 and aarch64, with systemd
+  account and directory provisioning and conservative upgrade/removal behavior.
+- Document package installation, upgrades, removal and manual-install migration.
 - Add hardened canonical systemd units for the server and optional worker, and
   document the Linux installation and ownership contract.
 - Initialize user-mode config and key privately and system-mode files with
