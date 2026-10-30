@@ -9,13 +9,15 @@ esac
 install_package() {
     case $distro in
         debian) DEBIAN_FRONTEND=noninteractive apt-get install -y "$1";;
-        fedora) dnf install -y "$1";;
+        # The Fedora container image defaults to tsflags=nodocs, unlike a
+        # normal installation. Include docs to verify the complete payload.
+        fedora) dnf --setopt=tsflags= install -y "$1";;
     esac
 }
 upgrade_package() {
     case $distro in
         debian) DEBIAN_FRONTEND=noninteractive apt-get install -y "$1";;
-        fedora) dnf upgrade -y "$1";;
+        fedora) dnf --setopt=tsflags= upgrade -y "$1";;
     esac
 }
 as_windwatcher() {
