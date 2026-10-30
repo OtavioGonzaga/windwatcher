@@ -13,6 +13,13 @@ changes.
 - Introduce ADRs only alongside actual architectural changes.
 - Do not duplicate repository-wide rules from `CONTRIBUTING.md` here.
 - Run the validation steps defined by `CONTRIBUTING.md` before finishing.
+- Never run the entire test suite in a single invocation or run test commands
+  concurrently. Split validation into smaller, sequential batches by package,
+  target, or test filter; use at most four Cargo build jobs (`CARGO_BUILD_JOBS=4`)
+  and one test thread (`-- --test-threads=1`). Apply the same Cargo job limit
+  to other build and validation commands, and reduce it if memory pressure is
+  high. If a required validation cannot be safely split or completed within these
+  limits, report it instead of increasing resource usage without the user's approval.
 
 <!-- ai-memory:start -->
 
