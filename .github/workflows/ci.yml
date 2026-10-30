@@ -166,9 +166,67 @@ jobs:
         if: always()
         run: bash scripts/ci/services.sh stop
 
+  packages:
+    name: packages (${{ matrix.arch }})
+    needs: quality
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 75
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-22.04
+          - arch: aarch64
+            runner: ubuntu-22.04-arm
+    env:
+      CARGO_BUILD_JOBS: 4
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
+        with:
+          cache-key: packages-${{ matrix.arch }}
+      - name: Build release binary once
+        run: |
+          cargo build --release --locked -p windwatcher-server --bin windwatcher
+          strip --strip-unneeded target/release/windwatcher
+          ldd target/release/windwatcher
+          readelf -h -d --version-info target/release/windwatcher
+      - name: Install package tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rpm cpio lintian rpmlint
+          scripts/ci/install-nfpm.sh "$RUNNER_TEMP/nfpm"
+          echo "$RUNNER_TEMP/nfpm" >> "$GITHUB_PATH"
+      - name: Build both formats and upgrade fixtures
+        env:
+          PACKAGE_ARCH: ${{ matrix.arch }}
+        run: |
+          for format in deb rpm; do
+            file=$(scripts/package.sh "$format" "$PACKAGE_ARCH" target/release/windwatcher "$RUNNER_TEMP/packages")
+            echo "${format^^}1=$file" >> "$GITHUB_ENV"
+            file=$(PACKAGE_RELEASE=2 scripts/package.sh "$format" "$PACKAGE_ARCH" target/release/windwatcher "$RUNNER_TEMP/packages")
+            echo "${format^^}2=$file" >> "$GITHUB_ENV"
+          done
+      - name: Verify package contents and lint
+        env:
+          PACKAGE_ARCH: ${{ matrix.arch }}
+        run: |
+          scripts/ci/test-package-hooks.sh
+          scripts/ci/verify-packaging.sh "$DEB1" "$RPM1" "$PACKAGE_ARCH" target/release/windwatcher
+          scripts/ci/lint-packaging.sh "$DEB1" "$RPM1"
+      - name: Debian 13 lifecycle
+        run: scripts/ci/test-package.sh debian "$DEB1" "$DEB2"
+      - name: Fedora 44 lifecycle
+        run: scripts/ci/test-package.sh fedora "$RPM1" "$RPM2"
+
   required:
     if: always()
-    needs: [quality, features, msrv, dependency-policy, adapter-contracts, server-network]
+    needs: [quality, features, msrv, dependency-policy, adapter-contracts, server-network, packages]
     runs-on: ubuntu-26.04
     timeout-minutes: 2
     steps:
@@ -180,9 +238,10 @@ jobs:
           POLICY_RESULT: ${{ needs.dependency-policy.result }}
           ADAPTERS_RESULT: ${{ needs.adapter-contracts.result }}
           SERVER_NETWORK_RESULT: ${{ needs.server-network.result }}
+          PACKAGES_RESULT: ${{ needs.packages.result }}
         run: |
           failed=0
-          for result in QUALITY_RESULT FEATURES_RESULT MSRV_RESULT POLICY_RESULT ADAPTERS_RESULT SERVER_NETWORK_RESULT; do
+          for result in QUALITY_RESULT FEATURES_RESULT MSRV_RESULT POLICY_RESULT ADAPTERS_RESULT SERVER_NETWORK_RESULT PACKAGES_RESULT; do
             echo "$result=${!result}"
             if [[ "${!result}" != success ]]; then
               failed=1
