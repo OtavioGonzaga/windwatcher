@@ -18,7 +18,7 @@ doc = false
 axum = { version = "0.8", default-features = false, features = ["json", "query", "matched-path", "tokio", "ws", "http1"] }
 base64 = "0.22"
 rand_core = { version = "0.6", features = ["getrandom"] }
-sha2 = "0.10"
+sha2 = "0.11"
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 governor = { version = "0.10", default-features = false, features = ["std", "dashmap"] }
 clap = { version = "4", features = ["derive"] }

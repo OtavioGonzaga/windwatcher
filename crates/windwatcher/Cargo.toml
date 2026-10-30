@@ -24,7 +24,7 @@ queue-redis = ["dep:redis", "dep:serde_stacker"]
 [dependencies]
 argon2 = { version = "0.5", features = ["std", "zeroize"] }
 base64 = "0.22"
-hmac = { version = "0.12", optional = true }
+hmac = { version = "0.13", optional = true }
 mongodb = { version = "3.9.1", optional = true, default-features = false, features = ["bson-3", "compat-3-3-0", "dns-resolver", "rustls-tls"] }
 futures-util = { version = "0.3", optional = true, default-features = false, features = ["std"] }
 rand_core = { version = "0.6", features = ["getrandom"] }
@@ -32,7 +32,7 @@ redis = { version = "1.8", optional = true, default-features = false, features =
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["unbounded_depth"] }
 serde_stacker = { version = "0.1", optional = true }
-sha2 = "0.10"
+sha2 = "0.11"
 sqlx = { version = "0.9", optional = true, default-features = false, features = ["runtime-tokio", "migrate", "macros"] }
 thiserror = "2"
 time = "0.3"
