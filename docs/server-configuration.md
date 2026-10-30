@@ -17,6 +17,12 @@ file and requires it to exist; it does not change the selected mode's data path.
 `config.example.toml` and `.env.example` document supported values. Windwatcher
 does not load `.env` automatically. Relative explicit filesystem paths are relative
 to the process working directory.
+For system-mode operator commands, use the same working directory as the
+canonical units (`/var/lib/windwatcher`) whenever explicit filesystem paths,
+including SQLite URLs, are relative. Otherwise commands such as migrations and
+user provisioning can affect different files from the running service. If a
+systemd drop-in changes the working directory, match that directory instead.
+See [installation](installation.md#configure-and-migrate).
 
 `windwatcher init` creates a minimal configuration and a 32-byte random JWT key
 in the selected configuration directory, without overwriting either file. The
@@ -26,6 +32,15 @@ It never creates a database or applies migrations. Run `windwatcher migrate`
 separately. `config show` displays effective loaded values with sensitive URLs and
 direct secrets redacted without reading secret files or connecting dependencies;
 it does not perform semantic validation.
+
+On Unix, user-mode `init` creates config and key with mode `0600` and newly
+created configuration directories privately. Existing parents are not chmodded.
+Linux system-mode `init` requires an externally prepared parent directory and
+creates both files with mode `0640`; it does not create or chown OS accounts.
+The system contract is `/etc/windwatcher` owned by `root:windwatcher` with mode
+`2750`, config and key `root:windwatcher` `0640`, and `/var/lib/windwatcher`
+owned by `windwatcher:windwatcher` with mode `0750`. Group inheritance depends
+on the prepared setgid directory. See [installation](installation.md).
 
 Malformed values, including invalid duration syntax, invalidate every command.
 Semantic authentication failures such as a missing JWT secret or invalid session

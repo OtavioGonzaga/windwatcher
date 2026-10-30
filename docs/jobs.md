@@ -14,6 +14,12 @@ Handlers must be idempotent where practical; `JobId` is the natural external
 idempotency identity. There is no processing-order guarantee across jobs,
 workers, or adapters.
 
+The optional `windwatcher-worker.service` runs independently of the server
+service and requires a configured queue and explicit queue migrations. During a
+graceful stop the worker continues renewing and completing active leases until
+its configured grace expires; systemd restart does not replace lease recovery.
+See [Linux installation](installation.md) for service setup.
+
 Every job has an open lowercase ASCII `JobKind`, a `payload_version` starting at
 1, and a JSON-object payload. The object root is required; nested JSON values may
 have any JSON type. The default serialized UTF-8 payload ceiling is 256 KiB.

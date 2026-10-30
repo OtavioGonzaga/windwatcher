@@ -321,7 +321,10 @@ fn init_creates_private_configuration_without_persistence_or_overwrite() {
         .env("XDG_DATA_HOME", &data)
         .arg("init")
         .assert()
-        .success();
+        .success()
+        .stdout(predicate::str::contains(
+            "Run `windwatcher migrate` before serving.",
+        ));
     let key = target.parent().unwrap().join("jwt.key");
     let secret = fs::read(&key).unwrap();
     assert_eq!(secret.len(), 32);
@@ -329,7 +332,22 @@ fn init_creates_private_configuration_without_persistence_or_overwrite() {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        assert_eq!(fs::metadata(&key).unwrap().permissions().mode() & 0o077, 0);
+        assert_eq!(
+            fs::metadata(&key).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert_eq!(
+            fs::metadata(&target).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert_eq!(
+            fs::metadata(target.parent().unwrap())
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700
+        );
     }
     command(&target)
         .args(["config", "check"])
@@ -352,6 +370,63 @@ fn init_creates_private_configuration_without_persistence_or_overwrite() {
         .stderr(predicate::str::contains("already exists"));
     assert!(!target.exists());
     assert_eq!(fs::read(&key).unwrap(), secret);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn system_init_requires_prepared_directory_and_preserves_existing_files() {
+    use std::os::unix::fs::PermissionsExt;
+    let directory = TempDir::new().unwrap();
+    let parent = directory.path().join("prepared");
+    let target = parent.join("config.toml");
+    let key = parent.join("jwt.key");
+    command(&target)
+        .args(["--system", "init"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("provisioned first"));
+    assert!(!parent.exists());
+    fs::create_dir(&parent).unwrap();
+    command(&target)
+        .args(["--system", "init"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Run `windwatcher --system migrate` as the service account before serving.",
+        ));
+    assert_eq!(
+        fs::metadata(&target).unwrap().permissions().mode() & 0o777,
+        0o640
+    );
+    assert_eq!(
+        fs::metadata(&key).unwrap().permissions().mode() & 0o777,
+        0o640
+    );
+    let config = fs::read(&target).unwrap();
+    let secret = fs::read(&key).unwrap();
+    assert_eq!(secret.len(), 32);
+    assert!(String::from_utf8_lossy(&config).contains(key.to_str().unwrap()));
+    command(&target)
+        .args(["--system", "init"])
+        .assert()
+        .failure();
+    assert_eq!(fs::read(&target).unwrap(), config);
+    assert_eq!(fs::read(&key).unwrap(), secret);
+    fs::remove_file(&target).unwrap();
+    command(&target)
+        .args(["--system", "init"])
+        .assert()
+        .failure();
+    assert!(!target.exists());
+    assert_eq!(fs::read(&key).unwrap(), secret);
+    fs::remove_file(&key).unwrap();
+    fs::write(&target, &config).unwrap();
+    command(&target)
+        .args(["--system", "init"])
+        .assert()
+        .failure();
+    assert_eq!(fs::read(&target).unwrap(), config);
+    assert!(!key.exists());
 }
 
 #[test]

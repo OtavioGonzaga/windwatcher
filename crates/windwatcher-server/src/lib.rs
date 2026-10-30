@@ -63,7 +63,7 @@ async fn run() -> Result<(), AppError> {
     };
     let paths = ResolvedPaths::resolve(mode)?;
     if matches!(command, Command::Init) {
-        return init::run(cli.config.unwrap_or(paths.config_file));
+        return init::run(cli.config.unwrap_or(paths.config_file), mode);
     }
     let raw = config::load(&paths, cli.config).map_err(|error| {
         if matches!(command, Command::Doctor) {

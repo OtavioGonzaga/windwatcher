@@ -76,6 +76,10 @@ cargo doc \
 
 ### Continuous integration
 
+On Linux, run `bash scripts/ci/verify-systemd.sh` to validate the canonical
+service units. This check requires systemd tooling and is enforced by CI; it
+is not necessarily available on macOS or Windows.
+
 The `quality` job in [CI](.github/workflows/ci.yml) runs this baseline, including
 SQLite contracts without external services. Independent jobs also validate:
 

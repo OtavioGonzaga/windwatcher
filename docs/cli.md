@@ -29,6 +29,11 @@ configuration. `config show` displays loaded effective configuration with secret
 values and database/queue URLs redacted; it does not read secret-file contents,
 validate semantic rules or connect dependencies. Logging CLI overrides are shown.
 
+For system installations, an administrator provisions directories and runs
+`windwatcher --system init`; run `config check`, `migrate`, `doctor`, `user`
+and `jobs` commands as the `windwatcher` service account. See
+[installation](installation.md) for the complete privilege and ownership contract.
+
 `user disable <user-id>` disables the user and revokes all existing sessions;
 retrying also retries revocation. `user enable <user-id>` does not restore revoked
 sessions. Both require existing storage and current schema, and are idempotent.
