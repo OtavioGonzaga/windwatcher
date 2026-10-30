@@ -1,5 +1,6 @@
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-use rand_core::{OsRng, RngCore};
+use getrandom::SysRng;
+use rand_core::TryRng;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use time::OffsetDateTime;
@@ -13,9 +14,9 @@ impl std::fmt::Debug for Ticket {
     }
 }
 impl Ticket {
-    pub(super) fn generate() -> Result<Self, rand_core::Error> {
+    pub(super) fn generate() -> Result<Self, getrandom::Error> {
         let mut bytes = Zeroizing::new([0u8; 32]);
-        OsRng.try_fill_bytes(bytes.as_mut())?;
+        SysRng.try_fill_bytes(bytes.as_mut())?;
         Ok(Self(Zeroizing::new(URL_SAFE_NO_PAD.encode(bytes.as_ref()))))
     }
     pub(super) fn expose(&self) -> &str {

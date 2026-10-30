@@ -1,7 +1,8 @@
 use std::{fmt, future::Future};
 
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-use rand_core::{OsRng, RngCore};
+use getrandom::SysRng;
+use rand_core::TryRng;
 use sha2::{Digest as _, Sha256};
 use time::{Duration, OffsetDateTime};
 use zeroize::Zeroizing;
@@ -325,7 +326,7 @@ pub struct OsRefreshTokenProvider;
 impl RefreshTokenProvider for OsRefreshTokenProvider {
     fn generate(&self) -> Result<RefreshToken, RefreshTokenError> {
         let mut bytes = Zeroizing::new([0; 32]);
-        OsRng
+        SysRng
             .try_fill_bytes(bytes.as_mut())
             .map_err(|_| RefreshTokenError::RandomGenerationFailed)?;
         Ok(RefreshToken::from_bytes(&bytes))
