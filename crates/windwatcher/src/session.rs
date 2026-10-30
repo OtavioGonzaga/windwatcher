@@ -714,7 +714,7 @@ impl<'a, S: SessionStore> RevokeSession<'a, S> {
 #[cfg(feature = "jwt-hs256")]
 mod jwt {
     use super::*;
-    use hmac::{Hmac, Mac};
+    use hmac::{Hmac, KeyInit, Mac};
     use serde::{Deserialize, Serialize};
     use std::str::FromStr;
 
