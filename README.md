@@ -39,6 +39,9 @@ diagnostics and graceful shutdown. The optional durable queue and separate
 `windwatcher worker` process are documented in
 [Durable jobs](docs/jobs.md); no production job handlers are shipped yet.
 
+For a Linux system service using `/etc/windwatcher` and `/var/lib/windwatcher`,
+see [installation](docs/installation.md).
+
 ## Development
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development requirements, workflow,

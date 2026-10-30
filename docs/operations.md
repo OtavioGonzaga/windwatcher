@@ -57,11 +57,23 @@ Only numeric IP/port addresses are supported, including IPv6 such as `[::1]:8080
 Port zero selects an ephemeral port and logs the actual bound address. Containers
 or reverse proxies can explicitly select `0.0.0.0:8080` or `[::]:8080`; defaults
 never expose the service externally. TLS termination is external in v1. No
-hostname resolution, TLS listener, Unix sockets or service packaging is supplied.
+hostname resolution, TLS listener or Unix sockets are supplied. For manual Linux
+system service installation, see [installation](installation.md).
 Client-IP quotas use the immediate TCP peer by default. Explicit trusted proxy
 CIDRs enable bounded `X-Forwarded-For` resolution; see
 [HTTP configuration](server-configuration.md#http-behavior). Without opt-in,
 proxy clients share the peer bucket.
+
+## Systemd operation
+
+The canonical server and optional worker units are independent. Both log to
+journald (`journalctl -u windwatcher.service`, `journalctl -u
+windwatcher-worker.service`; use `journalctl -fu windwatcher.service` to follow).
+Systemd's SIGTERM invokes the existing graceful shutdown; `TimeoutStopSec=90s`
+is the outer deadline. Increase it with a drop-in if the application's configured
+grace exceeds it. A clean stop does not restart; failures restart after five
+seconds. Restart the affected service after configuration changes. See
+[installation](installation.md) for provisioning and service setup.
 
 ## Health
 

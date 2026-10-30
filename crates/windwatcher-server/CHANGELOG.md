@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Add hardened canonical systemd units for the server and optional worker, and
+  document the Linux installation and ownership contract.
+- Initialize user-mode config and key privately and system-mode files with
+  service-readable Unix permissions; system initialization now requires a
+  pre-provisioned configuration directory.
+
 - Publish exact canonical WebSocket ticket length/pattern in query and response
   OpenAPI schemas, matching runtime validation.
 

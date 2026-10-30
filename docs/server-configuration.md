@@ -27,6 +27,15 @@ separately. `config show` displays effective loaded values with sensitive URLs a
 direct secrets redacted without reading secret files or connecting dependencies;
 it does not perform semantic validation.
 
+On Unix, user-mode `init` creates config and key with mode `0600` and newly
+created configuration directories privately. Existing parents are not chmodded.
+Linux system-mode `init` requires an externally prepared parent directory and
+creates both files with mode `0640`; it does not create or chown OS accounts.
+The system contract is `/etc/windwatcher` owned by `root:windwatcher` with mode
+`2750`, config and key `root:windwatcher` `0640`, and `/var/lib/windwatcher`
+owned by `windwatcher:windwatcher` with mode `0750`. Group inheritance depends
+on the prepared setgid directory. See [installation](installation.md).
+
 Malformed values, including invalid duration syntax, invalidate every command.
 Semantic authentication failures such as a missing JWT secret or invalid session
 policy are resolved by `config check`, `serve` and `doctor`, so they do
