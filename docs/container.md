@@ -1,7 +1,26 @@
 # OCI container deployment
 
-The repository provides an official OCI image definition, not a published image
-or registry tag. Install [Podman](https://podman.io/) and build from the checkout:
+## Official published image
+
+Install [Podman](https://podman.io/) and choose a published server version:
+
+```bash
+podman pull ghcr.io/otaviogonzaga/windwatcher-server:VERSION
+```
+
+Replace `VERSION` with an actual release such as `0.1.0`. Exact `X.Y.Z` tags
+are immutable multi-platform linux/amd64 and linux/arm64 images. `X.Y` tracks
+stable patches in that minor line; `latest` tracks the latest stable server.
+Pin exact versions for controlled upgrades. Prereleases such as `0.2.0-rc.1`
+have exact tags only and never update stable aliases. There is no major-only
+`0` alias. Architecture-suffixed tags are release/recovery plumbing.
+
+First publication needs a one-time public-visibility bootstrap; see
+[releasing](releasing.md#first-release-exact-sequence).
+
+## Build from source
+
+The repository also provides the official OCI definition. Build from a checkout:
 
 ```bash
 podman build --format=oci --file Containerfile --tag localhost/windwatcher-server:local .
@@ -10,6 +29,10 @@ podman build --format=oci --file Containerfile --tag localhost/windwatcher-serve
 Podman and `.containerignore` define the supported source-build workflow. OCI
 images can also be consumed by compatible runtimes, including Docker-compatible
 environments. Base image digests are reviewed and updated manually.
+
+The examples below use the source-built `localhost/windwatcher-server:local`.
+For official published images replace that reference everywhere with
+`ghcr.io/otaviogonzaga/windwatcher-server:VERSION`; the runtime contract is the same.
 
 ## Runtime contract
 

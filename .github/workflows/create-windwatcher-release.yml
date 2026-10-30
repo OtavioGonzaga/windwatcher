@@ -1,0 +1,97 @@
+name: Create windwatcher release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: SemVer without v prefix or build metadata
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: windwatcher-release
+  cancel-in-progress: false
+
+env:
+  CARGO_BUILD_JOBS: 4
+  VERSION: ${{ inputs.version }}
+
+jobs:
+  ci:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ci.yml
+
+  prepare:
+    needs: ci
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    environment: release
+    permissions:
+      contents: write
+    outputs:
+      release_commit: ${{ steps.prepare.outputs.release_commit }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
+      - id: prepare
+        run: scripts/ci/prepare-release.sh windwatcher "$VERSION"
+
+  validate-package:
+    needs: prepare
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.release_commit }}
+          persist-credentials: false
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
+      - run: |
+          cargo metadata --locked --format-version 1 > /dev/null
+          cargo check --workspace --all-features --locked
+          scripts/ci/test-release-scripts.sh
+          cargo package -p windwatcher --locked
+          cargo publish -p windwatcher --dry-run --locked --registry crates-io
+
+  publish-crate:
+    needs: [prepare, validate-package]
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    environment: release
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.release_commit }}
+          persist-credentials: false
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
+      - run: cargo package -p windwatcher --locked
+      - name: Publish or verify exact registry version
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
+        run: python3 scripts/registry-release.py publish windwatcher "$VERSION"
+
+  finalize-github:
+    needs: [prepare, publish-crate]
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.release_commit }}
+          fetch-depth: 0
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_COMMIT: ${{ needs.prepare.outputs.release_commit }}
+        run: python3 scripts/finalize-release.py windwatcher "$VERSION" "$RELEASE_COMMIT"

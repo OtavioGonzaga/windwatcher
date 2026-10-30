@@ -1,0 +1,225 @@
+name: Create windwatcher-server release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: SemVer without v prefix or build metadata
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: windwatcher-release
+  cancel-in-progress: false
+
+env:
+  CARGO_BUILD_JOBS: 4
+  VERSION: ${{ inputs.version }}
+
+jobs:
+  ci:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ci.yml
+
+  prepare:
+    needs: ci
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    environment: release
+    permissions:
+      contents: write
+    outputs:
+      release_commit: ${{ steps.prepare.outputs.release_commit }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
+      - id: prepare
+        run: scripts/ci/prepare-release.sh windwatcher-server "$VERSION"
+
+  dependency-preflight:
+    needs: prepare
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.release_commit }}
+          persist-credentials: false
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
+      - run: |
+          dependency=$(python3 scripts/release.py dependency windwatcher-server "$VERSION")
+          python3 scripts/registry-release.py dependency windwatcher "$dependency"
+          cargo metadata --locked --format-version 1 > /dev/null
+          cargo check --workspace --all-features --locked
+          scripts/ci/test-release-scripts.sh
+
+  build-dist:
+    needs: [prepare, dependency-preflight]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 75
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-22.04
+          - arch: aarch64
+            runner: ubuntu-22.04-arm
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.release_commit }}
+          persist-credentials: false
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
+      - name: Install package tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rpm cpio
+          scripts/ci/install-nfpm.sh "$RUNNER_TEMP/nfpm"
+          echo "$RUNNER_TEMP/nfpm" >> "$GITHUB_PATH"
+      - env:
+          ARCH: ${{ matrix.arch }}
+        run: scripts/build-release-artifacts.sh "$VERSION" "$ARCH" "$RUNNER_TEMP/dist"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: windwatcher-server-dist-${{ matrix.arch }}
+          path: ${{ runner.temp }}/dist/*
+          if-no-files-found: error
+
+  validate-artifacts:
+    needs: [prepare, build-dist]
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.release_commit }}
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: windwatcher-server-dist-*
+          path: ${{ runner.temp }}/build-dist
+      - name: Validate complete public asset inventory
+        run: |
+          python3 scripts/validate-release-artifacts.py "$VERSION" "$RUNNER_TEMP/dist" --collect "$RUNNER_TEMP/build-dist" --create
+          cd "$RUNNER_TEMP/dist"
+          sha256sum -c SHA256SUMS
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: windwatcher-server-public-assets
+          path: ${{ runner.temp }}/dist/*
+          if-no-files-found: error
+
+  publish-server-crate:
+    needs: [prepare, validate-artifacts]
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    environment: release
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.release_commit }}
+          persist-credentials: false
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
+      - run: |
+          cargo package -p windwatcher-server --locked
+          cargo publish -p windwatcher-server --dry-run --locked --registry crates-io
+      - name: Publish or verify exact registry version
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
+        run: python3 scripts/registry-release.py publish windwatcher-server "$VERSION"
+
+  publish-oci:
+    needs: [prepare, publish-server-crate]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    environment: release
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-22.04
+          - arch: arm64
+            runner: ubuntu-22.04-arm
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.release_commit }}
+          persist-credentials: false
+      - name: Install OCI tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y podman skopeo
+      - name: Publish native architecture or verify recovery
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARCH: ${{ matrix.arch }}
+          RELEASE_COMMIT: ${{ needs.prepare.outputs.release_commit }}
+        run: |
+          printf '%s' "$GH_TOKEN" | podman login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          python3 scripts/publish-release-oci.py architecture "$VERSION" "$RELEASE_COMMIT" --arch "$ARCH"
+      - if: always()
+        run: podman logout ghcr.io
+
+  publish-oci-manifest:
+    needs: [prepare, publish-oci]
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    environment: release
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.release_commit }}
+          persist-credentials: false
+      - run: |
+          sudo apt-get update
+          sudo apt-get install -y podman skopeo
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_COMMIT: ${{ needs.prepare.outputs.release_commit }}
+        run: |
+          printf '%s' "$GH_TOKEN" | podman login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          python3 scripts/publish-release-oci.py manifest "$VERSION" "$RELEASE_COMMIT"
+      - if: always()
+        run: podman logout ghcr.io
+
+  finalize-github:
+    needs: [prepare, publish-oci-manifest]
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.release_commit }}
+          fetch-depth: 0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: windwatcher-server-public-assets
+          path: ${{ runner.temp }}/assets
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_COMMIT: ${{ needs.prepare.outputs.release_commit }}
+        run: python3 scripts/finalize-release.py windwatcher-server "$VERSION" "$RELEASE_COMMIT" --assets "$RUNNER_TEMP/assets"
