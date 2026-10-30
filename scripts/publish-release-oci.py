@@ -3,16 +3,27 @@
 import argparse
 import json
 import subprocess
+import sys
 from release import require, version
 
 IMAGE = "ghcr.io/otaviogonzaga/windwatcher-server"
 
 
-def command(*args):
-    return subprocess.check_output(args, text=True).strip()
+def package_exists():
+    # GHCR can deny even a manifest lookup before the package's first push.
+    # Confirm bootstrap absence with the authenticated Packages API instead of
+    # reinterpreting registry authentication errors as missing version tags.
+    result = subprocess.run(["gh", "api", "users/otaviogonzaga/packages/container/windwatcher-server"],
+                            text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if result.returncode:
+        require("(HTTP 404)" in result.stderr, result.stderr)
+        return False
+    return True
 
 
 def inspect(reference, raw=False):
+    if not package_exists():
+        return None
     args = ["skopeo", "inspect"] + (["--raw"] if raw else []) + ["docker://" + reference]
     result = subprocess.run(args, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if result.returncode:
@@ -62,6 +73,8 @@ def main():
                                "--build-arg", "VERSION=" + args.version, "--build-arg", "REVISION=" + args.revision, "."])
         subprocess.check_call(["scripts/ci/verify-oci.sh", reference, args.arch, args.version, args.revision])
         subprocess.check_call(["scripts/ci/test-oci.sh", reference])
+        if architecture(reference, args.arch, args.version, args.revision) is not None:
+            return
         subprocess.check_call(["podman", "push", "--format", "oci", reference])
         require(architecture(reference, args.arch, args.version, args.revision), "Published architecture missing")
         return
@@ -95,4 +108,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except (ValueError, subprocess.CalledProcessError) as error:
+        sys.exit(str(error))

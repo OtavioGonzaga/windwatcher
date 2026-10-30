@@ -5,6 +5,7 @@ import importlib.util
 import json
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 
 from release import require, version, release_body, PACKAGES, run
@@ -90,4 +91,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except (ValueError, subprocess.CalledProcessError) as error:
+        sys.exit(str(error))

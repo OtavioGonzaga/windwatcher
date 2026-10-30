@@ -13,6 +13,9 @@ their first publication. No manual `cargo publish` bootstrap is required.
 The secret is injected only into crate publication steps, not CI/builds.
 GHCR uses the job's `GITHUB_TOKEN`, not a PAT. Allow Actions to create packages
 and ensure the repository has access to its associated GHCR package.
+OCI preflight uses the authenticated GitHub Packages API to detect a missing
+package on first publication; registry authentication failures are never used
+as evidence that an exact version tag is absent.
 
 Preparation and finalization use the protected environment and `contents: write`.
 Repository rules must permit the Actions bot's release metadata pushes to

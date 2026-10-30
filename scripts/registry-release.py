@@ -5,6 +5,7 @@ import io
 import json
 from pathlib import Path
 import subprocess
+import sys
 import tarfile
 import urllib.error
 import urllib.request
@@ -70,4 +71,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except (ValueError, subprocess.CalledProcessError, urllib.error.URLError) as error:
+        sys.exit(str(error))

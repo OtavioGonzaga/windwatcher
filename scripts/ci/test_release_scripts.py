@@ -379,10 +379,20 @@ class OciTests(unittest.TestCase):
     def test_inspect_fails_closed_on_network_and_auth_errors(self):
         for error in ("unauthorized", "timeout", "too many requests"):
             result = subprocess.CompletedProcess([], 1, "", error)
-            with patch.object(oci.subprocess, "run", return_value=result), self.assertRaises(ValueError):
+            with patch.object(oci, "package_exists", return_value=True), patch.object(oci.subprocess, "run", return_value=result), self.assertRaises(ValueError):
                 oci.inspect("image")
-        with patch.object(oci.subprocess, "run", return_value=subprocess.CompletedProcess([], 1, "", "manifest unknown")):
+        with patch.object(oci, "package_exists", return_value=True), patch.object(oci.subprocess, "run", return_value=subprocess.CompletedProcess([], 1, "", "manifest unknown")):
             self.assertIsNone(oci.inspect("image"))
+
+    def test_first_ghcr_publication_bootstrap(self):
+        with patch.object(oci.subprocess, "run", return_value=subprocess.CompletedProcess([], 1, "", "gh: Not Found (HTTP 404)")):
+            self.assertFalse(oci.package_exists())
+        for error in ("gh: Forbidden (HTTP 403)", "network timeout"):
+            with patch.object(oci.subprocess, "run", return_value=subprocess.CompletedProcess([], 1, "", error)), self.assertRaises(ValueError):
+                oci.package_exists()
+        with patch.object(oci, "package_exists", return_value=False), patch.object(oci.subprocess, "run") as registry:
+            self.assertIsNone(oci.inspect("image"))
+            registry.assert_not_called()
 
 
 class GitHubAssetsTests(unittest.TestCase):
