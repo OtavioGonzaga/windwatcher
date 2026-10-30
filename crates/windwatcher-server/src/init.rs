@@ -1,4 +1,5 @@
 use crate::error::AppError;
+use crate::paths::RuntimeMode;
 use getrandom::SysRng;
 use rand_core::TryRng;
 use std::{
@@ -15,7 +16,7 @@ fn failure(path: &Path, source: io::Error) -> AppError {
     }
 }
 
-pub(crate) fn run(target: PathBuf) -> Result<(), AppError> {
+pub(crate) fn run(target: PathBuf, mode: RuntimeMode) -> Result<(), AppError> {
     let target = if target.is_absolute() {
         target
     } else {
@@ -29,7 +30,30 @@ pub(crate) fn run(target: PathBuf) -> Result<(), AppError> {
             io::Error::other("configuration has no parent directory"),
         )
     })?;
-    fs::create_dir_all(directory).map_err(|e| failure(directory, e))?;
+    match mode {
+        RuntimeMode::User => {
+            let mut builder = fs::DirBuilder::new();
+            builder.recursive(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::DirBuilderExt;
+                builder.mode(0o700);
+            }
+            builder
+                .create(directory)
+                .map_err(|e| failure(directory, e))?;
+        }
+        RuntimeMode::System if !directory.is_dir() => {
+            return Err(failure(
+                directory,
+                io::Error::new(
+                    io::ErrorKind::NotFound,
+                    "system configuration directory must be provisioned first",
+                ),
+            ));
+        }
+        RuntimeMode::System => {}
+    }
     let directory = fs::canonicalize(directory).map_err(|e| failure(directory, e))?;
     let target = directory.join(
         target
@@ -73,29 +97,42 @@ pub(crate) fn run(target: PathBuf) -> Result<(), AppError> {
         options.mode(0o600);
     }
     let mut secret = options.open(&key).map_err(|e| failure(&key, e))?;
+    let mut config_created = false;
     let result = (|| {
         secret
             .write_all(key_bytes.as_ref())
             .map_err(|e| failure(&key, e))?;
-        let mut config = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&target)
-            .map_err(|e| failure(&target, e))?;
+        let mut config = options.open(&target).map_err(|e| failure(&target, e))?;
+        config_created = true;
         let contents = format!(
             "[auth.jwt]\nsecret_file = {}\n",
             toml::Value::String(key_text.to_owned())
         );
-        if let Err(error) = config.write_all(contents.as_bytes()) {
-            drop(config);
-            let _ = fs::remove_file(&target);
-            return Err(failure(&target, error));
+        config
+            .write_all(contents.as_bytes())
+            .map_err(|e| failure(&target, e))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let permissions = match mode {
+                RuntimeMode::User => 0o600,
+                RuntimeMode::System => 0o640,
+            };
+            secret
+                .set_permissions(fs::Permissions::from_mode(permissions))
+                .map_err(|e| failure(&key, e))?;
+            config
+                .set_permissions(fs::Permissions::from_mode(permissions))
+                .map_err(|e| failure(&target, e))?;
         }
         Ok(())
     })();
     if result.is_err() {
         drop(secret);
         let _ = fs::remove_file(&key);
+        if config_created {
+            let _ = fs::remove_file(&target);
+        }
     }
     result?;
     println!(
