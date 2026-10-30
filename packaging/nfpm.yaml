@@ -18,12 +18,12 @@ overrides:
   deb:
     depends:
       - systemd
-      - libc6 (>= 2.35)
+      - libc6 (>= ${PACKAGE_GLIBC_MIN})
       - libgcc-s1
   rpm:
     depends:
       - systemd
-      - glibc >= 2.35
+      - glibc >= ${PACKAGE_GLIBC_MIN}
       - libgcc
 contents:
   - src: ${PACKAGE_BINARY}

@@ -217,6 +217,7 @@ jobs:
           PACKAGE_ARCH: ${{ matrix.arch }}
         run: |
           scripts/ci/test-package-hooks.sh
+          scripts/ci/test-verify-glibc.sh
           scripts/ci/verify-packaging.sh "$DEB1" "$RPM1" "$PACKAGE_ARCH" target/release/windwatcher
           scripts/ci/lint-packaging.sh "$DEB1" "$RPM1"
       - name: Debian 13 lifecycle

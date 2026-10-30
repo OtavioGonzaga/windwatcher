@@ -15,6 +15,8 @@ esac
 dpkg-deb -f "$deb" Depends | grep -Eq '(^|[, ])systemd([, ]|$)'
 [[ $(rpm -qp --qf '%{NAME} %{VERSION} %{RELEASE} %{ARCH} %{LICENSE}' "$rpm") == "windwatcher-server $version 1 $arch MIT" ]]
 rpm -qp --requires "$rpm" | grep -qx systemd
+"$root/scripts/ci/verify-glibc.sh" "$binary" "$root/packaging/glibc-baseline" \
+    "$(dpkg-deb -f "$deb" Depends)" "$(rpm -qp --requires "$rpm")"
 tmp=$(mktemp -d)
 trap 'rm -rf -- "$tmp"' EXIT
 mkdir "$tmp/deb" "$tmp/rpm"

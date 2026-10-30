@@ -34,6 +34,13 @@ containers with access to the host cgroup hierarchy; use a disposable Linux host
 or runner. It does not use external storage or queue services. CI strips the
 binary once before producing both package formats.
 
+`packaging/glibc-baseline` is the single source for the minimum glibc version
+in DEB and RPM metadata. Static verification reads both generated packages and
+checks that their minimum matches that baseline and is at least the highest
+numeric `GLIBC_*` version required by the binary's ELF version-needs section.
+Unknown or missing GLIBC version requirements fail closed. Run
+`scripts/ci/test-verify-glibc.sh` for the comparison regression cases.
+
 `scripts/ci/lint-packaging.sh` runs lintian and rpmlint and fails on new findings.
 Its narrow, package-specific exceptions cover only the following deliberate
 choices:

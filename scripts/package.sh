@@ -21,13 +21,18 @@ binary=$(realpath -- "$binary")
 mkdir -p -- "$output"
 output=$(cd -- "$output" && pwd)
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+glibc_min=$(<"$root/packaging/glibc-baseline")
+if [[ ! $glibc_min =~ ^[0-9]+(\.[0-9]+)+$ ]]; then
+    echo 'Invalid glibc baseline in packaging/glibc-baseline' >&2
+    exit 1
+fi
 version=$(cargo metadata --manifest-path "$root/Cargo.toml" --no-deps --format-version 1 --locked | jq -er '.packages[] | select(.name == "windwatcher-server") | .version')
 case "$format:$arch" in
     deb:x86_64) filename="windwatcher-server_${version}-${release}_amd64.deb";;
     deb:aarch64) filename="windwatcher-server_${version}-${release}_arm64.deb";;
     rpm:*) filename="windwatcher-server-${version}-${release}.${arch}.rpm";;
 esac
-export PACKAGE_ARCH=$arch PACKAGE_VERSION=$version PACKAGE_RELEASE=$release PACKAGE_BINARY=$binary
+export PACKAGE_ARCH=$arch PACKAGE_VERSION=$version PACKAGE_RELEASE=$release PACKAGE_BINARY=$binary PACKAGE_GLIBC_MIN=$glibc_min
 cd -- "$root"
 nfpm package --config packaging/nfpm.yaml --packager "$format" --target "$output/$filename" >&2
 printf '%s\n' "$output/$filename"
