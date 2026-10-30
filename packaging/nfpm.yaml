@@ -1,0 +1,59 @@
+name: windwatcher-server
+platform: linux
+arch: ${PACKAGE_ARCH}
+version: ${PACKAGE_VERSION}
+release: ${PACKAGE_RELEASE}
+section: net
+priority: optional
+maintainer: OtavioGonzaga <otaviolgonzaga@gmail.com>
+homepage: https://github.com/OtavioGonzaga/windwatcher
+license: MIT
+description: Official self-hosted server for Windwatcher.
+depends:
+  - systemd
+overrides:
+  deb:
+    depends:
+      - systemd
+      - libc6 (>= 2.35)
+      - libgcc-s1
+  rpm:
+    depends:
+      - systemd
+      - glibc >= 2.35
+      - libgcc
+contents:
+  - src: ${PACKAGE_BINARY}
+    dst: /usr/bin/windwatcher
+    expand: true
+    file_info:
+      mode: 0755
+      owner: root
+      group: root
+  - src: packaging/systemd/windwatcher.service
+    dst: /usr/lib/systemd/system/windwatcher.service
+    file_info: { mode: 0644 }
+  - src: packaging/systemd/windwatcher-worker.service
+    dst: /usr/lib/systemd/system/windwatcher-worker.service
+    file_info: { mode: 0644 }
+  - src: packaging/sysusers/windwatcher.conf
+    dst: /usr/lib/sysusers.d/windwatcher.conf
+    file_info: { mode: 0644 }
+  - src: packaging/tmpfiles/windwatcher.conf
+    dst: /usr/lib/tmpfiles.d/windwatcher.conf
+    file_info: { mode: 0644 }
+  - src: config.example.toml
+    dst: /usr/share/doc/windwatcher-server/config.example.toml
+    file_info: { mode: 0644 }
+  - src: LICENSE
+    dst: /usr/share/doc/windwatcher-server/copyright
+    packager: deb
+    file_info: { mode: 0644 }
+  - src: LICENSE
+    dst: /usr/share/licenses/windwatcher-server/LICENSE
+    packager: rpm
+    file_info: { mode: 0644 }
+scripts:
+  postinstall: packaging/scripts/postinstall.sh
+  preremove: packaging/scripts/preremove.sh
+  postremove: packaging/scripts/postremove.sh
