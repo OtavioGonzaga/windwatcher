@@ -21,6 +21,7 @@
 - [CLI](cli.md): explicit migrations, worker and operator commands.
 - [Operations](operations.md): startup, health, doctor and bounded graceful shutdown.
 - [Installation / Linux service](installation.md): manual installation and systemd services.
+- [OCI container deployment](container.md): Podman builds and server/worker operation.
 - [Security](security.md): v1 controls, authorization regression matrix and dependency review.
 - [Architectural Decision Records](adr/README.md): significant decisions made
   with their implementation.

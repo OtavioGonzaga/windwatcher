@@ -41,6 +41,7 @@ The system contract is `/etc/windwatcher` owned by `root:windwatcher` with mode
 `2750`, config and key `root:windwatcher` `0640`, and `/var/lib/windwatcher`
 owned by `windwatcher:windwatcher` with mode `0750`. Group inheritance depends
 on the prepared setgid directory. See [installation](installation.md).
+The [OCI image](container.md) uses the same paths but a different ownership contract.
 
 Malformed values, including invalid duration syntax, invalidate every command.
 Semantic authentication failures such as a missing JWT secret or invalid session
