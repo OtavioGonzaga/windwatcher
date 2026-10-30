@@ -109,14 +109,10 @@ jobs:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           pattern: windwatcher-server-dist-*
-          path: ${{ runner.temp }}/dist
-          merge-multiple: true
+          path: ${{ runner.temp }}/build-dist
       - name: Validate complete public asset inventory
         run: |
-          # Keep canonical binaries as internal build plumbing, not public assets.
-          mv "$RUNNER_TEMP/dist/windwatcher-x86_64" "$RUNNER_TEMP/canonical-x86_64"
-          mv "$RUNNER_TEMP/dist/windwatcher-aarch64" "$RUNNER_TEMP/canonical-aarch64"
-          python3 scripts/validate-release-artifacts.py "$VERSION" "$RUNNER_TEMP/dist" --create
+          python3 scripts/validate-release-artifacts.py "$VERSION" "$RUNNER_TEMP/dist" --collect "$RUNNER_TEMP/build-dist" --create
           cd "$RUNNER_TEMP/dist"
           sha256sum -c SHA256SUMS
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

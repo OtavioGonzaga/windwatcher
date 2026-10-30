@@ -146,7 +146,7 @@ def prepare(args):
     try:
         for p, content in edits.items():
             p.write_text(content)
-        run(root, "cargo", "metadata", "--no-deps", "--format-version", "1", "--locked")
+        run(root, "cargo", "metadata", "--format-version", "1", "--locked")
         require(lock_path.read_text() == updated_lock, "Cargo changed lockfile unexpectedly")
     except Exception:
         for p, content in originals.items():
