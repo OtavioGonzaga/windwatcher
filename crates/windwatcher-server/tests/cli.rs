@@ -321,7 +321,10 @@ fn init_creates_private_configuration_without_persistence_or_overwrite() {
         .env("XDG_DATA_HOME", &data)
         .arg("init")
         .assert()
-        .success();
+        .success()
+        .stdout(predicate::str::contains(
+            "Run `windwatcher migrate` before serving.",
+        ));
     let key = target.parent().unwrap().join("jwt.key");
     let secret = fs::read(&key).unwrap();
     assert_eq!(secret.len(), 32);
@@ -387,7 +390,10 @@ fn system_init_requires_prepared_directory_and_preserves_existing_files() {
     command(&target)
         .args(["--system", "init"])
         .assert()
-        .success();
+        .success()
+        .stdout(predicate::str::contains(
+            "Run `windwatcher --system migrate` as the service account before serving.",
+        ));
     assert_eq!(
         fs::metadata(&target).unwrap().permissions().mode() & 0o777,
         0o640

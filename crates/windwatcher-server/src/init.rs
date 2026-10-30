@@ -135,8 +135,14 @@ pub(crate) fn run(target: PathBuf, mode: RuntimeMode) -> Result<(), AppError> {
         }
     }
     result?;
+    let migration_hint = match mode {
+        RuntimeMode::User => "Run `windwatcher migrate` before serving.",
+        RuntimeMode::System => {
+            "Run `windwatcher --system migrate` as the service account before serving."
+        }
+    };
     println!(
-        "Initialized configuration at {}. Run `windwatcher migrate` before serving.",
+        "Initialized configuration at {}. {migration_hint}",
         target.display()
     );
     Ok(())

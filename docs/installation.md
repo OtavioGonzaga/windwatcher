@@ -48,17 +48,23 @@ under `/etc/windwatcher`. Keep runtime state under `/var/lib/windwatcher`.
 ## Configure and migrate
 
 Edit configuration as an administrator. Run application-state commands as the
-service identity to avoid root-owned SQLite files:
+service identity to avoid root-owned SQLite files. Start a shell as that identity
+and change to the units' working directory so relative paths resolve consistently:
 
 ```bash
-sudo -u windwatcher -- /usr/bin/windwatcher --system config check
-sudo -u windwatcher -- /usr/bin/windwatcher --system migrate
-sudo -u windwatcher -- /usr/bin/windwatcher --system user create --username alice
-sudo -u windwatcher -- /usr/bin/windwatcher --system doctor
+sudo -u windwatcher -- sh
+cd /var/lib/windwatcher
+/usr/bin/windwatcher --system config check
+/usr/bin/windwatcher --system migrate
+/usr/bin/windwatcher --system user create --username alice
+/usr/bin/windwatcher --system doctor
+exit
 ```
 
 Enter the password interactively or use the CLI's stdin option; do not put it in
-process arguments. Run queue migrations and `jobs` commands as the same identity.
+process arguments. Run queue migrations and `jobs` commands as the same identity
+and from the same working directory. The service shell exits before the unit
+installation commands below, leaving the administrator in the source checkout.
 Migrations are always explicit and are never performed by service startup.
 
 ## Install and operate services
