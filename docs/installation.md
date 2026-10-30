@@ -1,5 +1,8 @@
 # Linux installation and system services
 
+For OCI/Podman deployment instead of host packages and systemd, see
+[container deployment](container.md).
+
 Install a locally built DEB or RPM package, or use the manual source installation
 below. Packaging definitions do not imply that published release artifacts are
 available. Both paths use the same account, directories and canonical systemd units.

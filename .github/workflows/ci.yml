@@ -225,9 +225,49 @@ jobs:
       - name: Fedora 44 lifecycle
         run: scripts/ci/test-package.sh fedora "$RPM1" "$RPM2"
 
+  oci:
+    name: oci (${{ matrix.arch }})
+    needs: quality
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-22.04
+          - arch: arm64
+            runner: ubuntu-22.04-arm
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
+        with:
+          cache: false
+      - name: Install and inspect rootless Podman
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y podman
+          podman version
+          podman info
+      - name: Build OCI image
+        run: |
+          version=$(cargo metadata --no-deps --format-version 1 --locked | python3 -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "windwatcher-server"))')
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          podman build --format=oci --file Containerfile --tag localhost/windwatcher-server:ci --build-arg VERSION="$version" --build-arg REVISION="$GITHUB_SHA" .
+      - name: Verify image and lifecycle
+        env:
+          OCI_ARCH: ${{ matrix.arch }}
+        run: |
+          scripts/ci/verify-oci.sh localhost/windwatcher-server:ci "$OCI_ARCH" "$VERSION" "$GITHUB_SHA"
+          scripts/ci/test-oci.sh localhost/windwatcher-server:ci
+
   required:
     if: always()
-    needs: [quality, features, msrv, dependency-policy, adapter-contracts, server-network, packages]
+    needs: [quality, features, msrv, dependency-policy, adapter-contracts, server-network, packages, oci]
     runs-on: ubuntu-26.04
     timeout-minutes: 2
     steps:
@@ -240,9 +280,10 @@ jobs:
           ADAPTERS_RESULT: ${{ needs.adapter-contracts.result }}
           SERVER_NETWORK_RESULT: ${{ needs.server-network.result }}
           PACKAGES_RESULT: ${{ needs.packages.result }}
+          OCI_RESULT: ${{ needs.oci.result }}
         run: |
           failed=0
-          for result in QUALITY_RESULT FEATURES_RESULT MSRV_RESULT POLICY_RESULT ADAPTERS_RESULT SERVER_NETWORK_RESULT PACKAGES_RESULT; do
+          for result in QUALITY_RESULT FEATURES_RESULT MSRV_RESULT POLICY_RESULT ADAPTERS_RESULT SERVER_NETWORK_RESULT PACKAGES_RESULT OCI_RESULT; do
             echo "$result=${!result}"
             if [[ "${!result}" != success ]]; then
               failed=1

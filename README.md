@@ -41,6 +41,8 @@ diagnostics and graceful shutdown. The optional durable queue and separate
 
 For a Linux system service using `/etc/windwatcher` and `/var/lib/windwatcher`,
 including the DEB and RPM packaging definitions, see [installation](docs/installation.md).
+For the official OCI image definition and Podman deployment, see
+[container deployment](docs/container.md); no registry image is published yet.
 
 ## Development
 

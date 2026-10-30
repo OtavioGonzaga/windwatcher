@@ -133,6 +133,19 @@ as PID 1 with access to cgroups; see the packaging guide. CI validates x86_64
 and aarch64 natively. macOS and Windows contributors need not reproduce the
 Linux container tests locally.
 
+### OCI image development
+
+With rootless Podman on Linux, build and validate the local architecture:
+
+```bash
+podman build --format=oci -f Containerfile -t localhost/windwatcher-server:local .
+scripts/ci/verify-oci.sh localhost/windwatcher-server:local amd64 dev unknown
+scripts/ci/test-oci.sh localhost/windwatcher-server:local
+```
+
+Use `arm64` instead of `amd64` on that architecture. CI tests both natively;
+developers need not emulate the other architecture. See [container deployment](docs/container.md).
+
 Dependabot checks Cargo and SHA-pinned GitHub Actions weekly. Cargo minor/patch
 updates are grouped; major updates remain separate. There is no automatic merge,
 publication, release automation or deployment in this workflow.

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Add a non-root OCI Containerfile, native amd64/arm64 validation and Podman
+  deployment documentation for the server and worker.
+
 - Add Debian and RPM package definitions for x86_64 and aarch64, with systemd
   account and directory provisioning and conservative upgrade/removal behavior.
 - Document package installation, upgrades, removal and manual-install migration.
