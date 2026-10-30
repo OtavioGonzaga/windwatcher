@@ -57,14 +57,14 @@ fn argon2_profile_salts_verification_and_redaction() {
         let password = secret(" Case-sensitive é! ");
         let first = hasher.hash(&password).await.unwrap();
         let second = hasher.hash(&password).await.unwrap();
-        let parsed = argon2::password_hash::PasswordHash::new(first.as_encoded()).unwrap();
+        let parsed = argon2::password_hash::phc::PasswordHash::new(first.as_encoded()).unwrap();
         assert_eq!(parsed.algorithm.as_str(), "argon2id");
         assert_eq!(parsed.version, Some(19));
         assert_eq!(parsed.params.get_decimal("m"), Some(19456));
         assert_eq!(parsed.params.get_decimal("t"), Some(2));
         assert_eq!(parsed.params.get_decimal("p"), Some(1));
         assert_eq!(parsed.hash.unwrap().len(), 32);
-        let other = argon2::password_hash::PasswordHash::new(second.as_encoded()).unwrap();
+        let other = argon2::password_hash::phc::PasswordHash::new(second.as_encoded()).unwrap();
         assert_ne!(parsed.salt, other.salt);
         assert_ne!(first.as_encoded(), second.as_encoded());
         let restored = PasswordHash::parse(first.as_encoded()).unwrap();
@@ -109,9 +109,8 @@ fn verification_uses_persisted_costs_and_reports_unsupported_hashes() {
             argon2::Version::V0x13,
             argon2::Params::new(32, 1, 1, Some(16)).unwrap(),
         );
-        let salt = argon2::password_hash::SaltString::encode_b64(b"test-only-salt!!").unwrap();
         let encoded = engine
-            .hash_password(password.expose_secret().as_bytes(), &salt)
+            .hash_password_with_salt(password.expose_secret().as_bytes(), b"test-only-salt!!")
             .unwrap()
             .to_string();
         let hash = PasswordHash::parse(&encoded).unwrap();
@@ -131,5 +130,27 @@ fn verification_uses_persisted_costs_and_reports_unsupported_hashes() {
                 Err(PasswordHashError::VerificationFailed(_))
             ));
         }
+    });
+}
+
+#[test]
+fn verifies_existing_argon2id_phc_credentials() {
+    // Generated independently with libargon2 using the pre-upgrade PHC format.
+    let encoded = "$argon2id$v=19$m=32,t=1,p=1$dGVzdC1vbmx5LXNhbHQhIQ$GEaV/nhWNpTlld8Bprq1pw";
+    let hash = PasswordHash::parse(encoded).unwrap();
+    block_on(async {
+        let hasher = Argon2idPasswordHasher;
+        assert!(
+            hasher
+                .verify(&secret("legacy-password"), Some(&hash))
+                .await
+                .unwrap()
+        );
+        assert!(
+            !hasher
+                .verify(&secret("wrong-password"), Some(&hash))
+                .await
+                .unwrap()
+        );
     });
 }

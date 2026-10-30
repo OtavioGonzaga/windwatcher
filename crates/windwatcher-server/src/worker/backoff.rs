@@ -25,8 +25,8 @@ pub(crate) fn full_jitter(cap: Duration, random: u128) -> Duration {
 pub(crate) fn retry_delay(attempt: u32, base: Duration, maximum: Duration) -> Duration {
     let cap = cap_for_attempt(attempt.max(1), base, maximum);
     let mut bytes = [0u8; 16];
-    let mut rng = rand_core::OsRng;
-    let random = rand_core::RngCore::try_fill_bytes(&mut rng, &mut bytes)
+    let mut rng = getrandom::SysRng;
+    let random = rand_core::TryRng::try_fill_bytes(&mut rng, &mut bytes)
         .map(|_| u128::from_ne_bytes(bytes))
         .unwrap_or(0);
     full_jitter(cap, random)

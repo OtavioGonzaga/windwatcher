@@ -2,9 +2,10 @@ use std::{fmt, future::Future};
 
 use argon2::{
     Algorithm, Argon2, Params, Version,
-    password_hash::{PasswordHasher as _, PasswordVerifier as _, SaltString},
+    password_hash::{PasswordHasher as _, PasswordVerifier as _, phc},
 };
-use rand_core::{OsRng, RngCore};
+use getrandom::SysRng;
+use rand_core::TryRng;
 use zeroize::Zeroizing;
 
 /// An owned, unmodified password, zeroized on drop. Not serializable or cloneable.
@@ -62,11 +63,11 @@ impl PasswordHash {
     /// Reconstructs a persisted PHC value, requiring a valid encoding, salt and output.
     /// Algorithm support and algorithm-specific parameters are checked by the adapter.
     pub fn parse(encoded: &str) -> Result<Self, PasswordHashError> {
-        let parsed = argon2::password_hash::PasswordHash::new(encoded)
+        let parsed = phc::PasswordHash::new(encoded)
             .map_err(|e| PasswordHashError::InvalidEncodedHash(Box::new(e)))?;
         if parsed.salt.is_none() || parsed.hash.is_none() {
             return Err(PasswordHashError::InvalidEncodedHash(Box::new(
-                argon2::password_hash::Error::PhcStringField,
+                phc::Error::MissingField,
             )));
         }
         Ok(Self(encoded.to_owned()))
@@ -139,13 +140,11 @@ const DUMMY: &str = "$argon2id$v=19$m=19456,t=2,p=1$d2luZHdhdGNoZXItZHVtbXk$AAAA
 impl PasswordHasher for Argon2idPasswordHasher {
     async fn hash(&self, password: &SecretPassword) -> Result<PasswordHash, PasswordHashError> {
         let mut salt = [0u8; 16];
-        OsRng
+        SysRng
             .try_fill_bytes(&mut salt)
             .map_err(|e| PasswordHashError::HashingFailed(Box::new(e)))?;
-        let salt = SaltString::encode_b64(&salt)
-            .map_err(|e| PasswordHashError::HashingFailed(Box::new(e)))?;
         let hash = Self::engine()
-            .hash_password(password.expose_secret().as_bytes(), &salt)
+            .hash_password_with_salt(password.expose_secret().as_bytes(), &salt)
             .map_err(|e| PasswordHashError::HashingFailed(Box::new(e)))?
             .to_string();
         Ok(PasswordHash(hash))
@@ -157,11 +156,11 @@ impl PasswordHasher for Argon2idPasswordHasher {
         expected: Option<&PasswordHash>,
     ) -> Result<bool, PasswordHashError> {
         let encoded = expected.map_or(DUMMY, PasswordHash::as_encoded);
-        let parsed = argon2::password_hash::PasswordHash::new(encoded)
+        let parsed = phc::PasswordHash::new(encoded)
             .map_err(|e| PasswordHashError::InvalidEncodedHash(Box::new(e)))?;
         match Self::engine().verify_password(password.expose_secret().as_bytes(), &parsed) {
             Ok(()) => Ok(expected.is_some()),
-            Err(argon2::password_hash::Error::Password) => Ok(false),
+            Err(argon2::password_hash::Error::PasswordInvalid) => Ok(false),
             Err(e) => Err(PasswordHashError::VerificationFailed(Box::new(e))),
         }
     }

@@ -16,8 +16,9 @@ doc = false
 
 [dependencies]
 axum = { version = "0.8", default-features = false, features = ["json", "query", "matched-path", "tokio", "ws", "http1"] }
-base64 = "0.22"
-rand_core = { version = "0.6", features = ["getrandom"] }
+base64 = "0.23"
+rand_core = "0.10"
+getrandom = { version = "0.4", features = ["sys_rng", "std"] }
 sha2 = "0.11"
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 governor = { version = "0.10", default-features = false, features = ["std", "dashmap"] }

@@ -1,5 +1,6 @@
 use crate::error::AppError;
-use rand_core::{OsRng, RngCore};
+use getrandom::SysRng;
+use rand_core::TryRng;
 use std::{
     fs::{self, OpenOptions},
     io::{self, Write},
@@ -61,7 +62,7 @@ pub(crate) fn run(target: PathBuf) -> Result<(), AppError> {
         ));
     }
     let mut key_bytes = Zeroizing::new([0u8; 32]);
-    OsRng
+    SysRng
         .try_fill_bytes(key_bytes.as_mut())
         .map_err(|e| failure(&key, io::Error::other(e)))?;
     let mut options = OpenOptions::new();
