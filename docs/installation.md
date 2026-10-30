@@ -1,11 +1,41 @@
 # Linux installation and system services
 
-This is a manual, source-based installation and the contract for future Linux
-packages. Official `.deb` and `.rpm` packages are not yet available. Future
-packages should provision the account and directories and install the canonical
-units in `packaging/systemd/`, rather than maintaining copies of their contents.
+Install a locally built DEB or RPM package, or use the manual source installation
+below. Packaging definitions do not imply that published release artifacts are
+available. Both paths use the same account, directories and canonical systemd units.
 
-## Build and provision
+## Package installation
+
+Install a local package using your package manager, for example:
+
+```bash
+sudo apt install ./windwatcher-server_<version>-1_amd64.deb
+# Or on an RPM-based system:
+sudo dnf install ./windwatcher-server-<version>-1.x86_64.rpm
+```
+
+Substitute the actual filename and architecture. See [package development](../packaging/README.md)
+to build a package. The package installs the executable and vendor units under
+`/usr/lib/systemd/system/`, provisions the account and directories, and installs
+an example in `/usr/share/doc/windwatcher-server/`. It does not create an active
+configuration or key, migrate databases, enable units or start services.
+
+The package validation baselines are Debian 13 and Fedora 44 on x86_64 and
+aarch64. These are validated environments, not an exhaustive compatibility list.
+
+### First-time initialization
+
+```bash
+sudo /usr/bin/windwatcher --system init
+```
+
+Edit `/etc/windwatcher/config.toml` if necessary, then follow the shared
+[configuration and migration](#configure-and-migrate) steps. Afterward explicitly
+enable and start the server as described under [operating services](#operate-services).
+
+## Manual installation from source
+
+### Build and provision
 
 Build with the repository toolchain, then install the executable:
 
@@ -67,7 +97,7 @@ and from the same working directory. The service shell exits before the unit
 installation commands below, leaving the administrator in the source checkout.
 Migrations are always explicit and are never performed by service startup.
 
-## Install and operate services
+### Install manual service units
 
 From the source checkout:
 
@@ -75,6 +105,13 @@ From the source checkout:
 sudo install -m 0644 packaging/systemd/windwatcher.service /etc/systemd/system/
 sudo install -m 0644 packaging/systemd/windwatcher-worker.service /etc/systemd/system/
 sudo systemctl daemon-reload
+```
+
+## Operate services
+
+After package installation or manual unit installation and explicit migrations:
+
+```bash
 sudo systemctl enable --now windwatcher.service
 systemctl status windwatcher.service
 journalctl -fu windwatcher.service
@@ -98,6 +135,58 @@ The units grant no privileged-port capability; use a reverse proxy or a delibera
 local drop-in if a privileged port is needed. See [operations](operations.md)
 and [jobs](jobs.md).
 
-Future packages will provide account/directory creation, binary and unit
-installation, configuration handling and install/remove validation. This manual
-service integration does not provide packages, release artifacts or OCI images.
+## Upgrade packages
+
+**Installing a newer package neither migrates schemas nor restarts running
+Windwatcher services.** A running process continues using its old executable
+until explicitly stopped. After installing the new package, stop the units you
+actually use before migrating with the new binary:
+
+```bash
+sudo systemctl stop windwatcher.service
+# Only if the worker is in use:
+sudo systemctl stop windwatcher-worker.service
+sudo -u windwatcher -- sh
+cd /var/lib/windwatcher
+/usr/bin/windwatcher --system config check
+/usr/bin/windwatcher --system migrate
+/usr/bin/windwatcher --system doctor
+exit
+sudo systemctl start windwatcher.service
+# Only if the worker is in use:
+sudo systemctl start windwatcher-worker.service
+```
+
+For a configured worker, run any required queue migrations before starting it.
+Do not migrate while an older server or worker remains running; zero-downtime
+rolling upgrades are not promised.
+
+## Remove packages
+
+Removing the package stops and disables the units and removes package-owned
+files. Debian purge has the same data-preservation policy. Configuration,
+JWT key, databases, other state and the service account remain; their cleanup
+is a separate, potentially destructive administrator decision.
+
+## Migrate from a manual installation
+
+An administrator-owned full unit in `/etc/systemd/system/` takes precedence
+over the package unit in `/usr/lib/systemd/system/`. Packages warn about it but
+never remove it. Before installing the package, stop and disable the units in
+use. Inspect any local units and remove them only after confirming they came
+from the old manual installation and have no intentional local modifications:
+
+```bash
+sudo systemctl stop windwatcher.service windwatcher-worker.service
+sudo systemctl disable windwatcher.service windwatcher-worker.service
+# Only after reviewing both files:
+sudo rm -f /etc/systemd/system/windwatcher.service /etc/systemd/system/windwatcher-worker.service
+sudo systemctl daemon-reload
+```
+
+Install the package, preserve the account and `/etc/windwatcher` and
+`/var/lib/windwatcher`, then perform the explicit upgrade procedure above.
+For later customization prefer drop-ins under
+`/etc/systemd/system/windwatcher.service.d/` or
+`/etc/systemd/system/windwatcher-worker.service.d/` instead of copying a full
+vendor unit. Drop-ins are administrator-owned and are not managed by the package.

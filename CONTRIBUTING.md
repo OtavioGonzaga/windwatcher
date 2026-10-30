@@ -115,6 +115,24 @@ workflow is merged and has run, maintainers should configure that single check
 as required for `main` in repository branch protection/rulesets. Repository files
 do not configure those GitHub settings.
 
+### Linux package development
+
+See [packaging/README.md](packaging/README.md) for nFPM setup and package
+invariants. After building the release binary, native Linux developers can run:
+
+```bash
+scripts/package.sh deb x86_64 target/release/windwatcher dist
+scripts/package.sh rpm x86_64 target/release/windwatcher dist
+scripts/ci/verify-packaging.sh dist/<deb-file> dist/<rpm-file> x86_64 target/release/windwatcher
+scripts/ci/test-package-hooks.sh
+```
+
+Replace the placeholders with actual filenames. The full integration tests
+require Docker and a disposable Linux environment capable of running systemd
+as PID 1 with access to cgroups; see the packaging guide. CI validates x86_64
+and aarch64 natively. macOS and Windows contributors need not reproduce the
+Linux container tests locally.
+
 Dependabot checks Cargo and SHA-pinned GitHub Actions weekly. Cargo minor/patch
 updates are grouped; major updates remain separate. There is no automatic merge,
 publication, release automation or deployment in this workflow.
