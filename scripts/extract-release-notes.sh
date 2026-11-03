@@ -1,3 +1,5 @@
 #!/usr/bin/env bash
 set -euo pipefail
-exec python3 "$(dirname -- "${BASH_SOURCE[0]}")/release.py" notes "$@"
+root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+cd "$root"
+exec cargo xtask release notes "$@"

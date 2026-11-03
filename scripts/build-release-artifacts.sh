@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
-[[ $# == 3 ]] || { echo "Usage: $0 VERSION ARCH OUTPUT" >&2; exit 2; }
+[[ $# == 3 || ( $# == 5 && $4 == --root ) ]] || { echo "Usage: $0 VERSION ARCH OUTPUT [--root PATH]" >&2; exit 2; }
 version=$1 arch=$2 output=$3
-python3 scripts/release.py validate-version windwatcher-server "$version"
+automation=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+root=$(realpath "${5:-.}")
+cargo run --quiet --locked --manifest-path "$automation/tools/xtask/Cargo.toml" -- release validate-version windwatcher-server "$version"
+cd "$root"
 case $arch in x86_64|aarch64) ;; *) exit 2;; esac
 [[ $(uname -m) == "$arch" ]]
 mkdir -p "$output"
@@ -21,7 +24,7 @@ export SOURCE_DATE_EPOCH
 SOURCE_DATE_EPOCH=$(git show -s --format=%ct HEAD)
 deb=$(PACKAGE_RELEASE=1 scripts/package.sh deb "$arch" "$binary" "$output")
 rpm=$(PACKAGE_RELEASE=1 scripts/package.sh rpm "$arch" "$binary" "$output")
-scripts/ci/verify-packaging.sh "$deb" "$rpm" "$arch" "$binary"
+"$automation/scripts/ci/verify-packaging.sh" "$deb" "$rpm" "$arch" "$binary" --root "$root"
 tmp=$(mktemp -d)
 trap 'rm -rf -- "$tmp"' EXIT
 name=windwatcher-server-$version-linux-$arch

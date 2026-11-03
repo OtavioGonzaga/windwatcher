@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/windwatcher", "crates/windwatcher-server"]
+members = ["crates/windwatcher", "crates/windwatcher-server", "tools/xtask"]
 resolver = "3"
 
 [workspace.package]
