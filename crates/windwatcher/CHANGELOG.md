@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-11-03
+
 ### Added
 
 - Add a crate-specific README with an SQLite quick start, feature overview,
@@ -160,5 +162,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Strongly typed UUIDv7 identifiers for core domain entities.
 - Initial user identity model with canonical validated usernames and enable/disable behavior.
 
-[Unreleased]: https://github.com/OtavioGonzaga/windwatcher/compare/windwatcher-v0.1.0...HEAD
 [0.1.0]: https://github.com/OtavioGonzaga/windwatcher/releases/tag/windwatcher-v0.1.0
+
+[Unreleased]: https://github.com/OtavioGonzaga/windwatcher/compare/windwatcher-v0.1.1...HEAD
+[0.1.1]: https://github.com/OtavioGonzaga/windwatcher/compare/windwatcher-v0.1.0...windwatcher-v0.1.1
