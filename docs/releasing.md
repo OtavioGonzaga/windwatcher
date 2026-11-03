@@ -5,6 +5,48 @@ versions, curated changelogs and annotated tags: `windwatcher-vX.Y.Z` and
 `windwatcher-server-vX.Y.Z`. The server binary is named `windwatcher`.
 Release mechanics never select the next version or release the other package.
 
+## Rust tooling
+
+Structured release logic lives in the unpublished workspace package
+`tools/xtask`. Python is not required. Bash handles short Unix orchestration;
+Git, Cargo, `gh`, `curl`, Podman, Skopeo and `jq` remain external tools.
+
+OCI builds forward `CARGO_BUILD_JOBS` as a build argument only when the caller
+sets it. Official workflows set `4`; local callers can choose another value,
+or leave it unset to let Cargo choose its parallelism inside the image build.
+
+```bash
+cargo xtask release --help
+cargo xtask release prepare windwatcher 0.2.0
+cargo xtask release state windwatcher 0.2.0
+cargo xtask release notes windwatcher 0.2.0
+cargo xtask release registry dependency windwatcher 0.1.0
+cargo xtask release artifacts validate 0.1.0 dist
+cargo xtask packaging reproducibility x86_64 target/release/windwatcher
+```
+
+`scripts/prepare-release.sh`, `scripts/release-state.sh` and
+`scripts/extract-release-notes.sh` preserve the same interfaces. Preparation
+supports `--date YYYY-MM-DD` (UTC today by default). Release-source commands
+support `--root PATH`; state accepts `--main-ref REF`.
+
+Post-prepare jobs use **two checkouts**: `automation/` at the workflow dispatch
+SHA supplies the current xtask/recovery and verification logic; `release/` at
+the validated immutable release commit supplies manifests, lockfile, changelog,
+source, Containerfile, nFPM configuration, package hooks, units, example config
+and other artifact inputs. Cargo package/publish/metadata/check run against
+`release/`, not the tooling workspace. For example:
+
+```bash
+cargo run --quiet --locked \
+  --manifest-path automation/tools/xtask/Cargo.toml -- \
+  release github finalize windwatcher "$VERSION" "$RELEASE_COMMIT" \
+  --root "$PWD/release"
+```
+
+This permits current recovery fixes to validate an old release without running
+its historical release automation or changing its content.
+
 ## Maintainer setup
 
 Create GitHub environment **release**, configure required reviewers as desired,
@@ -124,7 +166,9 @@ are verified before publication. A version containing `-` becomes a prerelease.
 
 ## Recovery
 
-Re-run the **same workflow and version**. Preflight finds the package-specific
+Dispatch a **new run of the same workflow and version from main**, especially
+after a tooling fix. Do not merely rerun an old failed Actions job: that job is
+tied to its old workflow/tooling SHA. Preflight finds the package-specific
 release commit reachable from main, verifies metadata, changed-file allow-list
 and any existing tag, and checks out that exact commit. Main/dispatch SHA may
 have advanced; no second release commit is created. Recovery requires a release
@@ -144,21 +188,55 @@ commit produced by this automation, not a version predating these scripts.
 - Published release exists: require the complete inventory and matching bytes;
   successful verification finishes without recreating or editing it.
 
+Draft discovery lists all repository releases with pagination and selects the
+exact `tag_name`, requiring at most one match. It does not use release-by-tag
+lookup, which can return 404 for drafts. A draft's `untagged-*` HTML URL does not
+override its authoritative `id`, `tag_name` and `draft` fields. Subsequent state,
+asset and publication operations use the numeric ID returned by GitHub. The
+finalizer verifies the published state after PATCH; it never clobbers assets or
+edits an already published release.
+
 Authentication, transport and rate-limit errors never mean 'not found'. Wrong
 immutable registry versions, image metadata/digests or asset bytes fail closed.
 Investigate instead of deleting or overwriting public state. Rebuilt distro
 artifacts can differ if packaging tools or environments changed; mismatch
 intentionally requires investigation rather than `--clobber`.
 
-## First release: exact sequence
+## Recovering the first library release
+
+`windwatcher 0.1.0` was published successfully to crates.io from
+`d8a47d9e4f71cf5287d1dc8f523e17644cbc2b4b`. Its annotated
+`windwatcher-v0.1.0` tag and asset-free GitHub draft already exist. Finalization
+failed because the old automation attempted to discover that draft by tag.
+
+After this tooling fix is merged and main CI is green:
+
+1. Leave the existing crate, annotated tag and draft untouched. Do not delete,
+   recreate, move, rewrite the released changelog or publish another version as
+   a workaround.
+2. Start a **new** **Create windwatcher release** dispatch from **main** with
+   version **0.1.0**, not a rerun of the old failed job.
+3. Confirm preparation recovers the commit above and creates no second release
+   commit. Packaging must use that immutable revision.
+4. Confirm crates.io is verified, not republished: VCS SHA and `path_in_vcs`
+   match, and every archived file equals the validated local crate.
+5. Confirm the existing annotated tag is verified, the existing draft is found
+   by exact `tag_name`, reused with zero assets and published successfully.
+6. Only after library recovery succeeds, dispatch **Create windwatcher-server
+   release**, version **0.1.0**.
+
+This production dispatch is a post-merge maintainer action, not part of testing
+the PR. Generic recovery never hardcodes a release ID.
+
+## First server release: exact sequence
 
 After this PR merges and main CI is green:
 
 1. Configure environment `release` to allow deployments only from branch `main`
    (**Selected branches and tags → Branch: main**), then add `CRATES_IO_TOKEN`.
-2. Run **Create windwatcher release**, version **0.1.0**.
+2. Complete the library recovery procedure above.
 3. Verify crates.io `windwatcher 0.1.0`, annotated tag `windwatcher-v0.1.0`
-   and its GitHub Release.
+   and its published GitHub Release.
 4. Run **Create windwatcher-server release**, version **0.1.0**.
 5. Verify crates.io `windwatcher-server 0.1.0`, tarballs, DEBs, RPMs, sidecars,
    `SHA256SUMS`, amd64/arm64 images, multiarch `0.1.0`, annotated tag

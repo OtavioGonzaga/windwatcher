@@ -6,26 +6,22 @@ if [[ $# != 4 ]]; then
   exit 2
 fi
 image=$1 arch=$2 version=$3 revision=$4
-podman image inspect "$image" | python3 -c '
-import json, sys
-image = json.load(sys.stdin)[0]
-arch, version, revision = sys.argv[1:]
-assert image["Os"] == "linux", image["Os"]
-assert image["Architecture"] == arch, image["Architecture"]
-c = image["Config"]
-assert c["User"] == "10001:10001", c
-assert c["Entrypoint"] == ["/usr/bin/windwatcher", "--system"], c
-assert c["Cmd"] == ["serve"], c
-assert c["WorkingDir"] == "/var/lib/windwatcher", c
-assert "8080/tcp" in c["ExposedPorts"], c
-assert not c.get("Volumes"), c
-assert c.get("StopSignal") in ("SIGTERM", "15"), c
-assert not c.get("Healthcheck"), c
-labels = c["Labels"]
-expected = {"title": "windwatcher-server", "description": "Windwatcher standalone server and worker", "source": "https://github.com/OtavioGonzaga/windwatcher", "documentation": "https://github.com/OtavioGonzaga/windwatcher/blob/main/docs/container.md", "licenses": "MIT", "version": version, "revision": revision}
-for key, value in expected.items():
-    assert labels.get("org.opencontainers.image." + key) == value, (key, labels)
-' "$arch" "$version" "$revision"
+podman image inspect "$image" | jq -e --arg arch "$arch" --arg version "$version" --arg revision "$revision" '
+  .[0] | .Os == "linux" and .Architecture == $arch and
+  (.Config | .User == "10001:10001" and
+    .Entrypoint == ["/usr/bin/windwatcher", "--system"] and .Cmd == ["serve"] and
+    .WorkingDir == "/var/lib/windwatcher" and (.ExposedPorts | has("8080/tcp")) and
+    ((.Volumes // {}) | length == 0) and
+    (.StopSignal == "SIGTERM" or .StopSignal == "15") and
+    ((.Healthcheck // {}) | length == 0) and
+    (.Labels | .["org.opencontainers.image.title"] == "windwatcher-server" and
+      .["org.opencontainers.image.description"] == "Windwatcher standalone server and worker" and
+      .["org.opencontainers.image.source"] == "https://github.com/OtavioGonzaga/windwatcher" and
+      .["org.opencontainers.image.documentation"] == "https://github.com/OtavioGonzaga/windwatcher/blob/main/docs/container.md" and
+      .["org.opencontainers.image.licenses"] == "MIT" and
+      .["org.opencontainers.image.version"] == $version and
+      .["org.opencontainers.image.revision"] == $revision))
+' > /dev/null
 podman run --rm --entrypoint /bin/sh "$image" -ec '
   test -x /usr/bin/windwatcher
   test -d /etc/windwatcher && test -w /etc/windwatcher

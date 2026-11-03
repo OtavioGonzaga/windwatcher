@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
-if [[ $# != 4 ]]; then echo "Usage: $0 <deb> <rpm> <x86_64|aarch64> <binary>" >&2; exit 2; fi
+if [[ $# != 4 && ! ( $# == 6 && $5 == --root ) ]]; then echo "Usage: $0 <deb> <rpm> <x86_64|aarch64> <binary> [--root PATH]" >&2; exit 2; fi
 deb=$(realpath "$1") rpm=$(realpath "$2") arch=$3 binary=$(realpath "$4")
-root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
+automation=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
+root=$(realpath "${6:-$automation}")
 version=$(cargo metadata --manifest-path "$root/Cargo.toml" --no-deps --format-version 1 --locked | jq -er '.packages[] | select(.name == "windwatcher-server") | .version')
 # nFPM represents SemVer prereleases with '~' for correct DEB/RPM ordering.
 package_version=${version/-/\~}
@@ -17,7 +18,7 @@ esac
 dpkg-deb -f "$deb" Depends | grep -Eq '(^|[, ])systemd([, ]|$)'
 [[ $(rpm -qp --qf '%{NAME} %{VERSION} %{RELEASE} %{ARCH} %{LICENSE}' "$rpm") == "windwatcher-server $package_version 1 $arch MIT" ]]
 rpm -qp --requires "$rpm" | grep -qx systemd
-"$root/scripts/ci/verify-glibc.sh" "$binary" "$root/packaging/glibc-baseline" \
+"$automation/scripts/ci/verify-glibc.sh" "$binary" "$root/packaging/glibc-baseline" \
     "$(dpkg-deb -f "$deb" Depends)" "$(rpm -qp --requires "$rpm")"
 tmp=$(mktemp -d)
 trap 'rm -rf -- "$tmp"' EXIT

@@ -2,6 +2,7 @@ FROM docker.io/library/rust:trixie@sha256:09027f873d45b8ecd1dc86f1fa13b7a62b875c
 WORKDIR /src
 COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 COPY crates/ crates/
+COPY tools/xtask/ tools/xtask/
 ARG CARGO_BUILD_JOBS
 RUN cargo build --release --locked -p windwatcher-server --bin windwatcher \
     && ldd target/release/windwatcher \

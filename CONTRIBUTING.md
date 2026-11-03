@@ -6,10 +6,18 @@ Use the repository-managed Rust toolchain defined in
 [`rust-toolchain.toml`](rust-toolchain.toml). Do not select arbitrary Rust
 versions for repository work.
 
+Release and structured CI tooling is Rust (`tools/xtask`); Python is not
+required or allowed in repository automation. Use `cargo xtask --help` and
+`cargo xtask release --help` to discover commands. The existing release shell
+entrypoints are thin wrappers. Run `cargo test -p xtask --locked -- --test-threads=1`
+when changing tooling. Tests that mutate release metadata use disposable
+workspaces, never the working checkout.
+
 ## Repository structure
 
 - `crates/windwatcher`: reusable library.
 - `crates/windwatcher-server`: official standalone server.
+- `tools/xtask`: unpublished Rust release/CI tooling (`cargo xtask --help`).
 - `docs`: conceptual and operational documentation.
 
 See [the architecture guide](docs/architecture.md) for the rationale behind
