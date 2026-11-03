@@ -36,6 +36,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.sha }}
           fetch-depth: 0
       - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
       - id: prepare
@@ -48,17 +49,30 @@ jobs:
     permissions:
       contents: read
     steps:
+      - name: Checkout current release tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: automation
+          persist-credentials: false
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.prepare.outputs.release_commit }}
+          path: release
+          fetch-depth: 0
           persist-credentials: false
+      - run: cp automation/rust-toolchain.toml rust-toolchain.toml
       - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
+        with:
+          cache-workspaces: |
+            automation -> target
+            release -> target
       - run: |
-          dependency=$(python3 scripts/release.py dependency windwatcher-server "$VERSION")
-          python3 scripts/registry-release.py dependency windwatcher "$dependency"
+          dependency=$(cargo run --quiet --locked --manifest-path automation/tools/xtask/Cargo.toml -- release dependency windwatcher-server "$VERSION" --root "$GITHUB_WORKSPACE/release")
+          cargo run --quiet --locked --manifest-path automation/tools/xtask/Cargo.toml -- release registry dependency windwatcher "$dependency" --root "$GITHUB_WORKSPACE/release"
+          cd release
           cargo metadata --locked --format-version 1 > /dev/null
           cargo check --workspace --all-features --locked
-          scripts/ci/test-release-scripts.sh
 
   build-dist:
     needs: [prepare, dependency-preflight]
@@ -75,20 +89,33 @@ jobs:
           - arch: aarch64
             runner: ubuntu-22.04-arm
     steps:
+      - name: Checkout current release tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: automation
+          persist-credentials: false
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.prepare.outputs.release_commit }}
+          path: release
+          fetch-depth: 0
           persist-credentials: false
+      - run: cp automation/rust-toolchain.toml rust-toolchain.toml
       - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
+        with:
+          cache-workspaces: |
+            automation -> target
+            release -> target
       - name: Install package tools
         run: |
           sudo apt-get update
           sudo apt-get install -y rpm cpio
-          scripts/ci/install-nfpm.sh "$RUNNER_TEMP/nfpm"
+          automation/scripts/ci/install-nfpm.sh "$RUNNER_TEMP/nfpm"
           echo "$RUNNER_TEMP/nfpm" >> "$GITHUB_PATH"
       - env:
           ARCH: ${{ matrix.arch }}
-        run: scripts/build-release-artifacts.sh "$VERSION" "$ARCH" "$RUNNER_TEMP/dist"
+        run: automation/scripts/build-release-artifacts.sh "$VERSION" "$ARCH" "$RUNNER_TEMP/dist" --root "$GITHUB_WORKSPACE/release"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2 (Node 24)
         with:
           name: windwatcher-server-dist-${{ matrix.arch }}
@@ -102,17 +129,32 @@ jobs:
     permissions:
       contents: read
     steps:
+      - name: Checkout current release tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: automation
+          persist-credentials: false
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.prepare.outputs.release_commit }}
+          path: release
+          fetch-depth: 0
           persist-credentials: false
+      - run: cp automation/rust-toolchain.toml rust-toolchain.toml
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
+        with:
+          cache-workspaces: |
+            automation -> target
+            release -> target
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2 (Node 24)
         with:
           pattern: windwatcher-server-dist-*
           path: ${{ runner.temp }}/build-dist
       - name: Validate complete public asset inventory
         run: |
-          python3 scripts/validate-release-artifacts.py "$VERSION" "$RUNNER_TEMP/dist" --collect "$RUNNER_TEMP/build-dist" --create
+          cargo run --quiet --locked --manifest-path automation/tools/xtask/Cargo.toml -- release artifacts collect "$VERSION" "$RUNNER_TEMP/build-dist" "$RUNNER_TEMP/dist"
+          cargo run --quiet --locked --manifest-path automation/tools/xtask/Cargo.toml -- release artifacts validate "$VERSION" "$RUNNER_TEMP/dist" --create
           cd "$RUNNER_TEMP/dist"
           sha256sum -c SHA256SUMS
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2 (Node 24)
@@ -129,18 +171,32 @@ jobs:
     permissions:
       contents: read
     steps:
+      - name: Checkout current release tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: automation
+          persist-credentials: false
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.prepare.outputs.release_commit }}
+          path: release
+          fetch-depth: 0
           persist-credentials: false
+      - run: cp automation/rust-toolchain.toml rust-toolchain.toml
       - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
+        with:
+          cache-workspaces: |
+            automation -> target
+            release -> target
       - run: |
+          cd release
           cargo package -p windwatcher-server --locked
           cargo publish -p windwatcher-server --dry-run --locked --registry crates-io
       - name: Publish or verify exact registry version
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
-        run: python3 scripts/registry-release.py publish windwatcher-server "$VERSION"
+        run: cargo run --quiet --locked --manifest-path automation/tools/xtask/Cargo.toml -- release registry publish windwatcher-server "$VERSION" --root "$GITHUB_WORKSPACE/release"
 
   publish-oci:
     needs: [prepare, publish-server-crate]
@@ -159,10 +215,24 @@ jobs:
           - arch: arm64
             runner: ubuntu-22.04-arm
     steps:
+      - name: Checkout current release tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: automation
+          persist-credentials: false
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.prepare.outputs.release_commit }}
+          path: release
+          fetch-depth: 0
           persist-credentials: false
+      - run: cp automation/rust-toolchain.toml rust-toolchain.toml
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
+        with:
+          cache-workspaces: |
+            automation -> target
+            release -> target
       - name: Install OCI tools
         run: |
           sudo apt-get update
@@ -174,7 +244,7 @@ jobs:
           RELEASE_COMMIT: ${{ needs.prepare.outputs.release_commit }}
         run: |
           printf '%s' "$GH_TOKEN" | podman login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
-          python3 scripts/publish-release-oci.py architecture "$VERSION" "$RELEASE_COMMIT" --arch "$ARCH"
+          cargo run --quiet --locked --manifest-path automation/tools/xtask/Cargo.toml -- release oci architecture "$VERSION" "$RELEASE_COMMIT" --arch "$ARCH" --root "$GITHUB_WORKSPACE/release"
       - if: always()
         run: podman logout ghcr.io
 
@@ -187,10 +257,24 @@ jobs:
       contents: read
       packages: write
     steps:
+      - name: Checkout current release tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: automation
+          persist-credentials: false
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.prepare.outputs.release_commit }}
+          path: release
+          fetch-depth: 0
           persist-credentials: false
+      - run: cp automation/rust-toolchain.toml rust-toolchain.toml
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
+        with:
+          cache-workspaces: |
+            automation -> target
+            release -> target
       - run: |
           sudo apt-get update
           sudo apt-get install -y podman skopeo
@@ -199,7 +283,7 @@ jobs:
           RELEASE_COMMIT: ${{ needs.prepare.outputs.release_commit }}
         run: |
           printf '%s' "$GH_TOKEN" | podman login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
-          python3 scripts/publish-release-oci.py manifest "$VERSION" "$RELEASE_COMMIT"
+          cargo run --quiet --locked --manifest-path automation/tools/xtask/Cargo.toml -- release oci manifest "$VERSION" "$RELEASE_COMMIT" --root "$GITHUB_WORKSPACE/release"
       - if: always()
         run: podman logout ghcr.io
 
@@ -211,10 +295,23 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Checkout current release tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: automation
+          persist-credentials: false
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.prepare.outputs.release_commit }}
+          path: release
           fetch-depth: 0
+      - run: cp automation/rust-toolchain.toml rust-toolchain.toml
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
+        with:
+          cache-workspaces: |
+            automation -> target
+            release -> target
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2 (Node 24)
         with:
           name: windwatcher-server-public-assets
@@ -222,4 +319,4 @@ jobs:
       - env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_COMMIT: ${{ needs.prepare.outputs.release_commit }}
-        run: python3 scripts/finalize-release.py windwatcher-server "$VERSION" "$RELEASE_COMMIT" --assets "$RUNNER_TEMP/assets"
+        run: cargo run --quiet --locked --manifest-path automation/tools/xtask/Cargo.toml -- release github finalize windwatcher-server "$VERSION" "$RELEASE_COMMIT" --assets "$RUNNER_TEMP/assets" --root "$GITHUB_WORKSPACE/release"

@@ -36,6 +36,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.sha }}
           fetch-depth: 0
       - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
       - id: prepare
@@ -48,15 +49,28 @@ jobs:
     permissions:
       contents: read
     steps:
+      - name: Checkout current release tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: automation
+          persist-credentials: false
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.prepare.outputs.release_commit }}
+          path: release
+          fetch-depth: 0
           persist-credentials: false
+      - run: cp automation/rust-toolchain.toml rust-toolchain.toml
       - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
+        with:
+          cache-workspaces: |
+            automation -> target
+            release -> target
       - run: |
+          cd release
           cargo metadata --locked --format-version 1 > /dev/null
           cargo check --workspace --all-features --locked
-          scripts/ci/test-release-scripts.sh
           cargo package -p windwatcher --locked
           cargo publish -p windwatcher --dry-run --locked --registry crates-io
 
@@ -68,16 +82,29 @@ jobs:
     permissions:
       contents: read
     steps:
+      - name: Checkout current release tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: automation
+          persist-credentials: false
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.prepare.outputs.release_commit }}
+          path: release
+          fetch-depth: 0
           persist-credentials: false
+      - run: cp automation/rust-toolchain.toml rust-toolchain.toml
       - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
-      - run: cargo package -p windwatcher --locked
+        with:
+          cache-workspaces: |
+            automation -> target
+            release -> target
+      - run: cargo package --manifest-path release/Cargo.toml -p windwatcher --locked
       - name: Publish or verify exact registry version
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
-        run: python3 scripts/registry-release.py publish windwatcher "$VERSION"
+        run: cargo run --quiet --locked --manifest-path automation/tools/xtask/Cargo.toml -- release registry publish windwatcher "$VERSION" --root "$GITHUB_WORKSPACE/release"
 
   finalize-github:
     needs: [prepare, publish-crate]
@@ -87,11 +114,24 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Checkout current release tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: automation
+          persist-credentials: false
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.prepare.outputs.release_commit }}
+          path: release
           fetch-depth: 0
+      - run: cp automation/rust-toolchain.toml rust-toolchain.toml
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
+        with:
+          cache-workspaces: |
+            automation -> target
+            release -> target
       - env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_COMMIT: ${{ needs.prepare.outputs.release_commit }}
-        run: python3 scripts/finalize-release.py windwatcher "$VERSION" "$RELEASE_COMMIT"
+        run: cargo run --quiet --locked --manifest-path automation/tools/xtask/Cargo.toml -- release github finalize windwatcher "$VERSION" "$RELEASE_COMMIT" --root "$GITHUB_WORKSPACE/release"
