@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-11-03
+
 ### Added
 
 - Independent manual releases publish the server crate, native Linux tarballs,
@@ -129,3 +131,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   already-expired grant, including at the exact expiration boundary.
 - Member removal/leave preserves the known terminal recipient even when current
   audience hydration fails or dispatch times out.
+
+[Unreleased]: https://github.com/OtavioGonzaga/windwatcher/compare/windwatcher-server-v0.1.0...HEAD
+[0.1.0]: https://github.com/OtavioGonzaga/windwatcher/releases/tag/windwatcher-server-v0.1.0
