@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-11-03
+
 ### Fixed
 
 - Reject encoded conversation/member/message cursors above 1024 bytes before
@@ -152,3 +154,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Persisted enable/disable use cases for trusted operator callers.
 - Strongly typed UUIDv7 identifiers for core domain entities.
 - Initial user identity model with canonical validated usernames and enable/disable behavior.
+
+[Unreleased]: https://github.com/OtavioGonzaga/windwatcher/compare/windwatcher-v0.1.0...HEAD
+[0.1.0]: https://github.com/OtavioGonzaga/windwatcher/releases/tag/windwatcher-v0.1.0
