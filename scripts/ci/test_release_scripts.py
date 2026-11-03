@@ -165,6 +165,38 @@ class ReleaseTests(unittest.TestCase):
         self.assertIn(f"release_commit={sha}", self.state())
         self.assertIn("prepared=true", self.state())
 
+    def test_dispatch_branch_gate_applies_before_recovery(self):
+        scripts = self.root / "scripts"
+        scripts.mkdir()
+        for name in ("release.py", "release-state.sh"):
+            shutil.copy2(SCRIPTS / name, scripts / name)
+        output = self.root / "workflow-output"
+        env = {**os.environ, "GITHUB_REF": "refs/heads/feature", "GITHUB_SHA": self.initial,
+               "GITHUB_OUTPUT": str(output)}
+        entrypoint = str(SCRIPTS / "ci/prepare-release.sh")
+        def dispatch(ref):
+            return subprocess.run([entrypoint, "windwatcher", "0.2.0"], cwd=self.root,
+                                  env={**env, "GITHUB_REF": ref}, capture_output=True, text=True)
+        result = dispatch("refs/heads/feature")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("must be dispatched from main", result.stderr)
+        self.assertFalse(output.exists())
+        self.commit("Add release tools to fixture")
+        sha = self.release_commit()
+        (self.root / "later.txt").write_text("Later development\n")
+        self.commit("Later work")
+        self.cmd("git", "remote", "add", "origin", str(self.root))
+        # main dispatch is required, but its original SHA need not be current.
+        result = dispatch("refs/heads/main")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(f"release_commit={sha}", output.read_text())
+        saved = output.read_text()
+        for ref in ("refs/heads/feature", "refs/tags/windwatcher-v0.2.0"):
+            result = dispatch(ref)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("must be dispatched from main", result.stderr)
+            self.assertEqual(output.read_text(), saved)
+
     def test_correct_annotated_tag(self):
         sha = self.release_commit()
         self.cmd("git", "tag", "-a", "windwatcher-v0.2.0", "-m", "Release", sha)
@@ -283,7 +315,7 @@ class ReleaseTests(unittest.TestCase):
         executable(tools / "cargo", 'echo "$*" >> build-invocations\nmkdir -p target/release\nprintf \'#!/bin/sh\\necho "windwatcher 0.1.0"\\n\' > target/release/windwatcher\nchmod +x target/release/windwatcher\n')
         for name in ("strip", "ldd", "readelf"):
             executable(tools / name, "exit 0\n")
-        executable(scripts / "package.sh", 'file="$4/fixture.$1"\ncp "$3" "$file"\nprintf "%s\\n" "$file"\n')
+        executable(scripts / "package.sh", '[[ $SOURCE_DATE_EPOCH == "$(git show -s --format=%ct HEAD)" ]]\nfile="$4/fixture.$1"\ncp "$3" "$file"\nprintf "%s\\n" "$file"\n')
         executable(scripts / "ci/verify-packaging.sh", 'cmp "$1" "$4"\ncmp "$2" "$4"\n')
         (self.root / "packaging/systemd").mkdir(parents=True)
         for name in ("windwatcher.service", "windwatcher-worker.service"):
@@ -291,7 +323,7 @@ class ReleaseTests(unittest.TestCase):
         for name in ("LICENSE", "README.md", "config.example.toml"):
             (self.root / name).write_text("fixture\n")
         output = self.root / "dist"
-        env = {**os.environ, "PATH": str(tools) + os.pathsep + os.environ["PATH"]}
+        env = {**os.environ, "PATH": str(tools) + os.pathsep + os.environ["PATH"], "SOURCE_DATE_EPOCH": "1"}
         subprocess.run([str(SCRIPTS / "build-release-artifacts.sh"), "0.1.0", arch, str(output)], cwd=self.root, env=env, check=True, stdout=subprocess.DEVNULL)
         self.assertEqual((self.root / "build-invocations").read_text().splitlines(), ["build --release --locked -p windwatcher-server --bin windwatcher"])
         top = f"windwatcher-server-0.1.0-linux-{arch}"
@@ -317,6 +349,16 @@ class OciTests(unittest.TestCase):
                 patch.object(oci.subprocess, "check_call") as call:
             oci.main()
             call.assert_not_called()
+
+    def test_oci_build_job_limit_is_opt_in_from_caller_environment(self):
+        for environment in ({}, {"CARGO_BUILD_JOBS": "4"}):
+            with patch.dict(os.environ, environment, clear=True), \
+                    patch.object(sys, "argv", ["oci", "architecture", "0.1.0", "revision", "--arch", "amd64"]), \
+                    patch.object(oci, "architecture", side_effect=[None, None, "sha256:published"]), \
+                    patch.object(oci.subprocess, "check_call") as call:
+                oci.main()
+            build = call.call_args_list[0][0][0]
+            self.assertEqual(any(a.startswith("CARGO_BUILD_JOBS=") for a in build), bool(environment))
 
     def test_exact_manifest_recovery_and_prerelease_alias_policy(self):
         with patch.object(sys, "argv", ["oci", "manifest", "0.2.0-rc.1", "revision"]), \

@@ -2,6 +2,7 @@
 """Native Podman publication; immutable exact tags are verified, never replaced."""
 import argparse
 import json
+import os
 import subprocess
 import sys
 from release import require, version
@@ -69,7 +70,10 @@ def main():
         if digest is not None:
             print("Reusing " + reference + "@" + digest)
             return
+        build_jobs = (["--build-arg", "CARGO_BUILD_JOBS=" + os.environ["CARGO_BUILD_JOBS"]]
+                      if "CARGO_BUILD_JOBS" in os.environ else [])
         subprocess.check_call(["podman", "build", "--format=oci", "--file", "Containerfile", "--tag", reference,
+                               *build_jobs,
                                "--build-arg", "VERSION=" + args.version, "--build-arg", "REVISION=" + args.revision, "."])
         subprocess.check_call(["scripts/ci/verify-oci.sh", reference, args.arch, args.version, args.revision])
         subprocess.check_call(["scripts/ci/test-oci.sh", reference])

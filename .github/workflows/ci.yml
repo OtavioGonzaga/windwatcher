@@ -229,6 +229,7 @@ jobs:
           scripts/ci/test-package-hooks.sh
           scripts/ci/test-verify-glibc.sh
           scripts/ci/verify-packaging.sh "$DEB1" "$RPM1" "$PACKAGE_ARCH" target/release/windwatcher
+          scripts/ci/test-package-reproducibility.sh "$PACKAGE_ARCH" target/release/windwatcher
           scripts/ci/lint-packaging.sh "$DEB1" "$RPM1"
       - name: Debian 13 lifecycle
         run: scripts/ci/test-package.sh debian "$DEB1" "$DEB2"
@@ -267,7 +268,7 @@ jobs:
         run: |
           version=$(cargo metadata --no-deps --format-version 1 --locked | python3 -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "windwatcher-server"))')
           echo "VERSION=$version" >> "$GITHUB_ENV"
-          podman build --format=oci --file Containerfile --tag localhost/windwatcher-server:ci --build-arg VERSION="$version" --build-arg REVISION="$GITHUB_SHA" .
+          podman build --format=oci --file Containerfile --tag localhost/windwatcher-server:ci --build-arg CARGO_BUILD_JOBS="$CARGO_BUILD_JOBS" --build-arg VERSION="$version" --build-arg REVISION="$GITHUB_SHA" .
       - name: Verify image and lifecycle
         env:
           OCI_ARCH: ${{ matrix.arch }}

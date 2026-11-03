@@ -17,6 +17,13 @@ OCI preflight uses the authenticated GitHub Packages API to detect a missing
 package on first publication; registry authentication failures are never used
 as evidence that an exact version tag is absent.
 
+**Required credential boundary:** in the `release` environment settings, set
+**Deployment branches and tags → Selected branches and tags → Branch: main**.
+Do not allow feature branches or tags. Configure this before adding the token
+or dispatching any release, including recovery. These server-side rules withhold
+environment secrets before a job runs; a check in a branch's own workflow or
+script cannot protect secrets from that same branch modifying the check.
+
 Preparation and finalization use the protected environment and `contents: write`.
 Repository rules must permit the Actions bot's release metadata pushes to
 `main`; repository files cannot configure that permission. Do not disable
@@ -38,8 +45,11 @@ Both workflows share a non-cancelling release concurrency group; ordinary CI is
 independent. GitHub retains at most one pending run per concurrency group, so
 avoid queueing multiple release dispatches.
 
-New releases require dispatch from current main. Preparation promotes curated
-Unreleased entries into a UTC-dated section, leaves an empty Unreleased, updates
+All releases, including recovery, must be dispatched from the `main` branch.
+Only a new release requires the dispatch SHA to still be current main;
+recovery can use an older validated release commit reachable from main.
+Preparation promotes curated Unreleased entries into a UTC-dated section,
+leaves an empty Unreleased, updates
 only allow-listed manifests/changelog/lock entries, validates and commits as
 `chore(release): PACKAGE vVERSION`. The bot fetches main again and fails instead
 of rebasing/merging if its parent is no longer current. Lockfile third-party
@@ -82,6 +92,13 @@ one with `sha256sum -c FILE.sha256`. Native Ubuntu 22.04 x86_64/aarch64 jobs eac
 build and strip one binary for all three formats, using existing package
 definitions and verification. No cross compilation or QEMU is involved.
 Raw binaries and Actions artifacts remain internal plumbing.
+
+Release packaging exports `SOURCE_DATE_EPOCH` from the release commit before
+nFPM runs; the tarball uses that same timestamp. RPM metadata uses the fixed
+`windwatcher-release` build host. Native package CI rebuilds both formats twice
+from identical binary bytes with different paths/mtimes and checks byte equality,
+commit timestamps and the RPM build host with real nFPM.
+
 Prerelease asset filenames retain SemVer (for example `0.2.0-rc.1`); nFPM
 encodes the internal DEB/RPM version as `0.2.0~rc.1` for prerelease ordering.
 
@@ -137,7 +154,8 @@ intentionally requires investigation rather than `--clobber`.
 
 After this PR merges and main CI is green:
 
-1. Configure environment `release` and its `CRATES_IO_TOKEN`.
+1. Configure environment `release` to allow deployments only from branch `main`
+   (**Selected branches and tags → Branch: main**), then add `CRATES_IO_TOKEN`.
 2. Run **Create windwatcher release**, version **0.1.0**.
 3. Verify crates.io `windwatcher 0.1.0`, annotated tag `windwatcher-v0.1.0`
    and its GitHub Release.

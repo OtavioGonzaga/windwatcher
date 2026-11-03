@@ -16,6 +16,9 @@ binary=$(realpath target/release/windwatcher)
 "$binary" --help > /dev/null
 ldd "$binary"
 readelf -h -d --version-info "$binary"
+# nFPM and tar must use the release commit's timestamp, not the runner's clock.
+export SOURCE_DATE_EPOCH
+SOURCE_DATE_EPOCH=$(git show -s --format=%ct HEAD)
 deb=$(PACKAGE_RELEASE=1 scripts/package.sh deb "$arch" "$binary" "$output")
 rpm=$(PACKAGE_RELEASE=1 scripts/package.sh rpm "$arch" "$binary" "$output")
 scripts/ci/verify-packaging.sh "$deb" "$rpm" "$arch" "$binary"
@@ -26,8 +29,7 @@ mkdir "$tmp/$name"
 install -m 0755 "$binary" "$tmp/$name/windwatcher"
 install -m 0644 LICENSE README.md config.example.toml packaging/systemd/*.service "$tmp/$name/"
 # Stable tar metadata and gzip header make recovery builds as reproducible as possible.
-epoch=$(git show -s --format=%ct HEAD)
-tar --sort=name --mtime="@$epoch" --owner=0 --group=0 --numeric-owner -C "$tmp" -cf - "$name" | gzip -n > "$output/$name.tar.gz"
+tar --sort=name --mtime="@$SOURCE_DATE_EPOCH" --owner=0 --group=0 --numeric-owner -C "$tmp" -cf - "$name" | gzip -n > "$output/$name.tar.gz"
 cmp "$binary" "$tmp/$name/windwatcher"
 install -m 0755 "$binary" "$output/windwatcher-$arch"
 cd "$output"

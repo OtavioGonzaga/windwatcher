@@ -30,6 +30,10 @@ Podman and `.containerignore` define the supported source-build workflow. OCI
 images can also be consumed by compatible runtimes, including Docker-compatible
 environments. Base image digests are reviewed and updated manually.
 
+Source builds do not impose a Cargo job limit. Optionally pass
+`--build-arg CARGO_BUILD_JOBS=N` to choose one; CI forwards its own job limit
+through that build argument without changing the default for local users.
+
 The examples below use the source-built `localhost/windwatcher-server:local`.
 For official published images replace that reference everywhere with
 `ghcr.io/otaviogonzaga/windwatcher-server:VERSION`; the runtime contract is the same.

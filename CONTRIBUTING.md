@@ -124,6 +124,7 @@ invariants. After building the release binary, native Linux developers can run:
 scripts/package.sh deb x86_64 target/release/windwatcher dist
 scripts/package.sh rpm x86_64 target/release/windwatcher dist
 scripts/ci/verify-packaging.sh dist/<deb-file> dist/<rpm-file> x86_64 target/release/windwatcher
+scripts/ci/test-package-reproducibility.sh x86_64 target/release/windwatcher
 scripts/ci/test-package-hooks.sh
 ```
 

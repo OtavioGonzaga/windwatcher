@@ -2,13 +2,13 @@
 # Called only by manually dispatched release workflows after the full reusable CI.
 set -euo pipefail
 package=$1 version=$2
+[[ $GITHUB_REF == refs/heads/main ]] || { echo 'Releases and recovery must be dispatched from main' >&2; exit 1; }
 git fetch origin main --tags
 state=$(scripts/release-state.sh "$package" "$version")
 if grep -qx 'prepared=true' <<< "$state"; then
     printf '%s\n' "$state" >> "$GITHUB_OUTPUT"
     exit 0
 fi
-[[ $GITHUB_REF == refs/heads/main ]] || { echo 'New releases must be dispatched from main' >&2; exit 1; }
 [[ $GITHUB_SHA == "$(git rev-parse origin/main)" ]] || { echo 'main advanced; restart from main' >&2; exit 1; }
 [[ -z $(git status --porcelain) ]]
 git checkout --detach origin/main
