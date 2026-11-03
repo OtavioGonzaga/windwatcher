@@ -1,5 +1,7 @@
 # Documentation
 
+- [Release process](releasing.md): independent library/server publishing and recovery.
+
 - [Architecture](architecture.md): current architectural foundations.
 - [Identity](identity.md): current user identity domain behavior.
 - [Local authentication](authentication.md): credentials, application services,

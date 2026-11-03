@@ -4,16 +4,18 @@ if [[ $# != 4 ]]; then echo "Usage: $0 <deb> <rpm> <x86_64|aarch64> <binary>" >&
 deb=$(realpath "$1") rpm=$(realpath "$2") arch=$3 binary=$(realpath "$4")
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
 version=$(cargo metadata --manifest-path "$root/Cargo.toml" --no-deps --format-version 1 --locked | jq -er '.packages[] | select(.name == "windwatcher-server") | .version')
+# nFPM represents SemVer prereleases with '~' for correct DEB/RPM ordering.
+package_version=${version/-/\~}
 case $arch in x86_64) debarch=amd64;; aarch64) debarch=arm64;; *) exit 2;; esac
 case $arch in
     x86_64) readelf -h "$binary" | grep -Eq 'Machine:.*X86-64';;
     aarch64) readelf -h "$binary" | grep -Eq 'Machine:.*AArch64';;
 esac
 [[ $(dpkg-deb -f "$deb" Package) == windwatcher-server ]]
-[[ $(dpkg-deb -f "$deb" Version) == "$version-1" ]]
+[[ $(dpkg-deb -f "$deb" Version) == "$package_version-1" ]]
 [[ $(dpkg-deb -f "$deb" Architecture) == "$debarch" ]]
 dpkg-deb -f "$deb" Depends | grep -Eq '(^|[, ])systemd([, ]|$)'
-[[ $(rpm -qp --qf '%{NAME} %{VERSION} %{RELEASE} %{ARCH} %{LICENSE}' "$rpm") == "windwatcher-server $version 1 $arch MIT" ]]
+[[ $(rpm -qp --qf '%{NAME} %{VERSION} %{RELEASE} %{ARCH} %{LICENSE}' "$rpm") == "windwatcher-server $package_version 1 $arch MIT" ]]
 rpm -qp --requires "$rpm" | grep -qx systemd
 "$root/scripts/ci/verify-glibc.sh" "$binary" "$root/packaging/glibc-baseline" \
     "$(dpkg-deb -f "$deb" Depends)" "$(rpm -qp --requires "$rpm")"

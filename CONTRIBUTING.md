@@ -124,6 +124,7 @@ invariants. After building the release binary, native Linux developers can run:
 scripts/package.sh deb x86_64 target/release/windwatcher dist
 scripts/package.sh rpm x86_64 target/release/windwatcher dist
 scripts/ci/verify-packaging.sh dist/<deb-file> dist/<rpm-file> x86_64 target/release/windwatcher
+scripts/ci/test-package-reproducibility.sh x86_64 target/release/windwatcher
 scripts/ci/test-package-hooks.sh
 ```
 
@@ -230,6 +231,8 @@ not need changelog noise. Changelogs follow Keep a Changelog, package versions
 follow Semantic Versioning, and packages are independently versioned.
 
 ## Pull requests
+
+Maintainers: [Release process](docs/releasing.md).
 
 Pull requests should describe the problem and change clearly, include validation
 performed, update relevant documentation, add an ADR for significant

@@ -20,6 +20,16 @@ can embed directly or run through an official self-hosted server.
 
 The packages are independently versioned.
 
+## Installation
+
+- Embed the library: `cargo add windwatcher`.
+- Standalone server: `cargo install windwatcher-server` (binary: `windwatcher`).
+- Linux packages and tarballs: [GitHub Releases](https://github.com/OtavioGonzaga/windwatcher/releases).
+- Official OCI image: `ghcr.io/otaviogonzaga/windwatcher-server:VERSION`.
+
+Use a published server version for `VERSION`. See [installation](docs/installation.md),
+[containers](docs/container.md) and the maintainer [release guide](docs/releasing.md).
+
 ## Operator commands
 
 Initialize a configuration and stable JWT signing secret first; see
@@ -42,7 +52,7 @@ diagnostics and graceful shutdown. The optional durable queue and separate
 For a Linux system service using `/etc/windwatcher` and `/var/lib/windwatcher`,
 including the DEB and RPM packaging definitions, see [installation](docs/installation.md).
 For the official OCI image definition and Podman deployment, see
-[container deployment](docs/container.md); no registry image is published yet.
+[container deployment](docs/container.md).
 
 ## Development
 

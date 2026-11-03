@@ -1,6 +1,13 @@
 # Changelog
 
-## Unreleased
+All notable user-facing changes to this package are documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+### Fixed
 
 - Reject encoded conversation/member/message cursors above 1024 bytes before
   Base64 or JSON decoding, preserving issued v1 cursor compatibility.
@@ -25,50 +32,19 @@
   ledger, and bound paginated query results with server-side cursor/order/limit
   and batched hydration.
 
-- Add the optional MongoDB primary-storage adapter implementing all six storage
-  ports, with explicit migrations and replica-set transaction requirements.
-
 - Reject persisted MySQL memberships whose role is incompatible with the
   conversation kind.
 
 - Serialize SQL message authorization and keyed command reservations, and use
   explicit consistent snapshots independently of database isolation defaults.
 
-- Add PostgreSQL and MySQL persistence adapters implementing the existing
-  identity, session, conversation, message, query, and create-command contracts.
-- Add independent `postgres` and `mysql` features and engine-specific migrations.
-
-All notable user-facing changes to this package are documented in this file.
-
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
-
-## [Unreleased]
-
-### Added
-
-- `PostgresQueue`, `MySqlQueue` and `RedisQueue` behind independent
-  `queue-postgres`, `queue-mysql` and `queue-redis` features, completing the
-  official queue adapter matrix with the same portable lease/job contract.
-- Explicit PostgreSQL/MySQL queue migrations and namespace-isolated Redis atomic
-  transitions with exact microsecond indexes; network adapters use Rustls TLS.
-
-- Portable durable-job identifiers, validated job envelope and state types,
-  enqueue policy/application operation, and the reusable `QueueStore` contract.
-- Independent `queue-sqlite` adapter with its own schema, migrations, lease and
-  job lifecycle operations, plus a shared portable queue contract test suite.
-
-- Queue listing options validate the portable `1..=100` limit before adapter I/O.
-- Portable UTC microsecond queue timestamps and common lease-expiration validation;
-  enqueue results match persisted precision and sub-microsecond leases are rejected.
-
-### Fixed
-
 - Queue payload restoration preserves deep JSON without a fixed decoder nesting
   limit. SQL queues store opaque payload/failure bytes (including NUL) and signed
   Unix-microsecond timestamps across the common model's full temporal range.
 - Redis script-detected key/index/metadata corruption is consistently reported as
   `RedisQueueError::Corrupt`, without exposing stored values.
+- SQLite session creation atomically rejects missing or disabled owners, preventing
+  a disable-during-login race from creating a new active session.
 
 ### Changed
 
@@ -97,6 +73,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   no longer include `ConversationNotFound`; parent deletion yields `MessageNotFound`.
 
 ### Added
+
+- Independent manual library releases publish curated changelog notes and the
+  crate without changing the server package version or publishing server artifacts.
+- The optional MongoDB primary-storage adapter implements all six storage
+  ports, with explicit migrations and replica-set transaction requirements.
+- PostgreSQL and MySQL persistence adapters implement the existing identity,
+  session, conversation, message, query, and create-command contracts.
+- Independent `postgres` and `mysql` features and engine-specific migrations.
+- `PostgresQueue`, `MySqlQueue` and `RedisQueue` behind independent
+  `queue-postgres`, `queue-mysql` and `queue-redis` features, completing the
+  official queue adapter matrix with the same portable lease/job contract.
+- Explicit PostgreSQL/MySQL queue migrations and namespace-isolated Redis atomic
+  transitions with exact microsecond indexes; network adapters use Rustls TLS.
+- Portable durable-job identifiers, validated job envelope and state types,
+  enqueue policy/application operation, and the reusable `QueueStore` contract.
+- Independent `queue-sqlite` adapter with its own schema, migrations, lease and
+  job lifecycle operations, plus a shared portable queue contract test suite.
+- Queue listing options validate the portable `1..=100` limit before adapter I/O.
+- Portable UTC microsecond queue timestamps and common lease-expiration validation;
+  enqueue results match persisted precision and sub-microsecond leases are rejected.
 
 - Session lookup and lifecycle validation, and a current conversation-member ID
   lookup for internal application use. Storage adapters must implement both.
@@ -156,8 +152,3 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Persisted enable/disable use cases for trusted operator callers.
 - Strongly typed UUIDv7 identifiers for core domain entities.
 - Initial user identity model with canonical validated usernames and enable/disable behavior.
-
-### Fixed
-
-- SQLite session creation atomically rejects missing or disabled owners, preventing
-  a disable-during-login race from creating a new active session.

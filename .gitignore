@@ -1,4 +1,6 @@
 /target/
+/scripts/__pycache__/
+/scripts/ci/__pycache__/
 .env
 
 .agents/*

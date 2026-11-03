@@ -1,6 +1,16 @@
 # Changelog
 
-## Unreleased
+All notable user-facing changes to this package are documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+### Added
+
+- Independent manual releases publish the server crate, native Linux tarballs,
+  DEB/RPM packages and multi-platform GHCR images with SHA-256 download checksums.
 
 - Add a non-root OCI Containerfile, native amd64/arm64 validation and Podman
   deployment documentation for the server and worker.
@@ -10,42 +20,17 @@
 - Document package installation, upgrades, removal and manual-install migration.
 - Add hardened canonical systemd units for the server and optional worker, and
   document the Linux installation and ownership contract.
-- Initialize user-mode config and key privately and system-mode files with
-  service-readable Unix permissions; system initialization now requires a
-  pre-provisioned configuration directory.
 
 - Publish exact canonical WebSocket ticket length/pattern in query and response
   OpenAPI schemas, matching runtime validation.
 
-- Bound pagination cursors to 1024 encoded bytes in HTTP validation and OpenAPI.
-
-- Update locked TLS dependencies to patched releases and expand authorization,
-  idempotency and secret-redaction regression coverage.
-
 - Add opt-in trusted proxy CIDRs for bounded, spoof-resistant X-Forwarded-For
   rate-limit addressing, with unchanged immediate-peer defaults.
-- Enforce Group write limits in HTTP/OpenAPI and reject malformed/noncanonical
-  WebSocket tickets before accessing their registry.
-
-- Validate MongoDB URL syntax during `config check` and expose safe, actionable
-  unsupported-topology and invalid-migration-history diagnostics.
 
 - Add MongoDB as an independently selected primary-storage provider.
 
-- Report selected storage backends and invalid network migration histories
-  accurately; ignore inactive SQLite storage paths when validating queue files.
-
 - Add runtime primary-storage provider selection for SQLite, PostgreSQL, and
   MySQL, including configuration and explicit migration/status support.
-
-All notable user-facing changes to this package are documented in this file.
-
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
-
-## [Unreleased]
-
-### Added
 
 - Complete the operator CLI with `init`, redacted `config show`, `user disable`,
   `user enable` and configuration-independent `version`.
@@ -68,38 +53,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Separate `windwatcher worker` process role with bounded execution slots,
   renewable leases, retry backoff and graceful shutdown.
 - `jobs list` inspection and operator retry for failed jobs.
-
-### Fixed
-
-- Queue configuration preserves the resolved enqueue payload and attempt policy.
-- Worker task termination/panic is supervised and fails the process instead of
-  silently reducing concurrency; graceful shutdown still drains active work.
-
-### Changed
-
-- Normal runtime, inspection and operator connections never create missing SQLite
-  databases or data directories; only applying explicit migrations may create them.
-- Realtime admission during drain returns `503 realtime.shutting_down`.
-
-- Realtime publication is driven by library `DomainEvent` outcomes; the WebSocket
-  wire contract is unchanged.
-
-- Conversation and membership notification metadata timestamps come from committed
-  mutation outcomes, exactly matching persistence precision rather than handler clocks.
-
-- Ticket issuance rejects sessions that expire after lookup and never inserts an
-  already-expired grant, including at the exact expiration boundary.
-
-- Member removal/leave preserves the known terminal recipient even when current
-  audience hydration fails or dispatch times out.
-
-- Realtime notification hydration and fan-out run in bounded best-effort tasks,
-  outside HTTP response latency, with independent dispatch concurrency/deadline policy.
-
-- Bearer challenges are returned only for access-token authentication failures,
-  not for invalid login or refresh credentials.
-
-### Added
 
 - Process-local WebSocket realtime transport at `/v1/realtime`, authenticated
   through short-lived one-use session-bound tickets from `/v1/realtime/tickets`.
@@ -140,3 +93,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   validation, and trusted local-user provisioning.
 
 - Enable the library's optional HS256 JWT access-token adapter for future server wiring.
+
+### Changed
+
+- Initialize user-mode config and key privately and system-mode files with
+  service-readable Unix permissions; system initialization now requires a
+  pre-provisioned configuration directory.
+- Normal runtime, inspection and operator connections never create missing SQLite
+  databases or data directories; only applying explicit migrations may create them.
+- Realtime admission during drain returns `503 realtime.shutting_down`.
+- Realtime publication is driven by library `DomainEvent` outcomes; the WebSocket
+  wire contract is unchanged.
+- Conversation and membership notification metadata timestamps come from committed
+  mutation outcomes, exactly matching persistence precision rather than handler clocks.
+- Realtime notification hydration and fan-out run in bounded best-effort tasks,
+  outside HTTP response latency, with independent dispatch concurrency/deadline policy.
+- Bearer challenges are returned only for access-token authentication failures,
+  not for invalid login or refresh credentials.
+
+### Fixed
+
+- Bound pagination cursors to 1024 encoded bytes in HTTP validation and OpenAPI.
+- Update locked TLS dependencies to patched releases and expand authorization,
+  idempotency and secret-redaction regression coverage.
+- Enforce Group write limits in HTTP/OpenAPI and reject malformed/noncanonical
+  WebSocket tickets before accessing their registry.
+- Validate MongoDB URL syntax during `config check` and expose safe, actionable
+  unsupported-topology and invalid-migration-history diagnostics.
+- Report selected storage backends and invalid network migration histories
+  accurately; ignore inactive SQLite storage paths when validating queue files.
+- Queue configuration preserves the resolved enqueue payload and attempt policy.
+- Worker task termination/panic is supervised and fails the process instead of
+  silently reducing concurrency; graceful shutdown still drains active work.
+- Ticket issuance rejects sessions that expire after lookup and never inserts an
+  already-expired grant, including at the exact expiration boundary.
+- Member removal/leave preserves the known terminal recipient even when current
+  audience hydration fails or dispatch times out.

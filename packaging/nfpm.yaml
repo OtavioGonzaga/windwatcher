@@ -14,6 +14,8 @@ description: |
   configuration, database migrations and systemd service management.
 depends:
   - systemd
+rpm:
+  buildhost: windwatcher-release
 overrides:
   deb:
     depends:
