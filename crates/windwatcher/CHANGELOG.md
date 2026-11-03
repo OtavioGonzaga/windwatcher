@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Add a crate-specific README with an SQLite quick start, feature overview,
+  current limitations, and links to the project documentation.
+
 ## [0.1.0] - 2026-11-03
 
 ### Fixed

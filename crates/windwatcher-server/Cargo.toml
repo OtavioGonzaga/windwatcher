@@ -7,6 +7,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Official self-hosted server for Windwatcher."
+readme = "README.md"
 keywords = ["messaging", "self-hosted", "server"]
 categories = ["network-programming"]
 
