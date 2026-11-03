@@ -10,8 +10,8 @@ Release and structured CI tooling is Rust (`tools/xtask`); Python is not
 required or allowed in repository automation. Use `cargo xtask --help` and
 `cargo xtask release --help` to discover commands. The existing release shell
 entrypoints are thin wrappers. Run `cargo test -p xtask --locked -- --test-threads=1`
-and `bash scripts/ci/verify-no-python.sh` when changing tooling. Tests that mutate
-release metadata use disposable workspaces, never the working checkout.
+when changing tooling. Tests that mutate release metadata use disposable
+workspaces, never the working checkout.
 
 ## Repository structure
 

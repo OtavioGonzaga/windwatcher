@@ -119,6 +119,38 @@ fn fake(ver: &str, alias: Option<&str>, wrong: bool) -> Fake {
 }
 
 #[test]
+fn oci_build_jobs_are_forwarded_only_when_set_by_the_caller() {
+    for jobs in [None, Some("4"), Some("12")] {
+        let f = fake("0.1.0", None, false);
+        build_image(
+            &f,
+            Path::new("."),
+            "image:0.1.0-arm64",
+            "0.1.0",
+            "commit",
+            jobs,
+        )
+        .expect("build");
+        let calls = f.calls.borrow();
+        assert_eq!(calls.len(), 1);
+        let args = &calls[0];
+        assert_eq!(args[0], "podman");
+        assert_eq!(args[1], "build");
+        let forwarded: Vec<_> = args
+            .windows(2)
+            .filter(|pair| pair[0] == "--build-arg" && pair[1].starts_with("CARGO_BUILD_JOBS="))
+            .map(|pair| pair[1].as_str())
+            .collect();
+        assert_eq!(
+            forwarded,
+            jobs.map(|jobs| format!("CARGO_BUILD_JOBS={jobs}"))
+                .into_iter()
+                .collect::<Vec<_>>()
+        );
+    }
+}
+
+#[test]
 fn architecture_recovery_or_native_publication() {
     for absent in [false, true] {
         let mut f = fake("0.1.0", None, false);

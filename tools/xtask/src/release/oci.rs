@@ -117,6 +117,37 @@ fn verify_manifest(
     Ok(())
 }
 
+fn build_image(
+    r: &dyn Runner,
+    root: &Path,
+    reference: &str,
+    version: &str,
+    revision: &str,
+    jobs: Option<&str>,
+) -> Result<()> {
+    let version_arg = format!("VERSION={version}");
+    let revision_arg = format!("REVISION={revision}");
+    let jobs_arg = jobs.map(|jobs| format!("CARGO_BUILD_JOBS={jobs}"));
+    let mut args = vec![
+        "build",
+        "--format=oci",
+        "--file",
+        "Containerfile",
+        "--tag",
+        reference,
+        "--build-arg",
+        &version_arg,
+        "--build-arg",
+        &revision_arg,
+    ];
+    if let Some(jobs_arg) = &jobs_arg {
+        args.extend(["--build-arg", jobs_arg]);
+    }
+    args.push(".");
+    text(r, root, "podman", &args)?;
+    Ok(())
+}
+
 pub(crate) fn architecture(
     r: &dyn Runner,
     root: &Path,
@@ -130,26 +161,8 @@ pub(crate) fn architecture(
         println!("Reusing {reference}@{digest}");
         return Ok(());
     }
-    text(
-        r,
-        root,
-        "podman",
-        &[
-            "build",
-            "--format=oci",
-            "--file",
-            "Containerfile",
-            "--tag",
-            &reference,
-            "--build-arg",
-            "CARGO_BUILD_JOBS=4",
-            "--build-arg",
-            &format!("VERSION={version}"),
-            "--build-arg",
-            &format!("REVISION={revision}"),
-            ".",
-        ],
-    )?;
+    let jobs = std::env::var("CARGO_BUILD_JOBS").ok();
+    build_image(r, root, &reference, version, revision, jobs.as_deref())?;
     // Verification logic belongs to automation; Containerfile/context to root.
     let tooling = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     text(

@@ -26,7 +26,9 @@ impl Runner for Process {
         if program != "gh" {
             command.env_remove("GH_TOKEN").env_remove("GITHUB_TOKEN");
         }
-        command.env("CARGO_BUILD_JOBS", "4");
+        if program == "cargo" && std::env::var_os("CARGO_BUILD_JOBS").is_none() {
+            command.env("CARGO_BUILD_JOBS", "4");
+        }
         let output = command
             .output()
             .with_context(|| format!("starting {program}"))?;

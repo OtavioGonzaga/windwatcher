@@ -11,6 +11,10 @@ Structured release logic lives in the unpublished workspace package
 `tools/xtask`. Python is not required. Bash handles short Unix orchestration;
 Git, Cargo, `gh`, `curl`, Podman, Skopeo and `jq` remain external tools.
 
+OCI builds forward `CARGO_BUILD_JOBS` as a build argument only when the caller
+sets it. Official workflows set `4`; local callers can choose another value,
+or leave it unset to let Cargo choose its parallelism inside the image build.
+
 ```bash
 cargo xtask release --help
 cargo xtask release prepare windwatcher 0.2.0

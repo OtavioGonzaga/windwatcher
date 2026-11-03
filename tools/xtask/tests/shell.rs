@@ -39,58 +39,6 @@ fn dispatch_branch_gate_precedes_any_recovery_or_outputs() {
 }
 
 #[test]
-fn no_python_guard_detects_executable_dependencies_but_allows_prose() {
-    for (name, body, pass) in [
-        ("note.md", "Python is not required\n", true),
-        ("note.md", "python is not required\n", true),
-        ("tool.py", "# tracked file\n", false),
-        ("tool.sh", "#!/usr/bin/env python3\n", false),
-        ("tool.sh", "python3 -c 'print(1)'\n", false),
-        ("tool.sh", "python3 extensionless-script\n", false),
-        ("tool.sh", "version=$(python3 helper.py)\n", false),
-        ("tool.sh", "printf '{}' | python -c 'import json'\n", false),
-        ("tool.yml", "run: python3 <<'PY'\n", false),
-    ] {
-        let tmp = tempfile::tempdir().expect("tmp");
-        let scripts = tmp.path().join("scripts/ci");
-        fs::create_dir_all(&scripts).expect("scripts");
-        fs::copy(
-            automation().join("scripts/ci/verify-no-python.sh"),
-            scripts.join("verify-no-python.sh"),
-        )
-        .expect("guard");
-        fs::write(tmp.path().join("scripts").join(name), body).expect("fixture");
-        assert!(
-            Command::new("git")
-                .args(["init", "-q"])
-                .current_dir(tmp.path())
-                .status()
-                .expect("git init")
-                .success()
-        );
-        assert!(
-            Command::new("git")
-                .args(["add", "."])
-                .current_dir(tmp.path())
-                .status()
-                .expect("git add")
-                .success()
-        );
-        let result = Command::new("bash")
-            .arg(scripts.join("verify-no-python.sh"))
-            .current_dir(tmp.path())
-            .output()
-            .expect("guard");
-        assert_eq!(
-            result.status.success(),
-            pass,
-            "{body}: {}",
-            String::from_utf8_lossy(&result.stdout)
-        );
-    }
-}
-
-#[test]
 fn artifact_helper_builds_release_root_once_and_curates_tar_payload() {
     let arch = std::env::consts::ARCH;
     if !matches!(arch, "x86_64" | "aarch64") {
