@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
-import { readDocuments, website, root } from "../lib/content";
+import { readDocuments, website, root, parseMarkdown } from "../lib/content";
+import { visit } from "unist-util-visit";
+import { siteOrigin, publicUrl } from "../lib/site";
 import { operations, validateContract } from "../lib/contract";
 import { inspectHtml, text, validateLink } from "../lib/export-check";
 
@@ -108,6 +110,44 @@ for (const url of expected)
     searchData.includes(url.replace(/\/$/, "")),
     `Missing searchable page: ${url}`,
   );
+const llmsIndex = readFileSync(path.join(out, "llms.txt"), "utf8");
+const llmsFull = readFileSync(path.join(out, "llms-full.txt"), "utf8");
+for (const doc of documents)
+  assert.ok(llmsFull.includes(doc.title), `Missing LLM document: ${doc.file}`);
+for (const entry of entries)
+  assert.ok(llmsFull.includes(entry.id), `Missing LLM operation: ${entry.id}`);
+assert.ok(llmsIndex.includes("/openapi/v1.json"));
+for (const url of expected) {
+  const slug = url.replace(/^\/docs\//, "").replace(/\/$/, "");
+  assert.ok(
+    existsSync(path.join(out, "markdown/docs", slug, "content.md")),
+    `Missing static Markdown: ${url}`,
+  );
+  const markdown = readFileSync(
+    path.join(out, "markdown/docs", slug, "content.md"),
+    "utf8",
+  );
+  const original = documents.find((document) => document.url === url);
+  const code: string[] = [];
+  visit(parseMarkdown(markdown), (node) => {
+    if (node.type === "code") code.push(node.value);
+    if (
+      node.type !== "link" &&
+      node.type !== "image" &&
+      node.type !== "definition"
+    )
+      return;
+    const target = new URL(node.url, `${siteOrigin}${publicUrl(url)}`);
+    if (target.origin === siteOrigin)
+      validateLink(out, `${target.pathname}${target.hash}`, url);
+  });
+  if (original)
+    assert.deepEqual(
+      code,
+      original.code,
+      `Markdown export changed code in ${original.file}`,
+    );
+}
 console.log(
   `Validated ${documents.length} source documents, ${entries.length} operations, ${count} exported HTML files, links, anchors, code examples and static search data.`,
 );

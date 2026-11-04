@@ -55,6 +55,16 @@ test("static pages, assets and nested refresh work without runtime errors", asyn
   const spec = await request.get(`${basePath}/openapi/v1.json`);
   expect(spec.ok()).toBeTruthy();
   expect((await spec.json()).openapi).toBe("3.1.0");
+  for (const file of [
+    "llms.txt",
+    "llms-full.txt",
+    "markdown/docs/architecture/content.md",
+    "markdown/docs/api/messages/sendMessage/content.md",
+  ]) {
+    const artifact = await request.get(`${basePath}/${file}`);
+    expect(artifact.ok()).toBeTruthy();
+    expect(await artifact.text()).not.toContain("<!DOCTYPE html>");
+  }
   expect(failures).toEqual([]);
 });
 

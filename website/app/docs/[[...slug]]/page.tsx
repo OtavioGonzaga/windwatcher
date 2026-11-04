@@ -7,6 +7,7 @@ import { ResponseHeaders } from "@/components/response-headers";
 import { contractOperations } from "@/lib/openapi";
 import { publicUrl } from "@/lib/site";
 import Link from "next/link";
+import { markdownUrl } from "@/lib/llms";
 
 export const dynamicParams = false;
 
@@ -59,6 +60,9 @@ export default async function Page({
             website.
           </p>
           <OpenAPIPage {...props} />
+          <p>
+            <a href={markdownUrl(page.slugs)}>View as Markdown</a>
+          </p>
           <ResponseHeaders operation={entry.operation} />
         </DocsBody>
       </DocsPage>
@@ -68,6 +72,9 @@ export default async function Page({
   return (
     <DocsPage toc={page.data.toc}>
       <DocsBody>
+        <p className="text-sm text-fd-muted-foreground">
+          <a href={markdownUrl(page.slugs)}>View as Markdown</a>
+        </p>
         {page.slugs.join("/") === "http-api" && (
           <p>
             <Link href="/docs/api/sessions/createSession/">

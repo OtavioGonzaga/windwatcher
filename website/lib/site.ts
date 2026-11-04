@@ -7,7 +7,8 @@ if (basePath !== "" && (!basePath.startsWith("/") || basePath.endsWith("/"))) {
 }
 
 export const repository = "https://github.com/OtavioGonzaga/windwatcher";
-export const siteOrigin = "https://otaviogonzaga.github.io";
+export const siteOrigin =
+  process.env.NEXT_PUBLIC_SITE_ORIGIN ?? "https://otaviogonzaga.github.io";
 
 /** For raw assets and fetch URLs. Next Link already applies basePath. */
 export function publicUrl(path: string) {
