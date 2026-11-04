@@ -1,0 +1,57 @@
+{
+  "name": "windwatcher-docs",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@12.16.1",
+  "engines": {
+    "node": ">=24 <27"
+  },
+  "scripts": {
+    "prepare:content": "tsx scripts/prepare-content.ts",
+    "openapi": "tsx scripts/export-openapi.ts",
+    "generate": "pnpm openapi && pnpm prepare:content",
+    "dev": "pnpm generate && next dev --webpack",
+    "build": "pnpm generate && next build --webpack",
+    "test": "tsx --test tests/*.test.ts",
+    "validate": "tsx scripts/validate.ts",
+    "preview": "tsx scripts/preview.ts",
+    "test:e2e": "playwright test",
+    "check": "pnpm generate && fumadocs-mdx && next typegen && tsc --noEmit",
+    "format": "prettier --write . --ignore-path .prettierignore",
+    "format:check": "prettier --check . --ignore-path .prettierignore"
+  },
+  "dependencies": {
+    "@tailwindcss/postcss": "4.3.4",
+    "flexsearch": "0.8.212",
+    "fumadocs-core": "16.17.10",
+    "fumadocs-mdx": "15.4.10",
+    "fumadocs-openapi": "12.5.8",
+    "fumadocs-ui": "16.17.10",
+    "next": "16.4.5",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "shiki": "4.6.0",
+    "tailwindcss": "4.3.4",
+    "zod": "4.3.6"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.64.1",
+    "@types/hast": "^3.0.5",
+    "@types/mdast": "^4.0.4",
+    "@types/mdx": "^2.0.13",
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "github-slugger": "^2.0.0",
+    "hast-util-from-html": "^2.0.3",
+    "mdast-util-to-string": "^4.0.0",
+    "prettier": "3.9.10",
+    "remark-gfm": "^4.0.1",
+    "remark-parse": "^11.0.0",
+    "remark-stringify": "^11.0.0",
+    "tsx": "4.23.15",
+    "typescript": "7.0.2",
+    "unified": "^11.0.5",
+    "unist-util-visit": "^5.1.0"
+  }
+}

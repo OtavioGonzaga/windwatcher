@@ -1,4 +1,14 @@
 /target/
+/website/node_modules/
+/website/.next/
+/website/.source/
+/website/out/
+/website/generated/
+/website/public/generated/
+/website/public/openapi/
+/website/playwright-report/
+/website/test-results/
+/website/tsconfig.tsbuildinfo
 /scripts/__pycache__/
 /scripts/ci/__pycache__/
 .env

@@ -16,7 +16,7 @@ have exact tags only and never update stable aliases. There is no major-only
 `0` alias. Architecture-suffixed tags are release/recovery plumbing.
 
 First publication needs a one-time public-visibility bootstrap; see
-[releasing](releasing.md#first-release-exact-sequence).
+[releasing](releasing.md#first-server-release-exact-sequence).
 
 ## Build from source
 

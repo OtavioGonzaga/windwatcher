@@ -1,5 +1,9 @@
 # Documentation
 
+Browse the [documentation website](https://otaviogonzaga.github.io/windwatcher/)
+for these guides and the generated HTTP endpoint reference. The Markdown files
+in this directory remain the source of truth.
+
 - [Release process](releasing.md): independent library/server publishing and recovery.
 
 - [Architecture](architecture.md): current architectural foundations.

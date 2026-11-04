@@ -22,3 +22,4 @@ The durable queue contract is recorded in [ADR 0014](0014-durable-job-queue-sema
 MongoDB primary storage is recorded in [ADR 0015](0015-mongodb-primary-storage.md).
 Standalone runtime lifecycle is recorded in [ADR 0016](0016-standalone-runtime-lifecycle.md).
 Trusted proxy rate-limit addressing is recorded in [ADR 0017](0017-trusted-proxy-rate-limit-addresses.md).
+Static documentation publishing is recorded in [ADR 0018](0018-static-documentation-website.md).

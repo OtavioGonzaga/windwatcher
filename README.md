@@ -61,6 +61,8 @@ and local validation.
 
 ## Documentation
 
+Browse the [documentation website](https://otaviogonzaga.github.io/windwatcher/)
+for guides, architectural decisions and the generated HTTP API reference.
 See the [documentation index](docs/README.md).
 
 ## Contributing
