@@ -1,6 +1,7 @@
 import { docs, contributing } from "../.source/server";
 import { loader, type Source } from "fumadocs-core/source";
 import { readDocuments } from "./content";
+import { apiSource, openapi } from "./openapi";
 
 const documents = readDocuments();
 const byFile = new Map(documents.map((doc) => [doc.file, doc]));
@@ -24,7 +25,10 @@ const markdown: Source<{
   metaData: {};
 }> = { files };
 
-export const source = loader({
-  baseUrl: "/docs",
-  source: markdown,
-});
+export const source = loader(
+  { docs: markdown, openapi: apiSource },
+  {
+    baseUrl: "/docs",
+    plugins: [openapi.loaderPlugin()],
+  },
+);

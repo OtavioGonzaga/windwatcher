@@ -8,8 +8,10 @@
   },
   "scripts": {
     "prepare:content": "tsx scripts/prepare-content.ts",
-    "dev": "pnpm prepare:content && next dev --webpack",
-    "build": "pnpm prepare:content && next build --webpack",
+    "openapi": "tsx scripts/export-openapi.ts",
+    "generate": "pnpm openapi && pnpm prepare:content",
+    "dev": "pnpm generate && next dev --webpack",
+    "build": "pnpm generate && next build --webpack",
     "test": "tsx --test tests/*.test.ts",
     "check": "fumadocs-mdx && next typegen && tsc --noEmit",
     "format": "prettier --write . --ignore-path .prettierignore",
