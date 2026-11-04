@@ -1,5 +1,6 @@
-use sha2::{Digest, Sha256};
 use std::{fs, path::Path, process::Command};
+
+const ARTIFACT_SHA256: &str = "c7c5c1d70c5dec4416ab6158afd0b223ef40c29b1dc1f97ed9428b94d4cadb1c";
 
 fn task(mode: &str, directory: &Path, create: bool) -> bool {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_xtask"));
@@ -37,7 +38,7 @@ fn inventory_and_checksum_failures() {
             fs::write(tmp.path().join(&name), b"artifact").expect("asset");
             fs::write(
                 tmp.path().join(format!("{name}.sha256")),
-                format!("{:x}  {name}\n", Sha256::digest(b"artifact")),
+                format!("{ARTIFACT_SHA256}  {name}\n"),
             )
             .expect("checksum");
         }
@@ -73,7 +74,7 @@ fn collection_rejects_duplicate_architecture_and_nonempty_destination() {
             fs::write(dir.join(&name), b"artifact").expect("asset");
             fs::write(
                 dir.join(format!("{name}.sha256")),
-                format!("{:x}  {name}\n", Sha256::digest(b"artifact")),
+                format!("{ARTIFACT_SHA256}  {name}\n"),
             )
             .expect("checksum");
         }
