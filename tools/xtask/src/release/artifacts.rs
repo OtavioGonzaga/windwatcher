@@ -52,7 +52,8 @@ pub(crate) fn validate(root: &Path, requested: &str, create: bool) -> Result<()>
     let mut aggregate = String::new();
     for name in primary {
         let digest = Sha256::digest(fs::read(root.join(&name))?);
-        let line = format!("{digest:x}  {name}\n");
+        let digest: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+        let line = format!("{digest}  {name}\n");
         ensure!(
             fs::read_to_string(root.join(format!("{name}.sha256")))? == line,
             "checksum mismatch: {name}"
