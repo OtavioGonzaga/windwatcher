@@ -7,8 +7,10 @@
     "node": ">=24 <27"
   },
   "scripts": {
-    "dev": "next dev --webpack",
-    "build": "next build --webpack",
+    "prepare:content": "tsx scripts/prepare-content.ts",
+    "dev": "pnpm prepare:content && next dev --webpack",
+    "build": "pnpm prepare:content && next build --webpack",
+    "test": "tsx --test tests/*.test.ts",
     "check": "fumadocs-mdx && next typegen && tsc --noEmit",
     "format": "prettier --write . --ignore-path .prettierignore",
     "format:check": "prettier --check . --ignore-path .prettierignore"

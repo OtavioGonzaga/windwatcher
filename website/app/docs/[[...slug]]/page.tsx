@@ -9,6 +9,16 @@ export function generateStaticParams() {
   return source.generateParams();
 }
 
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<{ slug?: string[] }>;
+}) {
+  const page = source.getPage((await params).slug);
+  if (!page) notFound();
+  return { title: page.data.title, description: page.data.description };
+}
+
 export default async function Page({
   params,
 }: {

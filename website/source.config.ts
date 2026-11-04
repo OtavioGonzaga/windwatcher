@@ -12,4 +12,16 @@ export const docs = defineDocs({
   },
 });
 
+export const contributing = defineDocs({
+  dir: "..",
+  docs: {
+    files: ["CONTRIBUTING.md"],
+    schema: z.object({
+      title: z.string().optional(),
+      description: z.string().optional(),
+    }),
+  },
+  meta: { files: [] },
+});
+
 export default defineConfig({ mdxOptions: { remarkPlugins: [remarkDocs] } });
