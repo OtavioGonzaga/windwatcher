@@ -1,0 +1,47 @@
+{
+  "name": "windwatcher-docs",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@12.16.1",
+  "engines": {
+    "node": ">=24 <27"
+  },
+  "scripts": {
+    "dev": "next dev --webpack",
+    "build": "next build --webpack",
+    "check": "fumadocs-mdx && next typegen && tsc --noEmit",
+    "format": "prettier --write . --ignore-path .prettierignore",
+    "format:check": "prettier --check . --ignore-path .prettierignore"
+  },
+  "dependencies": {
+    "@tailwindcss/postcss": "4.3.4",
+    "fumadocs-core": "16.17.10",
+    "fumadocs-mdx": "15.4.10",
+    "fumadocs-openapi": "12.5.8",
+    "next": "16.4.5",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "fumadocs-ui": "16.17.10",
+    "tailwindcss": "4.3.4",
+    "shiki": "4.6.0",
+    "flexsearch": "0.8.212",
+    "zod": "4.3.6"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.64.1",
+    "@types/mdx": "^2.0.13",
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "@types/mdast": "^4.0.4",
+    "prettier": "3.9.10",
+    "tsx": "4.23.15",
+    "typescript": "7.0.2",
+    "unist-util-visit": "^5.1.0",
+    "mdast-util-to-string": "^4.0.0",
+    "github-slugger": "^2.0.0",
+    "remark-parse": "^11.0.0",
+    "remark-gfm": "^4.0.1",
+    "unified": "^11.0.5"
+  }
+}

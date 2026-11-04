@@ -1,0 +1,13 @@
+node_modules
+.next
+.source
+out
+generated
+public/generated
+public/openapi
+public/markdown
+public/llms*.txt
+pnpm-lock.yaml
+next-env.d.ts
+playwright-report
+test-results
