@@ -49,7 +49,8 @@ pnpm preview
   response headers, schema references, raw JSON, search coverage and LLM exports.
 - `test:e2e` starts an ordinary static server against `out/`, with no SPA fallback,
   then checks Chromium desktop/mobile navigation, refresh, search, themes, network
-  errors and overflow. The report includes screenshots of docs and an API page.
+  errors and overflow. The report includes screenshots of docs, an API page and
+  the landing page in light/dark themes on desktop and mobile.
 - `preview` serves only `out/` at <http://127.0.0.1:4173/windwatcher/>. Build first;
   this is a local inspection tool, not a deployment server.
 
@@ -126,16 +127,17 @@ In repository **Settings → Pages → Build and deployment → Source**, select
 **GitHub Actions**. Ensure Pages and Actions are enabled and that any
 `github-pages` environment protection rules allow deployment from `main`.
 
-`.github/workflows/docs.yml` validates relevant PRs without deploying. Pushes to
-`main` build and validate the root and project-prefix configurations sequentially,
-then upload only the final project-prefix `out/` with the official Pages Actions.
-`workflow_dispatch` supports manual deployment from `main`; dispatches from other
-branches validate but cannot deploy. Build has read-only source permissions;
+`.github/workflows/docs.yml` runs **only manually**, through `workflow_dispatch`;
+pull requests and pushes never start it. In **Actions → Documentation → Run
+workflow**, select `main` to build, validate and publish. The workflow builds and
+validates the root and project-prefix configurations sequentially, then uploads
+only the final project-prefix `out/` with the official Pages Actions.
+Dispatches from other branches validate but cannot deploy. Build has read-only source permissions;
 only deploy receives `pages: write` and `id-token: write`.
 Next.js uses the checked-out Git commit as its build ID rather than a random ID.
 
-Watch the workflow and verify the actual public URL after merging. A successful
-local build or PR check does **not** mean the public deployment has happened.
+After merging, dispatch the workflow and verify its result and the actual public
+URL. A merge or successful local build does **not** publish the website.
 
 ### Custom domains and local root hosting
 

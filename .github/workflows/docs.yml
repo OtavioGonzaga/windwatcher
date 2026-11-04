@@ -1,36 +1,6 @@
 name: Documentation
 
 on:
-  pull_request:
-    branches: [main]
-    paths:
-      - 'docs/**'
-      - 'website/**'
-      - 'crates/**'
-      - 'Cargo.toml'
-      - 'Cargo.lock'
-      - 'rust-toolchain.toml'
-      - '.cargo/**'
-      - '.github/workflows/docs.yml'
-      - '.github/dependabot.yml'
-      - 'README.md'
-      - 'CONTRIBUTING.md'
-      - 'AGENTS.md'
-  push:
-    branches: [main]
-    paths:
-      - 'docs/**'
-      - 'website/**'
-      - 'crates/**'
-      - 'Cargo.toml'
-      - 'Cargo.lock'
-      - 'rust-toolchain.toml'
-      - '.cargo/**'
-      - '.github/workflows/docs.yml'
-      - '.github/dependabot.yml'
-      - 'README.md'
-      - 'CONTRIBUTING.md'
-      - 'AGENTS.md'
   workflow_dispatch:
 
 permissions: {}
@@ -40,7 +10,7 @@ env:
   NEXT_TELEMETRY_DISABLED: 1
 
 concurrency:
-  group: docs-${{ github.event.pull_request.number || github.ref }}
+  group: docs-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
@@ -97,14 +67,14 @@ jobs:
           retention-days: 7
           if-no-files-found: ignore
       - name: Upload static Pages artifact
-        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
         uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
           path: website/out
 
   deploy:
     name: Deploy GitHub Pages
-    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
     needs: build
     runs-on: ubuntu-26.04
     timeout-minutes: 10

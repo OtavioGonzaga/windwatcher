@@ -200,8 +200,9 @@ WINDWATCHER_TEST_MONGODB_URL='mongodb://127.0.0.1:27018/?replicaSet=rs0' \
 For website development, prerequisites, build/validation commands and GitHub Pages
 setup, see [website/README.md](website/README.md). The site reads `docs/` directly
 and generates its HTTP reference from the server's existing OpenAPI contract;
-do not maintain copies of either in the website. Website changes also run the
-dedicated documentation workflow; Rust CI and release checks remain independent.
+do not maintain copies of either in the website. Validate website changes locally;
+the dedicated documentation workflow runs only through manual `workflow_dispatch`.
+Rust CI and release checks remain independent.
 
 Keep the README concise. Put conceptual and operational documentation under
 `docs/`, public library API documentation in rustdoc, and future HTTP contracts

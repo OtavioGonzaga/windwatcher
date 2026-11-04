@@ -23,6 +23,10 @@ The deployed site requires only static file hosting. Search runs in the browser;
 there is no API request proxy, documentation backend, external search service,
 authentication or MCP server. The server's existing Swagger UI is unchanged.
 
+Run the documentation workflow only through manual `workflow_dispatch`, never on
+pull requests or pushes. Only dispatches targeting `main` may publish to Pages;
+dispatches from other branches validate without deploying.
+
 ## Consequences
 
 Contributors need Node.js and pnpm only when working on the website. A dedicated

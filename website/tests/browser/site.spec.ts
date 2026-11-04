@@ -102,6 +102,41 @@ test("client navigation and search cover guides, ADRs and HTTP operations", asyn
   }
 });
 
+test("home presents clear entry points in light and dark themes", async ({
+  page,
+}, info) => {
+  await page.goto(`${basePath}/`);
+  await expect(page.getByRole("heading", { level: 1 })).toContainText(
+    "on your terms.",
+  );
+  for (const title of [
+    "Start with the foundations",
+    "Make it your own",
+    "Connect your application",
+  ]) {
+    await expect(
+      page.getByRole("link", { name: new RegExp(title) }),
+    ).toBeVisible();
+  }
+  await expect(page.getByRole("link", { name: "Browse docs" })).toBeVisible();
+  for (const theme of ["light", "dark"]) {
+    await page.evaluate((theme) => localStorage.setItem("theme", theme), theme);
+    await page.reload();
+    await expect(page.locator("html")).toHaveClass(new RegExp(theme));
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= window.innerWidth + 1,
+      ),
+    ).toBe(true);
+    const screenshot = info.outputPath(`home-${theme}.png`);
+    await page.screenshot({ path: screenshot, fullPage: true });
+    await info.attach(`Home (${theme})`, {
+      path: screenshot,
+      contentType: "image/png",
+    });
+  }
+});
+
 test("theme switching persists and mobile navigation is usable", async ({
   page,
 }, info) => {
