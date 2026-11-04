@@ -6,3 +6,12 @@
 body {
   font-family: ui-sans-serif, system-ui, sans-serif;
 }
+
+/* Keep wide contracts and shell examples inside the document on narrow screens. */
+.prose table {
+  display: block;
+  overflow-x: auto;
+}
+.prose pre {
+  max-width: 100%;
+}
