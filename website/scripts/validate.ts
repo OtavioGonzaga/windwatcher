@@ -22,6 +22,11 @@ assert.deepEqual(
     readFileSync(path.join(website, "generated/openapi-v1.json"), "utf8"),
   ),
 );
+assert.equal(
+  readFileSync(path.join(out, "openapi/v1.json"), "utf8"),
+  readFileSync(path.join(website, "generated/openapi-v1.json"), "utf8"),
+  "Published OpenAPI must be byte-identical to the exported input",
+);
 
 const expected = [
   ...documents.map((doc) => doc.url),
@@ -135,6 +140,12 @@ for (const url of expected) {
       node.type !== "link" &&
       node.type !== "image" &&
       node.type !== "definition"
+    )
+      return;
+    // Authored absolute URLs remain external even in a root-prefix test build.
+    if (
+      /^[a-z][a-z\d+.-]*:/i.test(node.url) &&
+      original?.links.includes(node.url)
     )
       return;
     const target = new URL(node.url, `${siteOrigin}${publicUrl(url)}`);

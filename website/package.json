@@ -16,7 +16,7 @@
     "validate": "tsx scripts/validate.ts",
     "preview": "tsx scripts/preview.ts",
     "test:e2e": "playwright test",
-    "check": "fumadocs-mdx && next typegen && tsc --noEmit",
+    "check": "pnpm generate && fumadocs-mdx && next typegen && tsc --noEmit",
     "format": "prettier --write . --ignore-path .prettierignore",
     "format:check": "prettier --check . --ignore-path .prettierignore"
   },

@@ -1,10 +1,13 @@
 import { flexsearchFromSource } from "fumadocs-core/search/flexsearch";
 import { source } from "@/lib/source";
 import { contractOperations } from "@/lib/openapi";
+import { operationSearchText } from "@/lib/contract";
 
 export const dynamic = "force-static";
 
 export const { staticGET: GET } = flexsearchFromSource(source, {
+  // Prefix matching avoids quadratic substring indexes for long Rust identifiers.
+  document: { tokenize: "forward" },
   buildIndex(page) {
     const structuredData = page.data.structuredData;
     const entry =
@@ -25,7 +28,10 @@ export const { staticGET: GET } = flexsearchFromSource(source, {
             ...structuredData,
             contents: [
               ...structuredData.contents,
-              { heading: undefined, content: JSON.stringify(entry.operation) },
+              {
+                heading: undefined,
+                content: operationSearchText(entry.operation),
+              },
             ],
           }
         : structuredData,

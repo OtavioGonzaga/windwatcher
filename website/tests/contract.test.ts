@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { Document } from "fumadocs-openapi";
-import { operations, validateContract } from "../lib/contract";
+import {
+  operations,
+  validateContract,
+  operationSearchText,
+} from "../lib/contract";
 
 function fixture() {
   return {
@@ -41,6 +45,15 @@ test("coverage derives from method/path pairs and preserves stable operation IDs
   assert.equal(entries[0].url, "/docs/api/users/getExample/");
   assert.equal(entries[0].path, "/v1/example");
   assert.equal(entries[0].method, "get");
+});
+
+test("operation search indexes readable schema text instead of JSON punctuation", () => {
+  const text = operationSearchText(operations(fixture())[0].operation);
+  assert.ok(text.includes("getExample"));
+  assert.ok(text.includes("components schemas Test"));
+  assert.ok(text.includes("200"));
+  assert.ok(!text.includes("{"));
+  assert.ok(!text.includes('"'));
 });
 
 test("rejects incompatible version, missing security, invalid references and duplicate IDs", () => {

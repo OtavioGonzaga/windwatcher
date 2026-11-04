@@ -11,6 +11,25 @@ export const methods = [
   "trace",
 ] as const;
 
+/** Index contract text, not JSON punctuation that creates huge substring indexes. */
+export function operationSearchText(operation: OperationObject) {
+  const words = new Set<string>();
+  function collect(value: unknown) {
+    if (typeof value === "string") {
+      words.add(value.replace(/[^\p{L}\p{N}_-]+/gu, " "));
+    } else if (Array.isArray(value)) {
+      value.forEach(collect);
+    } else if (value && typeof value === "object") {
+      for (const [key, child] of Object.entries(value)) {
+        collect(key);
+        collect(child);
+      }
+    }
+  }
+  collect(operation);
+  return [...words].join(" ");
+}
+
 export function operations(spec: Document) {
   const ids = new Set<string>();
   return Object.entries(spec.paths ?? {}).flatMap(([path, item]) =>

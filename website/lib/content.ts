@@ -21,7 +21,9 @@ export function parseMarkdown(markdown: string): Root {
 export function documentSlug(file: string): string[] {
   if (file === "CONTRIBUTING.md") return ["contributing"];
   const relative = file.replace(/^docs\//, "").replace(/\.md$/, "");
-  return relative.split("/").filter((part) => part !== "README");
+  const parts = relative.split("/");
+  if (parts.at(-1) === "README") parts.pop();
+  return parts;
 }
 
 export function documentUrl(file: string) {

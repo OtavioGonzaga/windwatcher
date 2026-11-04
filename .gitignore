@@ -6,8 +6,6 @@
 /website/generated/
 /website/public/generated/
 /website/public/openapi/
-/website/public/llms*.txt
-/website/public/markdown/
 /website/playwright-report/
 /website/test-results/
 /website/tsconfig.tsbuildinfo

@@ -1,5 +1,12 @@
 version: 2
 updates:
+  - package-ecosystem: npm
+    directory: /website
+    schedule:
+      interval: weekly
+    groups:
+      documentation-maintenance:
+        update-types: [minor, patch]
   - package-ecosystem: cargo
     directory: /
     schedule:
