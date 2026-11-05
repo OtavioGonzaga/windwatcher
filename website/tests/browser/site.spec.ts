@@ -52,6 +52,13 @@ test("static pages, assets and nested refresh work without runtime errors", asyn
   }
   await page.reload();
   await expect(page.locator("h1")).toContainText("0010");
+  const icon = page.locator('link[rel="icon"]');
+  await expect(icon).toHaveAttribute("href");
+  const iconUrl = new URL((await icon.getAttribute("href"))!, page.url());
+  expect(iconUrl.pathname).toBe(`${basePath}/favicon.ico`);
+  const favicon = await request.get(iconUrl.href);
+  expect(favicon.ok()).toBeTruthy();
+  expect(favicon.headers()["content-type"]).toContain("image/");
   const spec = await request.get(`${basePath}/openapi/v1.json`);
   expect(spec.ok()).toBeTruthy();
   expect((await spec.json()).openapi).toBe("3.1.0");
