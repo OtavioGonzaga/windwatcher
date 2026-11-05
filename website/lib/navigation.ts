@@ -42,6 +42,7 @@ export function documentationTree(pages: Page[]): Root {
   ]);
   section("API Reference", ["http-api"]);
   for (const tag of [
+    "Instance",
     "Sessions",
     "Users",
     "Conversations",
