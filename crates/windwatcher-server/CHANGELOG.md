@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-11-05
+
 ### Added
 
 - Add public instance discovery for HTTP API versions, authentication methods,
@@ -137,5 +139,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Member removal/leave preserves the known terminal recipient even when current
   audience hydration fails or dispatch times out.
 
-[Unreleased]: https://github.com/OtavioGonzaga/windwatcher/compare/windwatcher-server-v0.1.0...HEAD
 [0.1.0]: https://github.com/OtavioGonzaga/windwatcher/releases/tag/windwatcher-server-v0.1.0
+
+[Unreleased]: https://github.com/OtavioGonzaga/windwatcher/compare/windwatcher-server-v0.1.1...HEAD
+[0.1.1]: https://github.com/OtavioGonzaga/windwatcher/compare/windwatcher-server-v0.1.0...windwatcher-server-v0.1.1
