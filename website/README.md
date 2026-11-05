@@ -1,7 +1,7 @@
 # Windwatcher documentation website
 
 Fumadocs and Next.js export the repository documentation and the server's OpenAPI
-contract to static files. Production needs no Node.js process, database, search
+contract to static files. Production needs no JavaScript runtime, database, search
 service, API proxy or Windwatcher instance.
 
 Target URL: <https://otaviogonzaga.github.io/windwatcher/>.
@@ -10,17 +10,16 @@ Target URL: <https://otaviogonzaga.github.io/windwatcher/>.
 
 - The repository Rust toolchain (`../rust-toolchain.toml`). Cargo builds the
   server package to export OpenAPI; no configuration or credentials are needed.
-- Node.js 24 (declared in `.node-version`; Node.js 26 also works).
-- pnpm 12.16.1 (declared in `package.json`). Install it using your preferred
-  package-manager installer, or substitute `npx --yes pnpm@12.16.1` for `pnpm`.
-- Chromium for browser tests: `pnpm exec playwright install --with-deps chromium`.
+- Bun 1.4.4 (declared in `.bun-version` and `package.json`). Node.js and pnpm
+  are not required; Bun installs dependencies and runs all website tooling.
+- Chromium for browser tests: `bun --bun playwright install --with-deps chromium`.
 
-Run the following commands from `website/` (or use `pnpm --dir website` from the
-repository root):
+Run the following commands from `website/` (or use `bun run --cwd website <script>`
+from the repository root):
 
 ```bash
-pnpm install --frozen-lockfile
-pnpm dev
+bun install --frozen-lockfile
+bun run dev
 ```
 
 Open <http://localhost:3000/windwatcher/>. Markdown edits are watched directly;
@@ -30,18 +29,19 @@ documentation assets. The preparation command refreshes generated assets.
 ## Build and validate
 
 ```bash
-pnpm format:check
-pnpm check
-pnpm test
-pnpm build
-pnpm validate
-pnpm test:e2e
-pnpm preview
+bun run format:check
+bun run check
+bun run test
+bun run build
+bun run validate
+bun run test:e2e
+bun run preview
 ```
 
 - `check` regenerates inputs, generates MDX/Next types and runs TypeScript.
 - `test` checks URL mapping, AST transformations, navigation, contract validation
-  and static integrity-check behavior.
+  and static integrity-check behavior. Use `bun run test` rather than bare
+  `bun test`, which would also discover the separate Playwright browser tests.
 - `build` always exports the current Rust contract, validates the source inventory
   and copies assets before generating `out/`. Never deploy `.next/` or the source tree.
 - `validate` checks all source pages against exported HTML, original heading
@@ -81,7 +81,7 @@ and existing OpenAPI contracts; the existing Rust CI remains unchanged.
 ## OpenAPI generation
 
 ```bash
-pnpm openapi
+bun run openapi
 ```
 
 This invokes the example in
@@ -144,10 +144,10 @@ URL. A merge or successful local build does **not** publish the website.
 Prefix/origin configuration is centralized in `lib/site.ts`:
 
 ```bash
-NEXT_PUBLIC_BASE_PATH='' NEXT_PUBLIC_SITE_ORIGIN='https://docs.example.com' pnpm build
-NEXT_PUBLIC_BASE_PATH='' NEXT_PUBLIC_SITE_ORIGIN='https://docs.example.com' pnpm validate
-NEXT_PUBLIC_BASE_PATH='' pnpm test:e2e
-NEXT_PUBLIC_BASE_PATH='' pnpm preview
+NEXT_PUBLIC_BASE_PATH='' NEXT_PUBLIC_SITE_ORIGIN='https://docs.example.com' bun run build
+NEXT_PUBLIC_BASE_PATH='' NEXT_PUBLIC_SITE_ORIGIN='https://docs.example.com' bun run validate
+NEXT_PUBLIC_BASE_PATH='' bun run test:e2e
+NEXT_PUBLIC_BASE_PATH='' bun run preview
 ```
 
 Use the same values for generation, validation and preview; prefix changes require
@@ -163,4 +163,4 @@ and change the workflow's publication prefix/origin. No navigation rewrite is ne
   substantially. It is not a hosted search service or an offline application.
 - Local preview deliberately does not emulate server-side Next.js features.
 - The exporter compiles the server and its adapters, so a cold documentation build
-  costs more than a Markdown-only site; Cargo and pnpm caches mitigate this.
+  costs more than a Markdown-only site; local Cargo and Bun caches mitigate this.

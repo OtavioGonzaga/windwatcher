@@ -5,7 +5,7 @@ out
 generated
 public/generated
 public/openapi
-pnpm-lock.yaml
+bun.lock
 next-env.d.ts
 playwright-report
 test-results

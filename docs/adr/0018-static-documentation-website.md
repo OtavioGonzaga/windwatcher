@@ -29,7 +29,7 @@ dispatches from other branches validate without deploying.
 
 ## Consequences
 
-Contributors need Node.js and pnpm only when working on the website. A dedicated
+Contributors need Bun only when working on the website. A dedicated
 workflow validates and publishes the static output independently of Rust CI and
 release workflows. Website builds compile the server's OpenAPI exporter, so
 changes to either crate can require a documentation rebuild. New pages and

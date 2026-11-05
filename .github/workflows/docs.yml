@@ -30,19 +30,14 @@ jobs:
       - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
         with:
           cache-key: documentation
-      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          package_json_file: website/package.json
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version-file: website/.node-version
-          cache: pnpm
-          cache-dependency-path: website/pnpm-lock.yaml
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm exec playwright install --with-deps chromium
-      - run: pnpm format:check
-      - run: pnpm check
-      - run: pnpm test
+          bun-version-file: website/.bun-version
+      - run: bun install --frozen-lockfile
+      - run: bun --bun playwright install --with-deps chromium
+      - run: bun run format:check
+      - run: bun run check
+      - run: bun run test
       - name: OpenAPI contract regression tests (sequential)
         working-directory: .
         run: |
@@ -54,9 +49,9 @@ jobs:
         run: |
           for base_path in '' '/windwatcher'; do
             export NEXT_PUBLIC_BASE_PATH="$base_path"
-            pnpm build
-            pnpm validate
-            pnpm test:e2e
+            bun run build
+            bun run validate
+            bun run test:e2e
           done
       - name: Upload browser report
         if: always()
