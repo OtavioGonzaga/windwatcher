@@ -1,4 +1,5 @@
 mod conversations;
+mod instance;
 mod messages;
 mod realtime;
 mod sessions;
@@ -9,6 +10,7 @@ use utoipa_axum::router::OpenApiRouter;
 
 pub(super) fn router() -> OpenApiRouter<HttpState> {
     OpenApiRouter::new()
+        .merge(instance::router())
         .merge(users::router())
         .merge(sessions::router())
         .merge(conversations::router())

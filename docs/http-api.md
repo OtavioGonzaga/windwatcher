@@ -17,6 +17,7 @@ The current surface is exactly:
 
 | Method | Resource | Purpose |
 | --- | --- | --- |
+| GET | `/v1/instance` | Public instance discovery and onboarding metadata |
 | POST | `/v1/users` | Public registration, 201 without a session |
 | POST | `/v1/sessions` | Authenticate credentials and persist a session, 201 |
 | POST | `/v1/sessions/refresh` | Rotate a refresh token, 200 |
@@ -35,11 +36,32 @@ The current surface is exactly:
 
 Registration remains a registered route when closed and returns
 `403 registration.closed`. It reuses `auth.registration`, not an HTTP-specific
-toggle. All discovery/conversation/message routes require bearer authentication.
+toggle. User discovery, conversation and message routes require bearer authentication.
 Dependent collections are nested; globally identifiable message items have
 top-level routes. There is no unrestricted user listing or session listing.
 Operational `/health/live` and `/health/ready` are unversioned and intentionally
 excluded from the client OpenAPI contract. Axum also supplies implicit HEAD for GET.
+
+## Instance discovery
+
+Clients can call `GET /v1/instance` without authentication for onboarding:
+
+```json
+{
+  "service": "windwatcher",
+  "api_versions": ["v1"],
+  "registration": "open",
+  "auth_methods": ["password"]
+}
+```
+
+The service identifier identifies the protocol, not a cryptographically verified
+server identity. API versions are independent of the server package version.
+Registration is `open` or `closed` and describes public self-registration only;
+closed registration does not prevent existing or administratively provisioned users
+from authenticating. Older servers may return 404; clients can assume registration
+may be available and handle `403 registration.closed` if they attempt it. This
+endpoint is subject to the usual API CORS, rate limits and request correlation.
 
 ## Client messaging journey
 

@@ -23,6 +23,7 @@ fn openapi_contract_has_exact_routes_security_schemas_and_statuses() {
     assert_eq!(doc["info"]["version"], env!("CARGO_PKG_VERSION"));
     assert!(!String::from_utf8(encoded).unwrap().contains("Peer quota"));
     for (path, method) in [
+        ("/v1/instance", "get"),
         ("/v1/users", "post"),
         ("/v1/users/me", "get"),
         ("/v1/sessions", "post"),
@@ -34,9 +35,17 @@ fn openapi_contract_has_exact_routes_security_schemas_and_statuses() {
             "Client request quota exceeded"
         );
     }
-    assert_eq!(doc["paths"].as_object().unwrap().len(), 16);
+    assert_eq!(doc["paths"].as_object().unwrap().len(), 17);
     let mut ids = std::collections::HashSet::new();
     for (path, method, id, tag, protected, statuses) in [
+        (
+            "/v1/instance",
+            "get",
+            "getInstance",
+            "Instance",
+            false,
+            vec!["200", "429"],
+        ),
         (
             "/v1/users",
             "post",
@@ -115,6 +124,23 @@ fn openapi_contract_has_exact_routes_security_schemas_and_statuses() {
         json!({"type":"http", "scheme":"bearer", "bearerFormat":"JWT"})
     );
     let schemas = &doc["components"]["schemas"];
+    assert_eq!(
+        doc["paths"]["/v1/instance"]["get"]["responses"]["200"]["content"]["application/json"]["schema"]
+            ["$ref"],
+        "#/components/schemas/InstanceResponse"
+    );
+    for field in ["service", "api_versions", "registration", "auth_methods"] {
+        assert!(
+            schemas["InstanceResponse"]["required"]
+                .as_array()
+                .unwrap()
+                .contains(&json!(field))
+        );
+    }
+    assert_eq!(schemas["Registration"]["enum"], json!(["open", "closed"]));
+    assert_eq!(schemas["Service"]["enum"], json!(["windwatcher"]));
+    assert_eq!(schemas["ApiVersion"]["enum"], json!(["v1"]));
+    assert_eq!(schemas["AuthMethod"]["enum"], json!(["password"]));
     for name in [
         "RegisterUserRequest",
         "UserResponse",
@@ -161,6 +187,53 @@ fn openapi_contract_has_exact_routes_security_schemas_and_statuses() {
             .unwrap()
             .contains_key("/openapi/v1.json")
     );
+}
+
+#[tokio::test]
+async fn instance_discovery_reflects_registration_without_authentication_or_database_queries() {
+    for (policy, registration) in [
+        (RegistrationPolicy::Open, "open"),
+        (RegistrationPolicy::Closed, "closed"),
+    ] {
+        let fixture = Fixture::new(config(), policy, false).await;
+        let response = send(
+            &fixture.router,
+            Request::builder()
+                .uri("/v1/instance")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(response.0, StatusCode::OK);
+        assert_eq!(
+            response.2,
+            json!({"service":"windwatcher", "api_versions":["v1"], "registration":registration, "auth_methods":["password"]})
+        );
+    }
+}
+
+#[tokio::test]
+async fn instance_discovery_uses_general_middleware() {
+    let mut cfg = config();
+    cfg.rate_limit.enabled = true;
+    cfg.rate_limit.general.burst = 1;
+    cfg.rate_limit.general.period = "1h".into();
+    cfg.cors.allowed_origins = vec!["*".into()];
+    let fixture = Fixture::new(cfg, RegistrationPolicy::Closed, false).await;
+    let request = || {
+        Request::builder()
+            .uri("/v1/instance")
+            .header("origin", "https://example.com")
+            .body(Body::empty())
+            .unwrap()
+    };
+    let first = send(&fixture.router, request()).await;
+    assert_eq!(first.0, StatusCode::OK);
+    assert_eq!(first.1["access-control-allow-origin"], "*");
+    let limited = send(&fixture.router, request()).await;
+    problem(&limited, 429, "rate_limit.exceeded");
+    assert!(limited.1.contains_key("retry-after"));
+    assert_eq!(limited.1["access-control-allow-origin"], "*");
 }
 
 #[test]
@@ -526,6 +599,18 @@ async fn documentation_uses_generated_contract_and_local_assets_without_api_quot
 #[tokio::test]
 async fn registration_semantics_and_transport_rejections() {
     let fixture = Fixture::open().await;
+    assert_eq!(
+        send(
+            &fixture.router,
+            Request::builder()
+                .uri("/v1/instance")
+                .body(Body::empty())
+                .unwrap()
+        )
+        .await
+        .2["registration"],
+        "open"
+    );
     let registered = send(
         &fixture.router,
         command(
@@ -577,6 +662,18 @@ async fn registration_semantics_and_transport_rejections() {
         "user.invalid_password",
     );
     let closed = Fixture::new(config(), RegistrationPolicy::Closed, true).await;
+    assert_eq!(
+        send(
+            &closed.router,
+            Request::builder()
+                .uri("/v1/instance")
+                .body(Body::empty())
+                .unwrap()
+        )
+        .await
+        .2["registration"],
+        "closed"
+    );
     problem(
         &send(
             &closed.router,
@@ -590,6 +687,8 @@ async fn registration_semantics_and_transport_rejections() {
         403,
         "registration.closed",
     );
+    closed.user().await;
+    closed.grant().await;
 }
 
 #[tokio::test]

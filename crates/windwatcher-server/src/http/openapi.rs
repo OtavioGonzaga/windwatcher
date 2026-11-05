@@ -18,6 +18,7 @@ pub(super) fn finish(mut spec: OpenApi) -> OpenApi {
     }
     spec.info = InfoBuilder::new().title("Windwatcher API").version(env!("CARGO_PKG_VERSION")).description(Some("Windwatcher HTTP API v1. Tokens are JSON bearer secrets; this protocol is not OAuth or OIDC.")).build();
     spec.tags = Some(vec![
+        Tag::new("Instance"),
         Tag::new("Users"),
         Tag::new("Sessions"),
         Tag::new("Conversations"),
