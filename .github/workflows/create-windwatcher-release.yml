@@ -38,7 +38,7 @@ jobs:
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
-      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
+      - uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30 # v2.0.1
       - id: prepare
         run: scripts/ci/prepare-release.sh windwatcher "$VERSION"
 
@@ -62,7 +62,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - run: cp automation/rust-toolchain.toml rust-toolchain.toml
-      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
+      - uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30 # v2.0.1
         with:
           cache-workspaces: |
             automation -> target
@@ -95,7 +95,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - run: cp automation/rust-toolchain.toml rust-toolchain.toml
-      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
+      - uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30 # v2.0.1
         with:
           cache-workspaces: |
             automation -> target
@@ -126,7 +126,7 @@ jobs:
           path: release
           fetch-depth: 0
       - run: cp automation/rust-toolchain.toml rust-toolchain.toml
-      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
+      - uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30 # v2.0.1
         with:
           cache-workspaces: |
             automation -> target
