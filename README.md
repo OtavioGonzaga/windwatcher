@@ -1,5 +1,7 @@
 # ![windwatcher](docs/assets/windwatcher-banner.png)
 
+[![XERJ Corpus Hub contributor](https://hub.xerj.org/contributors/OtavioGonzaga/badge.svg)](https://hub.xerj.org/contributors/OtavioGonzaga)
+
 An embeddable, self-hostable messaging engine written in Rust.
 
 ## Status
